@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moderntensor"
+version = "0.1.0"
+description = "Moderntensor CLI"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+  { name = "son", email = "sonlearn155@gmail.com" }
+]
+keywords = ["cardano", "bip_utils", "cryptography"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License"
+]
+requires-python = ">=3.8"
+dependencies = [
+  "pycardano>=0.12.2",
+  "bip_utils>=2.9.3",
+  "cryptography>=42.0.8"
+]
+
+[project.urls]
+homepage = "https://github.com/sonson0910"
+
+# Scripts (entry_points) - replacement for 'console_scripts' in setup.py
+[project.scripts]
+mtcli = "sdk.cli.main:cli"
