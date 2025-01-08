@@ -66,4 +66,4 @@ ModernTensor welcomes contributions from the community:
 ## Contact
 
 * Email: `sonlearn155@gmail.com`
-* Github: ![son](https://github.com/sonson0910)
+* Github: [son](https://github.com/sonson0910)
