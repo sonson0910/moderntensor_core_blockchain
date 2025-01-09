@@ -34,7 +34,7 @@ ModernTensor is a project focused on building a command-line interface (CLI) too
 
 1. Clone the source code from the repository:
    ```bash
-   git clone https://github.com/yourusername/moderntensor.git
+   git clone https://github.com/sonson0910/moderntensor.git
    cd moderntensor
    ```
 
