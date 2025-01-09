@@ -29,3 +29,6 @@ homepage = "https://github.com/sonson0910"
 # Scripts (entry_points) - replacement for 'console_scripts' in setup.py
 [project.scripts]
 mtcli = "sdk.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["sdk"]

@@ -3,6 +3,7 @@ import os
 import json
 import logging
 from bip_utils import Bip39MnemonicGenerator, Bip39Languages
+from cryptography.fernet import InvalidToken
 from pycardano import HDWallet
 from .encryption_utils import get_cipher_suite
 
@@ -24,7 +25,15 @@ class ColdKeyManager:
         Create a Cold Key (24-word mnemonic), encrypted using password + salt.
         Initialize an empty hotkeys.json file to store the list of hotkeys.
         """
+    # 1) Kiểm tra trùng tên trong memory
+        if name in self.coldkeys:
+            raise Exception(f"Coldkey '{name}' already exists in memory.")
+        
+        # 2) Kiểm tra trùng tên trong thư mục (nếu cần)
         coldkey_dir = os.path.join(self.base_dir, name)
+        if os.path.exists(coldkey_dir):
+            raise Exception(f"Coldkey folder '{coldkey_dir}' already exists.")
+        
         os.makedirs(coldkey_dir, exist_ok=True)
 
         cipher_suite = get_cipher_suite(password, coldkey_dir)
@@ -74,16 +83,22 @@ class ColdKeyManager:
 
         if not os.path.exists(mnemonic_path):
             raise FileNotFoundError(
-                f"[load_coldkey] Cannot find mnemonic.enc for Cold Key '{name}'."
+                f"mnemonic.enc not found for Cold Key '{name}'."
             )
 
         # Create cipher_suite
         cipher_suite = get_cipher_suite(password, coldkey_dir)
 
         # Decrypt mnemonic
+    # Giải mã mnemonic
         with open(mnemonic_path, "rb") as f:
             encrypted_mnemonic = f.read()
-        mnemonic = cipher_suite.decrypt(encrypted_mnemonic).decode("utf-8")
+        try:
+            mnemonic = cipher_suite.decrypt(encrypted_mnemonic).decode("utf-8")
+        except InvalidToken:
+            # Password sai => raise Exception
+            raise Exception("Invalid password: failed to decrypt mnemonic.")
+        
         hdwallet = HDWallet.from_mnemonic(mnemonic)
 
         # Read hotkeys.json

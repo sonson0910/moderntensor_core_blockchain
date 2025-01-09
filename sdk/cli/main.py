@@ -2,8 +2,7 @@
 
 import click
 import logging
-from .coldkey_cli import coldkey_cli
-from .hotkey_cli import hotkey_cli
+from .wallet_cli import wallet_cli
 
 # from .metagraph_cli import metagraph_cli  # If you have
 
@@ -17,8 +16,7 @@ def cli():
 
 
 # Thêm group con:
-cli.add_command(coldkey_cli, name="coldkey")
-cli.add_command(hotkey_cli, name="hotkey")
+cli.add_command(wallet_cli, name="w")
 # cli.add_command(metagraph_cli, name="metagraph")
 
 # If you want, you can place the original command here:

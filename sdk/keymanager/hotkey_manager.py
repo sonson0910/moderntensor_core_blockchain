@@ -24,21 +24,23 @@ class HotKeyManager:
         """
         self.coldkeys = coldkeys_dict
         self.base_dir = base_dir
-        # ==== FIX: If the user passes network=None, set it to TESTNET ====
         if network is None:
             network = Network.TESTNET
         self.network = network
 
     def generate_hotkey(self, coldkey_name: str, hotkey_name: str):
         if coldkey_name not in self.coldkeys:
-            raise ValueError(
-                f"[generate_hotkey] Cold Key '{coldkey_name}' does not exist."
-            )
+            raise ValueError(f"Coldkey '{coldkey_name}' does not exist.")
+        
 
         wallet_info = self.coldkeys[coldkey_name]
         coldkey_wallet = wallet_info["wallet"]
         cipher_suite: Fernet = wallet_info["cipher_suite"]
         hotkeys_dict = wallet_info["hotkeys"]
+
+        # Check trùng tên hotkey
+        if hotkey_name in hotkeys_dict:
+            raise Exception(f"Hotkey '{hotkey_name}' already exists for coldkey '{coldkey_name}'.")
 
         idx = len(hotkeys_dict)  # hotkey index = number of current hotkeys
 
