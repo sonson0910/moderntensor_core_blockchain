@@ -43,54 +43,62 @@ class WalletManager:
 
     def load_all_wallets(self):
         """
-        Quét thư mục base_dir, trả về list dict:
+        Duyệt thư mục base_dir, trả về list dict:
         [
-          {
+        {
             "name": <tên coldkey>,
             "address": <chuỗi address (nếu có)>,
             "hotkeys": [
-              {"name": ..., "address": ...},
-              ...
+            {"name": ..., "address": ...},  # Plaintext address
+            ...
             ]
-          },
-          ...
+        },
+        ...
         ]
         """
         wallets = []
         if not os.path.isdir(self.base_dir):
             logging.warning(f"Base dir {self.base_dir} không tồn tại.")
             return wallets
-        
+
         for entry in os.scandir(self.base_dir):
             if entry.is_dir():
                 coldkey_name = entry.name
                 coldkey_dir = os.path.join(self.base_dir, coldkey_name)
                 
-                # [1] Parse address coldkey (nếu bạn lưu address ở file, hoặc auto-lấy?)
-                #    Ở đây ta ví dụ address chưa có => để rỗng
+                # Nếu bạn muốn có address của coldkey, bạn có thể derive ở đây
+                # hoặc để None nếu chưa triển khai:
                 coldkey_address = None
 
-                # [2] Lấy thông tin hotkeys
                 hotkeys_json = os.path.join(coldkey_dir, "hotkeys.json")
                 hotkeys_list = []
                 if os.path.isfile(hotkeys_json):
-                    with open(hotkeys_json, "r") as f:
+                    with open(hotkeys_json, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                    # data = {"hotkeys": {"hkName": "<encrypted>"...}}
+                    # data = {
+                    #   "hotkeys": {
+                    #     "hkName": {
+                    #       "address": "addr_test1...",
+                    #       "encrypted_data": "gAAAAAB..."
+                    #     },
+                    #     ...
+                    #   }
+                    # }
+
                     if "hotkeys" in data:
-                        for hk_name, encrypted in data["hotkeys"].items():
-                            # Giả sử ta chưa parse "address" do encrypted => chỉ hiển thị name
-                            # Nếu bạn có code parse => decode => JSON => address
-                            hotkey_info = {
+                        for hk_name, hk_info in data["hotkeys"].items():
+                            # Mỗi hk_info là 1 dict: {"address": "...", "encrypted_data": "..."}
+                            address_plaintext = hk_info.get("address", None)
+                            # Chưa giải mã "encrypted_data" (chứa private/pub key), ta chỉ hiển thị address
+                            
+                            hotkeys_list.append({
                                 "name": hk_name,
-                                "address": None  # Chưa giải mã
-                            }
-                            hotkeys_list.append(hotkey_info)
-                
+                                "address": address_plaintext
+                            })
+
                 wallets.append({
                     "name": coldkey_name,
-                    "address": coldkey_address,
                     "hotkeys": hotkeys_list
                 })
-        
+
         return wallets

@@ -1,4 +1,4 @@
-# keymanager/hotkey_manager.py
+# file: keymanager/hotkey_manager.py
 
 import os
 import json
@@ -7,7 +7,6 @@ from pycardano import Address, Network, PaymentVerificationKey, StakeVerificatio
 from cryptography.fernet import Fernet
 
 logging.basicConfig(level=logging.INFO)
-
 
 class HotKeyManager:
     """
@@ -32,29 +31,31 @@ class HotKeyManager:
         if coldkey_name not in self.coldkeys:
             raise ValueError(f"Coldkey '{coldkey_name}' does not exist.")
         
-
         wallet_info = self.coldkeys[coldkey_name]
         coldkey_wallet = wallet_info["wallet"]
         cipher_suite: Fernet = wallet_info["cipher_suite"]
         hotkeys_dict = wallet_info["hotkeys"]
 
-        # Check trùng tên hotkey
+        # Kiểm tra trùng tên hotkey
         if hotkey_name in hotkeys_dict:
             raise Exception(f"Hotkey '{hotkey_name}' already exists for coldkey '{coldkey_name}'.")
 
         idx = len(hotkeys_dict)  # hotkey index = number of current hotkeys
 
+        # Derive payment key
         payment_wallet = coldkey_wallet.derive_from_path(f"m/1852'/1815'/0'/0/{idx}")
         payment_vk = PaymentVerificationKey.from_primitive(payment_wallet.public_key)
 
+        # Derive stake key
         stake_wallet = coldkey_wallet.derive_from_path(f"m/1852'/1815'/0'/2/{idx}")
         stake_vk = StakeVerificationKey.from_primitive(stake_wallet.public_key)
 
-        # Create address (pycardano Address)
+        # Tạo địa chỉ (pycardano Address)
         hotkey_address = Address(
             payment_vk.hash(), stake_vk.hash(), network=self.network
         )
 
+        # Tạo data gồm address, public keys, name...
         hotkey_data = {
             "name": hotkey_name,
             "address": str(hotkey_address),
@@ -62,20 +63,26 @@ class HotKeyManager:
             "stake_pub_key_hex": stake_wallet.public_key.hex(),
         }
 
+        # Mã hoá toàn bộ hotkey_data
         encrypted_hotkey = cipher_suite.encrypt(
             json.dumps(hotkey_data).encode("utf-8")
         ).decode("utf-8")
 
-        hotkeys_dict[hotkey_name] = encrypted_hotkey
+        # Lưu 2 phần:
+        # 1) address ở dạng plaintext
+        # 2) chuỗi mã hoá (encrypted_data)
+        hotkeys_dict[hotkey_name] = {
+            "address": str(hotkey_address),  # plaintext
+            "encrypted_data": encrypted_hotkey
+        }
 
+        # Ghi file
         coldkey_dir = os.path.join(self.base_dir, coldkey_name)
         hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
         with open(hotkey_path, "w") as f:
-            json.dump({"hotkeys": hotkeys_dict}, f)
+            json.dump({"hotkeys": hotkeys_dict}, f, indent=2)
 
-        logging.info(
-            f"[generate_hotkey] Hot Key '{hotkey_name}' has been successfully created."
-        )
+        logging.info(f"[generate_hotkey] Hot Key '{hotkey_name}' created.")
         return encrypted_hotkey
 
     def import_hotkey(
@@ -86,43 +93,39 @@ class HotKeyManager:
         overwrite=False,
     ):
         if coldkey_name not in self.coldkeys:
-            raise ValueError(
-                f"[import_hotkey] Cold Key '{coldkey_name}' does not exist."
-            )
+            raise ValueError(f"[import_hotkey] Cold Key '{coldkey_name}' does not exist.")
 
         wallet_info = self.coldkeys[coldkey_name]
         cipher_suite: Fernet = wallet_info["cipher_suite"]
         hotkeys_dict = wallet_info["hotkeys"]
 
-        hotkey_data = json.loads(
-            cipher_suite.decrypt(encrypted_hotkey.encode("utf-8")).decode("utf-8")
-        )
+        # Giải mã hotkey_data
+        raw_data = cipher_suite.decrypt(encrypted_hotkey.encode("utf-8")).decode("utf-8")
+        hotkey_data = json.loads(raw_data)  
+        # hotkey_data = { "name":..., "address":..., "payment_pub_key_hex":..., ... }
+
+        # Ghi đè name (theo hotkey_name mà user cung cấp)
         hotkey_data["name"] = hotkey_name
 
+        # Kiểm tra trùng tên
         if hotkey_name in hotkeys_dict:
             if not overwrite:
-                response = (
-                    input(
-                        f"Hot Key '{hotkey_name}' already exists. Overwrite? (yes/no): "
-                    )
-                    .strip()
-                    .lower()
-                )
+                response = input(f"Hot Key '{hotkey_name}' already exists. Overwrite? (yes/no): ").strip().lower()
                 if response not in ("yes", "y"):
-                    # ==== FIX: change from logging.info => logging.warning ====
-                    logging.warning(
-                        "[import_hotkey] User canceled overwrite => import aborted."
-                    )
+                    logging.warning("[import_hotkey] User canceled overwrite => import aborted.")
                     return
             logging.warning(f"[import_hotkey] Overwriting Hot Key '{hotkey_name}'.")
 
-        hotkeys_dict[hotkey_name] = encrypted_hotkey
+        # Tạo payload lưu 2 phần (plaintext address + chuỗi mã hoá)
+        hotkeys_dict[hotkey_name] = {
+            "address": hotkey_data.get("address", None),  # plaintext address
+            "encrypted_data": encrypted_hotkey            # full encryption
+        }
 
+        # Ghi file
         coldkey_dir = os.path.join(self.base_dir, coldkey_name)
         hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
         with open(hotkey_path, "w") as f:
-            json.dump({"hotkeys": hotkeys_dict}, f)
+            json.dump({"hotkeys": hotkeys_dict}, f, indent=2)
 
-        logging.info(
-            f"[import_hotkey] Hot Key '{hotkey_name}' has been successfully imported."
-        )
+        logging.info(f"[import_hotkey] Hot Key '{hotkey_name}' imported successfully.")

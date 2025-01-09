@@ -165,8 +165,14 @@ def test_generate_hotkey(coldkey_manager, hotkey_manager):
     cdir = os.path.join(coldkey_manager.base_dir, name)
     with open(os.path.join(cdir, "hotkeys.json"), "r") as f:
         data = json.load(f)
-    assert hotkey_name in data["hotkeys"]
-    assert enc_data == data["hotkeys"][hotkey_name]
+
+    assert hotkey_name in data["hotkeys"], "hotkey_name phải nằm trong data['hotkeys']"
+
+    # So sánh: bây giờ data["hotkeys"][hotkey_name] là 1 dict, có 'address' & 'encrypted_data'
+    # -> Kiểm tra enc_data == data["hotkeys"][hotkey_name]["encrypted_data"]
+    assert enc_data == data["hotkeys"][hotkey_name]["encrypted_data"], \
+        "encrypted_data phải trùng khớp"
+
 
 def test_generate_hotkey_duplicate(coldkey_manager, hotkey_manager):
     """

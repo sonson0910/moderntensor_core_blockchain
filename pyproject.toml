@@ -31,4 +31,5 @@ homepage = "https://github.com/sonson0910"
 mtcli = "sdk.cli.main:cli"
 
 [tool.setuptools.packages.find]
-where = ["sdk"]
+where = ["."]
+include = ["sdk*"]

@@ -150,10 +150,9 @@ def list_coldkeys():
     root_tree = Tree("[bold cyan]Wallets[/bold cyan]")
 
     for w in wallets:
-        ck_address = w["address"] or "unknown"
         # Tạo node con cho Coldkey
         coldkey_node = root_tree.add(
-            f"[bold yellow]Coldkey[/bold yellow] [magenta]{w['name']}[/magenta] (address={ck_address})"
+            f"[bold yellow]Coldkey[/bold yellow] [magenta]{w['name']}[/magenta]"
         )
 
         # hotkeys
