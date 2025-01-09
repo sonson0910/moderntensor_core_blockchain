@@ -1,67 +1,69 @@
 # ModernTensor CLI
 
-ModernTensor là một dự án tập trung vào việc xây dựng một công cụ dòng lệnh (CLI) hỗ trợ lập trình và triển khai các mô hình Tensor trong các ứng dụng hiện đại. Hiện dự án đang trong giai đoạn phát triển ban đầu (development stage) và vẫn còn rất nhiều hạng mục cần được hoàn thiện.
+ModernTensor is a project focused on building a command-line interface (CLI) tool to support programming and deploying tensor models in modern applications. The project is currently in its early development stage and there are still many areas that need to be completed.
 
-## Tính năng hiện có
+![moderntensor.png](https://github.com/sonson0910/moderntensor/blob/main/moderntensor.png)
 
-- **CLI tiện dụng**: Cung cấp câu lệnh gọn nhẹ, dễ dàng tương tác.
-- **Khả năng mở rộng**: Hỗ trợ tích hợp thêm các thư viện và công cụ mở rộng trong tương lai.
-- **Thiết kế linh hoạt**: Cho phép tuỳ chỉnh, cấu hình thông qua các tệp thiết lập (config).
+## Existing Features
 
-## Lộ trình phát triển
+- **Convenient CLI**: Provides concise commands for easy interaction.
+- **Scalability**: Supports the integration of additional libraries and tools in the future.
+- **Flexible design**: Allows customization and configuration through setup files (config).
 
-1. **Phiên bản thử nghiệm (Alpha)**  
-   - Hoàn thiện các thao tác cơ bản và cấu trúc CLI.  
-   - Cung cấp tài liệu hướng dẫn sử dụng ban đầu.
+## Development Roadmap
 
-2. **Phiên bản Beta**  
-   - Tối ưu hiệu năng, hỗ trợ đa nền tảng.  
-   - Thêm các thư viện và plugin bổ sung.
+1. **Alpha Version**  
+   - Complete basic operations and the structure of the CLI.  
+   - Provide initial usage documentation.
 
-3. **Phiên bản chính thức**  
-   - Cải thiện độ ổn định, tăng cường bảo mật.  
-   - Hỗ trợ sâu hơn cho các mô hình và thuật toán máy học.
+2. **Beta Version**  
+   - Optimize performance and support cross-platform usage.  
+   - Add additional libraries and plugins.
 
-## Yêu cầu cài đặt
+3. **Stable Release**  
+   - Improve stability and enhance security.  
+   - Provide deeper support for machine learning models and algorithms.
 
-- **Python** (phiên bản 3.7 trở lên)
-- Môi trường ảo **virtualenv** hoặc **conda** (khuyến khích)
-- **Git** (để clone dự án)
+## Installation Requirements
 
-## Hướng dẫn cài đặt
+- **Python** (version 3.7 or higher)
+- Virtual environment **virtualenv** or **conda** (recommended)
+- **Git** (for cloning the project)
 
-1. Clone source code từ kho lưu trữ:
+## Installation Guide
+
+1. Clone the source code from the repository:
    ```bash
    git clone https://github.com/yourusername/moderntensor-cli.git
    cd moderntensor-cli
    ```
 
-2. Tạo môi trường ảo (tuỳ chọn nhưng được khuyến nghị):
+2. Create a virtual environment (optional but recommended):
    ```bash
     python -m venv venv
     source venv/bin/activate  # Trên Linux/Mac
     .\venv\Scripts\activate   # Trên Windows
    ```
 
-3. Cài đặt các thư viện phụ thuộc:
+3. Install the dependencies:
    ```bash
     pip install -e .
    ```
 
-## Cách sử dụng
+## Usage
 
-Sau khi cài đặt thành công, bạn có thể sử dụng lệnh `mtcli` trên terminal:
+After successfully installing, you can use the `mtcli` command in your terminal:
 ```bash
 mtcli --help
 ```
 
-## Đóng góp
+## Contributing
 
-ModernTensor rất hoan nghênh mọi đóng góp từ cộng đồng:
-* Tạo **Issues** hoặc **Pull Requests** trên kho GitHub.
-* Tham gia thảo luận, đóng góp ý tưởng và đề xuất các tính năng mới.
+ModernTensor welcomes contributions from the community:
+* Create **Issues** or **Pull Requests** on the GitHub repository.
+* Participate in discussions, contribute ideas, and suggest new features.
 
-## Liên hệ
+## Contact
 
 * Email: `sonlearn155@gmail.com`
-* Github: ![son](https://github.com/sonson0910)
+* Github: [son](https://github.com/sonson0910)
