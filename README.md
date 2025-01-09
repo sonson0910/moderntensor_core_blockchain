@@ -34,15 +34,15 @@ ModernTensor is a project focused on building a command-line interface (CLI) too
 
 1. Clone the source code from the repository:
    ```bash
-   git clone https://github.com/yourusername/moderntensor-cli.git
-   cd moderntensor-cli
+   git clone https://github.com/yourusername/moderntensor.git
+   cd moderntensor
    ```
 
 2. Create a virtual environment (optional but recommended):
    ```bash
     python -m venv venv
-    source venv/bin/activate  # Trên Linux/Mac
-    .\venv\Scripts\activate   # Trên Windows
+    source venv/bin/activate  # For Linux/Mac
+    .\venv\Scripts\activate   # For Windows
    ```
 
 3. Install the dependencies:
