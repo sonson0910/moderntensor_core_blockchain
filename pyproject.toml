@@ -33,3 +33,6 @@ mtcli = "sdk.cli.main:cli"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["sdk*"]
+
+[project.optional-dependencies]
+cli = ["click>=8.1.0", "rich>=13.0.0"]

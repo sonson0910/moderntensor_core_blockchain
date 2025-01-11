@@ -6,11 +6,19 @@ from pycardano import Network
 from .coldkey_manager import ColdKeyManager
 from .hotkey_manager import HotKeyManager
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class WalletManager:
     def __init__(self, network=Network.TESTNET, base_dir="moderntensor"):
+        """
+        Initialize WalletManager with specified Cardano network and base directory.
+
+        Args:
+            network (Network): Cardano network, either TESTNET or MAINNET. Default: TESTNET.
+            base_dir (str): Folder for storing coldkeys/hotkeys data. Default: "moderntensor".
+        """
         self.network = network
         self.base_dir = base_dir
 
@@ -43,22 +51,25 @@ class WalletManager:
 
     def load_all_wallets(self):
         """
-        Duyệt thư mục base_dir, trả về list dict:
-        [
-        {
-            "name": <tên coldkey>,
-            "address": <chuỗi address (nếu có)>,
-            "hotkeys": [
-            {"name": ..., "address": ...},  # Plaintext address
-            ...
+        Scan base_dir and return a list of dict with coldkey name & their hotkeys.
+
+        Returns:
+            list of dict:
+            [
+                {
+                    "name": <coldkey_name>,
+                    "hotkeys": [
+                        {"name": <hotkey_name>, "address": <plaintext_address>},
+                        ...
+                    ]
+                },
+                ...
             ]
-        },
-        ...
         ]
         """
         wallets = []
         if not os.path.isdir(self.base_dir):
-            logging.warning(f"Base dir {self.base_dir} không tồn tại.")
+            logger.warning(f"Base dir {self.base_dir} không tồn tại.")
             return wallets
 
         for entry in os.scandir(self.base_dir):
@@ -66,9 +77,6 @@ class WalletManager:
                 coldkey_name = entry.name
                 coldkey_dir = os.path.join(self.base_dir, coldkey_name)
                 
-                # Nếu bạn muốn có address của coldkey, bạn có thể derive ở đây
-                # hoặc để None nếu chưa triển khai:
-                coldkey_address = None
 
                 hotkeys_json = os.path.join(coldkey_dir, "hotkeys.json")
                 hotkeys_list = []

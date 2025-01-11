@@ -7,7 +7,8 @@ from cryptography.fernet import InvalidToken
 from pycardano import HDWallet
 from .encryption_utils import get_cipher_suite
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class ColdKeyManager:
@@ -22,8 +23,18 @@ class ColdKeyManager:
 
     def create_coldkey(self, name: str, password: str, words_num=24):
         """
-        Create a Cold Key (24-word mnemonic), encrypted using password + salt.
-        Initialize an empty hotkeys.json file to store the list of hotkeys.
+        Create a Cold Key (mnemonic, default 24 words).
+        
+        Args:
+            name (str): Unique coldkey name.
+            password (str): Encryption password.
+            words_num (int): Number of words in mnemonic. Typically 24.
+        
+        Raises:
+            Exception: If coldkey name already exists, or directory conflicts.
+        
+        Returns:
+            None
         """
     # 1) Kiểm tra trùng tên trong memory
         if name in self.coldkeys:
@@ -44,7 +55,7 @@ class ColdKeyManager:
                 words_num
             )
         )
-        logging.warning(
+        logger.warning(
             f"[create_coldkey] Mnemonic for Cold Key '{name}' has been created. Please store it securely."
         )
 
@@ -68,7 +79,7 @@ class ColdKeyManager:
             "cipher_suite": cipher_suite,
             "hotkeys": {},
         }
-        logging.info(
+        logger.info(
             f"[create_coldkey] Cold Key '{name}' has been successfully created."
         )
 
@@ -113,4 +124,4 @@ class ColdKeyManager:
             "cipher_suite": cipher_suite,
             "hotkeys": hotkeys_data["hotkeys"],
         }
-        logging.info(f"[load_coldkey] Cold Key '{name}' has been successfully loaded.")
+        logger.info(f"[load_coldkey] Cold Key '{name}' has been successfully loaded.")
