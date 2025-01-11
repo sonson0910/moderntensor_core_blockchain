@@ -26,7 +26,7 @@ ModernTensor is a project focused on building a command-line interface (CLI) too
 
 ## Installation Requirements
 
-- **Python** (version 3.7 or higher)
+- **Python** (version 3.9 or higher)
 - Virtual environment **virtualenv** or **conda** (recommended)
 - **Git** (for cloning the project)
 
