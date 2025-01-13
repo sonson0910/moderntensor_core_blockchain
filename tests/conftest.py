@@ -10,7 +10,7 @@ from sdk.keymanager.encryption_utils import get_or_create_salt, generate_encrypt
 
 def decode_hotkey_skeys(base_dir, coldkey_name, hotkey_name, password):
     """
-    Đọc hotkeys.json => encrypted_data => Fernet decrypt => parse => payment_xsk, stake_xsk
+    Read hotkeys.json => encrypted_data => Fernet decrypt => parse => payment_xsk, stake_xsk
     """
     coldkey_dir = os.path.join(base_dir, coldkey_name)
     salt = get_or_create_salt(coldkey_dir)

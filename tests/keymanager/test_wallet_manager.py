@@ -254,7 +254,7 @@ def test_wallet_manager_end_to_end(wallet_manager):
 
 def test_wallet_manager_import_hotkey_no(wallet_manager, caplog):
     """
-    Trường hợp import hotkey, user gõ "no" => không overwrite.
+    Case import hotkey, user types "no" => do not overwrite.
     """
     ck_name = "ck2"
     password = "pass2"
@@ -272,8 +272,8 @@ def test_wallet_manager_import_hotkey_no(wallet_manager, caplog):
 
 def test_wallet_manager_wrong_password(wallet_manager):
     """
-    Test load_coldkey với password sai => expect Exception? 
-    (Tuỳ code của bạn)
+    Test load_coldkey with wrong password => expect Exception? 
+    (Depending on your code)
     """
     ck_name = "ck_wrongpwd"
     password = "secret"

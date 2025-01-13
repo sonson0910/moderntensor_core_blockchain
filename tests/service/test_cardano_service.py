@@ -13,13 +13,10 @@ logging.basicConfig(level=logging.INFO)
 @pytest.fixture(scope="session")
 def chain_context_fixture():
     """
-    Tạo chain_context (BlockFrost testnet)
+    Create chain_context (BlockFrost testnet)
     """
     project_id = os.getenv("BLOCKFROST_PROJECT_ID", "preprod06dzhzKlynuTInzvxHDH5cXbdHo524DE")
     return get_chain_context(method="blockfrost", project_id=project_id, network=Network.TESTNET)
-
-# XÓA: @pytest.fixture(scope="session") def hotkey_skey_fixture(): ... 
-# => Chúng ta đã định nghĩa fixture hotkey_skey_fixture trong conftest.py
 
 @pytest.mark.integration
 def test_get_chain_context_blockfrost(chain_context_fixture):

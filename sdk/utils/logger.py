@@ -23,7 +23,7 @@ DEFAULT_LOGGING_DICT = {
 
 
 def init_logging(custom_config=None):
-    # Gộp custom_config (nếu có) với DEFAULT_LOGGING_DICT
+    # Merge custom_config (if any) with DEFAULT_LOGGING_DICT
     config = DEFAULT_LOGGING_DICT.copy()
     if custom_config:
         # Merging logic, tuỳ bạn triển khai

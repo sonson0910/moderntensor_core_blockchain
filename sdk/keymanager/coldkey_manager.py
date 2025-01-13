@@ -36,11 +36,11 @@ class ColdKeyManager:
         Returns:
             None
         """
-    # 1) Kiểm tra trùng tên trong memory
+    # 1) Check for duplicate name in memory
         if name in self.coldkeys:
             raise Exception(f"Coldkey '{name}' already exists in memory.")
         
-        # 2) Kiểm tra trùng tên trong thư mục (nếu cần)
+        # 2) Check for duplicate name in directory (if needed)
         coldkey_dir = os.path.join(self.base_dir, name)
         if os.path.exists(coldkey_dir):
             raise Exception(f"Coldkey folder '{coldkey_dir}' already exists.")

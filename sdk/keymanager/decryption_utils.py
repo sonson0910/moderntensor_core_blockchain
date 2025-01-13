@@ -2,7 +2,7 @@ import os
 import json
 import binascii
 from cryptography.fernet import Fernet
-from pycardano import ExtendedSigningKey, Network
+from pycardano import ExtendedSigningKey
 from sdk.keymanager.encryption_utils import get_or_create_salt, generate_encryption_key
 
 def decode_hotkey_skey(
@@ -28,35 +28,23 @@ def decode_hotkey_skey(
         - Tạo ExtendedSigningKey.from_cbor(...) => trả về extended key
     """
 
-    # 1) Tạo cipher_suite từ password + salt
     coldkey_dir = os.path.join(base_dir, coldkey_name)
-    salt = get_or_create_salt(coldkey_dir)  
-    encryption_key = generate_encryption_key(password, salt)
-    cipher_suite = Fernet(encryption_key)
+    salt = get_or_create_salt(coldkey_dir)
+    enc_key = generate_encryption_key(password, salt)
+    cipher = Fernet(enc_key)
 
-    # 2) Đọc hotkey.json
     hotkeys_json_path = os.path.join(coldkey_dir, "hotkeys.json")
-    if not os.path.isfile(hotkeys_json_path):
-        raise FileNotFoundError(f"hotkeys.json not found: {hotkeys_json_path}")
-
-    with open(hotkeys_json_path, "r", encoding="utf-8") as f:
+    with open(hotkeys_json_path, "r") as f:
         data = json.load(f)
 
-    if hotkey_name not in data["hotkeys"]:
-        raise ValueError(f"Hotkey '{hotkey_name}' not found in {hotkeys_json_path}")
+    enc_data = data["hotkeys"][hotkey_name]["encrypted_data"]
+    dec = cipher.decrypt(enc_data.encode("utf-8"))
+    hotkey_data = json.loads(dec.decode("utf-8"))
 
-    # 3) Lấy encrypted_data
-    encrypted_data = data["hotkeys"][hotkey_name]["encrypted_data"]  # base64 string
+    pay_hex = hotkey_data["payment_xsk_cbor_hex"]
+    stk_hex = hotkey_data["stake_xsk_cbor_hex"]
 
-    # 4) Giải mã => parse JSON => lấy "payment_xsk_cbor_hex"
-    decrypted_bytes = cipher_suite.decrypt(encrypted_data.encode("utf-8"))
-    hotkey_data = json.loads(decrypted_bytes.decode("utf-8"))
-    # hotkey_data: {"name":..., "address":..., "payment_xsk_cbor_hex":...}
+    payment_xsk = ExtendedSigningKey.from_cbor(binascii.unhexlify(pay_hex))
+    stake_xsk = ExtendedSigningKey.from_cbor(binascii.unhexlify(stk_hex))
 
-    xsk_cbor_hex = hotkey_data["payment_xsk_cbor_hex"]
-    xsk_cbor = binascii.unhexlify(xsk_cbor_hex)  # bytes cbor
-
-    # 5) Tạo extended signing key
-    extended_skey = ExtendedSigningKey.from_cbor(xsk_cbor)
-
-    return extended_skey
+    return payment_xsk, stake_xsk

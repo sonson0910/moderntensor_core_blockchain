@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 def get_address_info(address_str: str, chain_context) -> Dict:
     """
-    Lấy thông tin UTxO, tổng lovelace, token balances cho 1 địa chỉ.
+    Get UTxO information, total lovelace, token balances for an address.
     chain_context: BlockFrostChainContext / OgmiOSChainContext
     """
     address = Address.from_primitive(address_str)
