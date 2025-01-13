@@ -15,7 +15,7 @@ def chain_context_fixture():
     """
     Tạo chain_context (BlockFrost testnet)
     """
-    project_id = os.getenv("BLOCKFROST_PROJECT_ID", "YOUR_BLOCKFROST_API_KEY")
+    project_id = os.getenv("BLOCKFROST_PROJECT_ID", "preprod06dzhzKlynuTInzvxHDH5cXbdHo524DE")
     return get_chain_context(method="blockfrost", project_id=project_id, network=Network.TESTNET)
 
 # XÓA: @pytest.fixture(scope="session") def hotkey_skey_fixture(): ... 
