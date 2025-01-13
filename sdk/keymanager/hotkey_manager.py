@@ -44,7 +44,7 @@ class HotKeyManager:
         hotkeys_dict = wallet_info["hotkeys"]
 
         if hotkey_name in hotkeys_dict:
-            raise Exception(f"Hotkey '{hotkey_name}' đã tồn tại cho coldkey '{coldkey_name}'.")
+            raise Exception(f"Hotkey '{hotkey_name}' already exists for coldkey '{coldkey_name}'.")
 
         idx = len(hotkeys_dict)
 
@@ -116,7 +116,7 @@ class HotKeyManager:
         if hotkey_name in hotkeys_dict and not overwrite:
             resp = input(f"Hot Key '{hotkey_name}' exists. Overwrite? (yes/no): ").strip().lower()
             if resp not in ("yes","y"):
-                logging.warning("[import_hotkey] User canceled => aborted.")
+                logging.warning("[import_hotkey] User canceled overwrite => import aborted.")
                 return
             logging.warning(f"[import_hotkey] Overwriting '{hotkey_name}'.")
 
