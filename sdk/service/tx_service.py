@@ -1,17 +1,11 @@
-# sdk/node/cardano_service/tx_service.py
+# sdk/service/tx_service.py
 
 import logging
 from typing import Optional
 from pycardano import (
-    Address, 
+    Address,
     TransactionBuilder,
     TransactionOutput,
-    Value,
-    MultiAsset,
-    AssetClass,
-    PaymentSigningKey,
-    Transaction,
-    TransactionWitnessSet,
     Network,
 )
 
@@ -19,80 +13,47 @@ logger = logging.getLogger(__name__)
 
 def send_ada(
     chain_context,
-    from_signing_key: PaymentSigningKey,
-    to_address_str: str,
-    lovelace_amount: int,
-    network: Network,
+    payment_xsk,     # ExtendedSigningKey (hoặc PaymentSigningKey)
+    stake_xsk=None,  # ExtendedSigningKey stake (optional) - nếu cần
+    to_address_str: str = "",
+    lovelace_amount: int = 1_000_000,
+    network: Network = Network.TESTNET,
     change_address_str: Optional[str] = None
 ) -> str:
     """
-    Gửi ADA (lovelace) từ 'from_signing_key' => 'to_address_str'.
+    Gửi ADA:
+      - Tạo `from_address` = Address(pay_xvk.hash(), stake_xvk.hash() nếu có).
+      - add_input_address(from_address)
+      - build_and_sign(signing_keys=[payment_xsk], change_address=from_address)
     """
-    from_address = Address(
-        payment_part=from_signing_key.to_public_key().hash(),
-        network=network
-    )
-    to_address = Address.from_primitive(to_address_str)
+    from pycardano import Address, TransactionBuilder, TransactionOutput
+
+    # 1) Tạo from_address
+    pay_xvk = payment_xsk.to_verification_key()
+    if stake_xsk is not None:
+        stk_xvk = stake_xsk.to_verification_key()
+        from_address = Address(pay_xvk.hash(), stk_xvk.hash(), network=network)
+    else:
+        from_address = Address(pay_xvk.hash(), network=network)
+
+    # 2) to_address
+    to_address = Address.from_primitive(to_address_str) if to_address_str else from_address
     change_address = Address.from_primitive(change_address_str) if change_address_str else from_address
 
+    # 3) Tạo builder, add inputs
     builder = TransactionBuilder(chain_context)
-    utxos = chain_context.utxos(from_address)
-    for utxo in utxos:
-        builder.add_input(utxo)
+    builder.add_input_address(from_address)
 
+    # 4) Thêm output => gửi ADA
     builder.add_output(TransactionOutput(to_address, lovelace_amount))
-    tx_body = builder.build(change_address=change_address)
 
-    tx_id = _sign_and_submit(chain_context, tx_body, from_signing_key)
-    logger.info(f"[send_ada] Sent {lovelace_amount} lovelace => {to_address_str}, tx_id={tx_id}")
-    return tx_id
-
-def send_token(
-    chain_context,
-    from_signing_key: PaymentSigningKey,
-    to_address_str: str,
-    policy_id: str,
-    asset_name: str,
-    token_amount: int,
-    lovelace_amount: int,
-    network: Network,
-    change_address_str: Optional[str] = None
-) -> str:
-    """
-    Gửi native token, kèm lovelace, từ from_signing_key => to_address_str
-    """
-    from_address = Address(
-        payment_part=from_signing_key.to_public_key().hash(),
-        network=network
+    # 5) Tạo signed_tx
+    signed_tx = builder.build_and_sign(
+        signing_keys=[payment_xsk],  # Ký = payment_xsk
+        change_address=change_address
     )
-    to_address = Address.from_primitive(to_address_str)
-    change_address = Address.from_primitive(change_address_str) if change_address_str else from_address
 
-    builder = TransactionBuilder(chain_context)
-    utxos = chain_context.utxos(from_address)
-    for utxo in utxos:
-        builder.add_input(utxo)
-
-    # Tạo multi_asset
-    asset_class = AssetClass(bytes.fromhex(policy_id), asset_name.encode('utf-8'))
-    multi_asset = MultiAsset.from_assets({asset_class: token_amount})
-    value = Value(lovelace_amount, multi_asset)
-
-    builder.add_output(TransactionOutput(to_address, value))
-    tx_body = builder.build(change_address=change_address)
-
-    tx_id = _sign_and_submit(chain_context, tx_body, from_signing_key)
-    logger.info(f"[send_token] Sent {token_amount} {asset_name} => {to_address_str}, tx_id={tx_id}")
-    return tx_id
-
-def _sign_and_submit(chain_context, tx_body, signing_key: PaymentSigningKey) -> str:
-    """
-    Ký transaction và submit. 
-    """
-    from pycardano import TransactionWitnessSet
-    witness = TransactionWitnessSet()
-    witness.signatures[signing_key.hash()] = signing_key.sign(tx_body.hash())
-
-    tx = Transaction(tx_body, witness_set=witness)
-    tx_id = chain_context.submit_tx(tx)
+    # 6) submit
+    tx_id = chain_context.submit_tx(signed_tx.to_cbor())
+    logger.info(f"[send_ada] => TX ID: {tx_id}")
     return tx_id
