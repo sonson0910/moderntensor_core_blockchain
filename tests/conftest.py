@@ -34,11 +34,27 @@ def decode_hotkey_skeys(base_dir, coldkey_name, hotkey_name, password):
     return payment_xsk, stake_xsk
 
 @pytest.fixture(scope="session")
-def hotkey_skey_fixture():
+def hotkey_config():
+    """
+    Lấy config hotkey
+    """
     base_dir = os.getenv("HOTKEY_BASE_DIR", "moderntensor")
     coldkey_name = os.getenv("COLDKEY_NAME", "kickoff")
     hotkey_name = os.getenv("HOTKEY_NAME", "hk1")
     password = os.getenv("HOTKEY_PASSWORD", "sonlearn2003")
+    return {
+        "base_dir": base_dir,
+        "coldkey_name": coldkey_name,
+        "hotkey_name": hotkey_name,
+        "password": password
+    }
 
-    pmt, stk = decode_hotkey_skeys(base_dir, coldkey_name, hotkey_name, password)
+@pytest.fixture(scope="session")
+def hotkey_skey_fixture(hotkey_config):
+    pmt, stk = decode_hotkey_skeys(
+        hotkey_config["base_dir"],
+        hotkey_config["coldkey_name"],
+        hotkey_config["hotkey_name"],
+        hotkey_config["password"]
+    )
     return (pmt, stk)

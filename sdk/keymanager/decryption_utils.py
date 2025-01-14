@@ -47,4 +47,4 @@ def decode_hotkey_skey(
     payment_xsk = ExtendedSigningKey.from_cbor(binascii.unhexlify(pay_hex))
     stake_xsk = ExtendedSigningKey.from_cbor(binascii.unhexlify(stk_hex))
 
-    return payment_xsk, stake_xsk
+    return (payment_xsk, stake_xsk)
