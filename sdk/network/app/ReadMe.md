@@ -23,4 +23,4 @@ suport request/response
 # 4. How to test?
 1. run "pytest"
 2. coverage with stdout: "pytest --cov=app --cov-report=term-missing"
-3. coverage with html "pytest --cov=app --cov-report=html" 
+3. coverage with html "pytest --cov=app --cov-report=html"

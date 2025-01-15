@@ -13,18 +13,44 @@ logging.basicConfig(level=logging.INFO)
 @pytest.fixture(scope="session")
 def chain_context_fixture():
     """
-    Create chain_context (BlockFrost testnet)
+    Creates a chain context, specifically a BlockFrostChainContext in TESTNET mode, 
+    for use throughout the test session.
+    
+    Steps:
+      1) Read the BLOCKFROST_PROJECT_ID from environment (or use a default if not set).
+      2) Call get_chain_context() with the method set to "blockfrost", the provided project_id, 
+         and the TESTNET network.
+      3) Return the resulting chain context, which can be injected into test functions.
+
+    Returns:
+        BlockFrostChainContext: A chain context configured for Cardano TESTNET via Blockfrost.
     """
     project_id = os.getenv("BLOCKFROST_PROJECT_ID", "preprod06dzhzKlynuTInzvxHDH5cXbdHo524DE")
     return get_chain_context(method="blockfrost", project_id=project_id, network=Network.TESTNET)
 
 @pytest.mark.integration
 def test_get_chain_context_blockfrost(chain_context_fixture):
+    """
+    Integration test to verify that the chain_context_fixture is indeed 
+    a BlockFrostChainContext instance when using the "blockfrost" method.
+    """
     from pycardano import BlockFrostChainContext
-    assert isinstance(chain_context_fixture, BlockFrostChainContext)
+    assert isinstance(chain_context_fixture, BlockFrostChainContext), \
+        "chain_context_fixture should be an instance of BlockFrostChainContext."
 
 @pytest.mark.integration
 def test_get_address_info(chain_context_fixture, hotkey_skey_fixture):
+    """
+    Test retrieval of address information (UTxOs, lovelace, token balances) 
+    using get_address_info.
+
+    Steps:
+      1) Decode the hotkey_skey_fixture, which provides a (payment_xsk, stake_xsk).
+      2) Construct an Address object from these extended signing keys (TESTNET).
+      3) Call get_address_info(...) with this address and the chain context.
+      4) Verify the returned dictionary contains the expected fields 
+         (lovelace, tokens, address, utxo_count).
+    """
     (payment_xsk, stake_xsk) = hotkey_skey_fixture
 
     from pycardano import Address
@@ -33,78 +59,47 @@ def test_get_address_info(chain_context_fixture, hotkey_skey_fixture):
     from_address = Address(pay_xvk.hash(), stake_xvk.hash(), network=Network.TESTNET)
 
     info = get_address_info(str(from_address), chain_context_fixture)
-    assert "lovelace" in info
-    assert "tokens" in info
+    assert "lovelace" in info, "Response dict should contain 'lovelace' key."
+    assert "tokens" in info, "Response dict should contain 'tokens' key."
     logging.info(f"Address info: {info}")
-    assert info["address"] == str(from_address)
-    assert info["utxo_count"] >= 0
+
+    # Check whether the returned address is correct and that UTXO count is non-negative
+    assert info["address"] == str(from_address), "Address in info should match from_address."
+    assert info["utxo_count"] >= 0, "UTXO count should be a non-negative integer."
 
 @pytest.mark.integration
 def test_send_ada(chain_context_fixture, hotkey_skey_fixture):
-    # hotkey_skey_fixture => (payment_xsk, stake_xsk)
+    """
+    Integration test to send a small amount of ADA (1_000_000 lovelace => 1 ADA) 
+    from the hotkey's address to a test receiver address.
+
+    Steps:
+      1) Obtain (payment_xsk, stake_xsk) from hotkey_skey_fixture.
+      2) Retrieve or default to a TEST_RECEIVER_ADDRESS environment variable 
+         for the destination address.
+      3) Call send_ada(...) using the chain_context_fixture, which should 
+         build and submit a transaction.
+      4) Confirm the returned transaction ID (tx_id) is non-empty.
+
+    Note:
+      This test requires that the hotkey address has enough funds on TESTNET 
+      to cover fees and the sent amount. Otherwise, it may fail.
+    """
     (payment_xsk, stake_xsk) = hotkey_skey_fixture
 
-    # Tạo address
-    to_address_str = os.getenv("TEST_RECEIVER_ADDRESS", "addr_test1qpkxr3kpzex93m646qr7w82d56md2kchtsv9jy39dykn4cmcxuuneyeqhdc4wy7de9mk54fndmckahxwqtwy3qg8pums5vlxhz")
+    # Load the receiver address from environment or fall back to a default
+    to_address_str = os.getenv(
+        "TEST_RECEIVER_ADDRESS",
+        "addr_test1qpkxr3kpzex93m646qr7w82d56md2kchtsv9jy39dykn4cmcxuuneyeqhdc4wy7de9mk54fndmckahxwqtwy3qg8pums5vlxhz"
+    )
 
     tx_id = send_ada(
         chain_context=chain_context_fixture,
         payment_xsk=payment_xsk,
         stake_xsk=stake_xsk,
         to_address_str=to_address_str,
-        lovelace_amount=1_000_000,
+        lovelace_amount=1_000_000,  # 1 ADA in lovelace
         network=Network.TESTNET,
     )
     logging.info(f"send_ada => {tx_id}")
-    assert len(tx_id) > 0
-
-# @pytest.mark.integration
-# def test_send_michielcoin(chain_context_fixture, hotkey_skey_fixture):
-#     """
-#     Demo test: Gọi send_token_lowlevel_hotkey => gửi 50 "MichielCOIN".
-    
-#     Giả sử token "MichielCOIN" đã minted => 
-#     'policy_id_hex' => sẵn => 
-#     => Gửi sang to_address (ENV: TEST_RECEIVER_ADDRESS).
-#     """
-
-#     # 1) Lấy to_address_str từ ENV => nếu chưa set => skip
-#     to_address_str = os.getenv("TEST_RECEIVER_ADDRESS", "")
-#     if not to_address_str:
-#         pytest.skip("Chưa set TEST_RECEIVER_ADDRESS => skip test_send_michielcoin")
-
-#     # 2) policy_id_hex => 
-#     #    - Hoặc lấy từ fixture minted_policy_id
-#     #    - Hoặc cứng => "abc123..." (VD 56 hex)
-#     #    - Ở đây DEMO => ENV: 'TEST_POLICY_ID_HEX' hoặc skip
-#     policy_id_hex = "b9107b627e28700da1c5c2077c40b1c7d1fe2e9b23ff20e0e6b8fec1"
-
-#     # 3) Gọi hàm send_token_lowlevel_hotkey
-#     # chain_context_fixture => fixture conftest
-#     # base_dir, coldkey_name, hotkey_name, password => 
-#     #    => Lấy từ ENV => HOẶC code cứng => DEMO bên dưới
-    
-#     base_dir = os.getenv("HOTKEY_BASE_DIR", "moderntensor")
-#     coldkey_name = os.getenv("COLDKEY_NAME", "kickoff")
-#     hotkey_name = os.getenv("HOTKEY_NAME", "hk1")
-#     password = os.getenv("HOTKEY_PASSWORD", "sonlearn2003")
-
-#     token_amount = 50
-#     asset_name   = "MIT"
-
-#     tx_id = send_token(
-#         chain_context=chain_context_fixture,
-#         base_dir=base_dir,
-#         coldkey_name=coldkey_name,
-#         hotkey_name=hotkey_name,
-#         password=password,
-#         to_address_str=to_address_str,
-#         policy_id_hex=policy_id_hex,
-#         asset_name=asset_name,
-#         token_amount=token_amount,
-#         fee=200_000,
-#         network=Network.TESTNET
-#     )
-
-#     logging.info(f"[test_send_michielcoin] => TX ID: {tx_id}")
-#     assert len(tx_id) > 0, "Gửi token fail => tx_id rỗng"
+    assert len(tx_id) > 0, "Transaction ID should be a non-empty string upon success."

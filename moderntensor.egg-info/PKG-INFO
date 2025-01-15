@@ -31,9 +31,42 @@ Classifier: License :: OSI Approved :: MIT License
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: pycardano>=0.12.2
-Requires-Dist: bip_utils>=2.9.3
-Requires-Dist: cryptography>=42.0.8
+Requires-Dist: pycardano==0.12.2
+Requires-Dist: bip_utils==2.9.3
+Requires-Dist: cryptography==42.0.8
+Requires-Dist: annotated-types==0.7.0
+Requires-Dist: anyio==4.7.0
+Requires-Dist: certifi==2024.12.14
+Requires-Dist: charset-normalizer==3.4.1
+Requires-Dist: click==8.1.8
+Requires-Dist: cmake==3.31.2
+Requires-Dist: colorama==0.4.6
+Requires-Dist: dependency-injector==4.45.0
+Requires-Dist: dnspython==2.7.0
+Requires-Dist: email_validator==2.2.0
+Requires-Dist: fastapi==0.115.6
+Requires-Dist: h11==0.14.0
+Requires-Dist: httptools==0.6.4
+Requires-Dist: idna==3.10
+Requires-Dist: loguru==0.7.3
+Requires-Dist: pydantic==2.10.4
+Requires-Dist: pydantic-settings==2.7.1
+Requires-Dist: pydantic_core==2.27.2
+Requires-Dist: python-dotenv==1.0.1
+Requires-Dist: python-multipart==0.0.20
+Requires-Dist: PyYAML==6.0.2
+Requires-Dist: requests==2.32.3
+Requires-Dist: sniffio==1.3.1
+Requires-Dist: starlette==0.41.3
+Requires-Dist: typing_extensions==4.12.2
+Requires-Dist: urllib3==2.3.0
+Requires-Dist: uvicorn==0.34.0
+Requires-Dist: watchfiles==1.0.3
+Requires-Dist: websockets==13.0
+Requires-Dist: win32_setctime==1.2.0
+Provides-Extra: cli
+Requires-Dist: click>=8.1.0; extra == "cli"
+Requires-Dist: rich>=13.0.0; extra == "cli"
 
 # ModernTensor CLI
 
@@ -63,7 +96,7 @@ ModernTensor is a project focused on building a command-line interface (CLI) too
 
 ## Installation Requirements
 
-- **Python** (version 3.7 or higher)
+- **Python** (version 3.9 or higher)
 - Virtual environment **virtualenv** or **conda** (recommended)
 - **Git** (for cloning the project)
 
@@ -71,15 +104,15 @@ ModernTensor is a project focused on building a command-line interface (CLI) too
 
 1. Clone the source code from the repository:
    ```bash
-   git clone https://github.com/yourusername/moderntensor-cli.git
-   cd moderntensor-cli
+   git clone https://github.com/sonson0910/moderntensor.git
+   cd moderntensor
    ```
 
 2. Create a virtual environment (optional but recommended):
    ```bash
     python -m venv venv
-    source venv/bin/activate  # Trên Linux/Mac
-    .\venv\Scripts\activate   # Trên Windows
+    source venv/bin/activate  # For Linux/Mac
+    .\venv\Scripts\activate   # For Windows
    ```
 
 3. Install the dependencies:
