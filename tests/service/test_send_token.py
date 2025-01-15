@@ -1,6 +1,7 @@
 # tests/service/test_send_token.py
 
 import os
+import time
 import pytest
 import logging
 from pycardano import Network
@@ -52,6 +53,7 @@ def test_send_michielcoin(chain_context_fixture, hotkey_skey_fixture):
         and the test will likely fail or raise an exception.
     """
 
+    time.sleep(30)
     # 1) Read the receiver address from environment (or use a default). If not set, skip.
     to_address_str = os.getenv(
         "TEST_RECEIVER_ADDRESS",

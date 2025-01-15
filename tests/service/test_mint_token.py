@@ -1,6 +1,7 @@
 # tests/service/test_mint_michielcoin.py
 
 import os
+import time
 import pytest
 import logging
 from os.path import exists
@@ -65,6 +66,7 @@ def test_mint_mit_token(chain_context_fixture, hotkey_skey_fixture):
       - The policy.skey and policy.vkey are stored in the coldkey_dir for future reuse.
     """
 
+    time.sleep(30)
     # 0) Get Payment/Stake extended signing keys from fixture
     (payment_skey, staking_skey) = hotkey_skey_fixture
     logging.info("[test_mint_michielcoin] Begin minting 'MichielCOIN' with hotkey as payment key.")
