@@ -2,16 +2,10 @@
 
 import os
 import json
-import logging
 from cryptography.fernet import Fernet
-from pycardano import (
-    Address,
-    Network,
-    ExtendedSigningKey  # used for stake & payment derivation
-)
+from pycardano import Address, Network, ExtendedSigningKey
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+from sdk.config.settings import settings, logger
 
 class HotKeyManager:
     """
@@ -23,89 +17,93 @@ class HotKeyManager:
     def __init__(
         self,
         coldkeys_dict: dict,  # {coldkey_name -> {"wallet": HDWallet, "cipher_suite": ..., "hotkeys": {...}}}
-        base_dir="moderntensor",
-        network=Network.TESTNET
+        base_dir: str = None,
+        network: Network = None
     ):
         """
         Initializes the HotKeyManager.
 
         Args:
-            coldkeys_dict (dict): A dictionary that holds data for existing coldkeys,
+            coldkeys_dict (dict): A dictionary holding data for existing coldkeys,
                                   including the associated HDWallet, a Fernet cipher_suite,
                                   and any existing hotkeys.
-            base_dir (str): Base directory where coldkey folders (and their hotkeys.json) are stored.
-            network (Network): Indicates which Cardano network to use. Default is TESTNET.
+            base_dir (str, optional): Base directory for coldkeys. If None,
+                                      defaults to settings.HOTKEY_BASE_DIR.
+            network (Network, optional): Indicates which Cardano network to use.
+                                         Defaults to settings.CARDANO_NETWORK if None.
         """
         self.coldkeys = coldkeys_dict
-        self.base_dir = base_dir
-        self.network = network or Network.TESTNET
+        self.base_dir = base_dir or settings.HOTKEY_BASE_DIR
+        self.network = network or settings.CARDANO_NETWORK
 
-    def generate_hotkey(self, coldkey_name: str, hotkey_name: str):
+    def generate_hotkey(self, coldkey_name: str, hotkey_name: str) -> str:
         """
         Creates a new hotkey by:
           1) Deriving payment_xsk & stake_xsk from the coldkey's HDWallet using child paths.
-             - Then converting them to CBOR (hex) for storage.
-          2) Generating an address from payment and stake verification keys.
-          3) Encrypting and writing the hotkey data (CBOR hex) into 'hotkeys.json'.
-        
+          2) Converting them to CBOR (hex) for storage.
+          3) Generating an address from these keys.
+          4) Encrypting and writing the hotkey data (CBOR hex) into 'hotkeys.json'.
+
         Steps in detail:
           - Uses the next available index (based on how many hotkeys exist) to derive paths.
           - Derives child keys for payment (m/1852'/1815'/0'/0/idx) and stake (m/1852'/1815'/0'/2/idx).
-          - Constructs an Address object using payment and stake verification keys.
-          - Stores the extended signing keys in hex-encoded CBOR form, encrypts, and writes to disk.
+          - Builds an Address object from payment & stake verification keys.
+          - Stores extended signing keys in CBOR hex form, encrypts them, and writes to disk.
 
         Args:
             coldkey_name (str): The name of the coldkey under which this hotkey will be generated.
             hotkey_name (str): A unique identifier for this hotkey.
 
         Raises:
-            ValueError: If the given coldkey doesn't exist.
-            Exception: If the specified hotkey already exists.
+            ValueError: If the coldkey_name doesn't exist in self.coldkeys.
+            Exception: If the hotkey_name already exists for that coldkey.
 
         Returns:
             str: The encrypted hotkey data (base64-encoded string).
         """
         import binascii
 
-        # Check if coldkey_name exists in the manager
+        # Verify the coldkey exists in memory
         if coldkey_name not in self.coldkeys:
-            raise ValueError(f"Coldkey '{coldkey_name}' does not exist.")
+            raise ValueError(f"Coldkey '{coldkey_name}' does not exist in self.coldkeys.")
 
-        # Extract the HDWallet and cipher suite from the stored coldkeys data
+        # Extract HDWallet, cipher_suite, and hotkeys dict from the coldkeys data
         wallet_info = self.coldkeys[coldkey_name]
-        hd_wallet = wallet_info["wallet"]        # HDWallet object
+        hd_wallet = wallet_info["wallet"]
         cipher_suite: Fernet = wallet_info["cipher_suite"]
-        hotkeys_dict = wallet_info["hotkeys"]    # Current hotkeys for this coldkey
+        hotkeys_dict = wallet_info["hotkeys"]
 
-        # If the hotkey already exists, raise an exception
+        # Check if the hotkey already exists
         if hotkey_name in hotkeys_dict:
-            raise Exception(f"Hotkey '{hotkey_name}' already exists for coldkey '{coldkey_name}'.")
+            raise Exception(
+                f"Hotkey '{hotkey_name}' already exists for coldkey '{coldkey_name}'."
+            )
 
-        # Use the length of existing hotkeys as an index for derivation
+        # Use the count of existing hotkeys as the derivation index
         idx = len(hotkeys_dict)
 
-        # 1) Derive the payment extended signing key using the standard Cardano derivation path
+        # 1) Derive payment extended signing key from HDWallet
         payment_child = hd_wallet.derive_from_path(f"m/1852'/1815'/0'/0/{idx}")
         payment_xsk = ExtendedSigningKey.from_hdwallet(payment_child)
         payment_xvk = payment_xsk.to_verification_key()
 
-        # 2) Derive the stake extended signing key
+        # 2) Derive stake extended signing key
         stake_child = hd_wallet.derive_from_path(f"m/1852'/1815'/0'/2/{idx}")
         stake_xsk = ExtendedSigningKey.from_hdwallet(stake_child)
         stake_xvk = stake_xsk.to_verification_key()
 
-        # 3) Construct an address from the payment part and the stake part
+        # 3) Construct the Address using the derived payment & stake verification keys
         hotkey_address = Address(
             payment_part=payment_xvk.hash(),
             staking_part=stake_xvk.hash(),
             network=self.network
         )
 
-        # 4) Convert the extended signing keys to CBOR bytes, then to hex strings
+        # 4) Convert the extended signing keys to CBOR bytes and then to hex
         pay_cbor_hex = binascii.hexlify(payment_xsk.to_cbor()).decode("utf-8")
         stk_cbor_hex = binascii.hexlify(stake_xsk.to_cbor()).decode("utf-8")
 
-        # Store these in a dictionary to be encrypted
+        # Prepare the hotkey data for encryption
         hotkey_data = {
             "name": hotkey_name,
             "address": str(hotkey_address),
@@ -113,24 +111,24 @@ class HotKeyManager:
             "stake_xsk_cbor_hex": stk_cbor_hex
         }
 
-        # Encrypt the hotkey JSON using the Fernet cipher suite
+        # Encrypt the hotkey JSON
         enc_bytes = cipher_suite.encrypt(json.dumps(hotkey_data).encode("utf-8"))
         encrypted_hotkey = enc_bytes.decode("utf-8")
 
-        # Update the local dictionary for hotkeys
+        # Update the in-memory dictionary
         hotkeys_dict[hotkey_name] = {
             "address": str(hotkey_address),
             "encrypted_data": encrypted_hotkey
         }
 
-        # Write the updated hotkeys dictionary to 'hotkeys.json'
+        # Persist changes to hotkeys.json
         coldkey_dir = os.path.join(self.base_dir, coldkey_name)
         os.makedirs(coldkey_dir, exist_ok=True)
         hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
         with open(hotkey_path, "w") as f:
             json.dump({"hotkeys": hotkeys_dict}, f, indent=2)
 
-        logger.info(f"[generate_hotkey] => {hotkey_name} => address={hotkey_address}")
+        logger.info(f"[generate_hotkey] => '{hotkey_name}' => address={hotkey_address}")
         return encrypted_hotkey
 
     def import_hotkey(
@@ -144,7 +142,7 @@ class HotKeyManager:
         Imports a hotkey by decrypting the provided encrypted hotkey data and storing 
         the resulting address info into 'hotkeys.json'.
 
-        Steps in detail:
+        Steps:
           - Decrypts the hotkey JSON (which includes payment_xsk_cbor_hex and stake_xsk_cbor_hex).
           - Reconstructs the extended signing keys from the hex-encoded CBOR.
           - (Optionally) prompts the user if a hotkey with the same name already exists 
@@ -152,35 +150,37 @@ class HotKeyManager:
           - Writes the final data to 'hotkeys.json'.
 
         Args:
-            coldkey_name (str): The name of the coldkey to which this hotkey will be imported.
+            coldkey_name (str): Name of the coldkey under which this hotkey will be stored.
             encrypted_hotkey (str): The encrypted hotkey data (base64-encoded, Fernet).
             hotkey_name (str): The name under which this hotkey will be stored.
             overwrite (bool): If True, overwrite an existing hotkey without prompting.
 
         Raises:
-            ValueError: If the given coldkey doesn't exist.
+            ValueError: If the specified coldkey doesn't exist in memory.
 
         Returns:
-            None: Writes hotkey data to disk. Logs completion status.
+            None
         """
         import binascii
 
-        # Verify that the specified coldkey exists
+        # Ensure the coldkey exists in memory
         if coldkey_name not in self.coldkeys:
-            raise ValueError(f"[import_hotkey] Cold Key '{coldkey_name}' does not exist.")
+            raise ValueError(
+                f"[import_hotkey] Cold Key '{coldkey_name}' does not exist in self.coldkeys."
+            )
 
-        # Fetch cipher suite and hotkeys dictionary
+        # Retrieve the cipher suite and hotkeys dictionary
         wallet_info = self.coldkeys[coldkey_name]
         cipher_suite: Fernet = wallet_info["cipher_suite"]
         hotkeys_dict = wallet_info["hotkeys"]
 
-        # Check if hotkey already exists
+        # If the hotkey already exists and overwrite is False, ask the user
         if hotkey_name in hotkeys_dict and not overwrite:
             resp = input(f"Hot Key '{hotkey_name}' exists. Overwrite? (yes/no): ").strip().lower()
             if resp not in ("yes", "y"):
-                logging.warning("[import_hotkey] User canceled overwrite => import aborted.")
+                logger.warning("[import_hotkey] User canceled overwrite => import aborted.")
                 return
-            logging.warning(f"[import_hotkey] Overwriting '{hotkey_name}'.")
+            logger.warning(f"[import_hotkey] Overwriting '{hotkey_name}'.")
 
         # Decrypt the provided hotkey data
         dec_bytes = cipher_suite.decrypt(encrypted_hotkey.encode("utf-8"))
@@ -190,26 +190,25 @@ class HotKeyManager:
         pay_cbor_hex = hotkey_data["payment_xsk_cbor_hex"]
         stk_cbor_hex = hotkey_data["stake_xsk_cbor_hex"]
 
-        # Convert hex-encoded CBOR back to ExtendedSigningKey objects
-        from pycardano import ExtendedSigningKey
+        # Convert CBOR hex back to ExtendedSigningKey objects
         payment_xsk = ExtendedSigningKey.from_cbor(binascii.unhexlify(pay_cbor_hex))
         stake_xsk = ExtendedSigningKey.from_cbor(binascii.unhexlify(stk_cbor_hex))
 
-        # Reconstruct the address from verification keys, if needed
+        # Reconstruct the address if needed
         pay_xvk = payment_xsk.to_verification_key()
         stake_xvk = stake_xsk.to_verification_key()
         final_address = hotkey_data["address"]
 
-        # Update the in-memory hotkeys dictionary
+        # Update the in-memory dictionary
         hotkeys_dict[hotkey_name] = {
             "address": final_address,
             "encrypted_data": encrypted_hotkey
         }
 
-        # Write the updated hotkeys dictionary back to 'hotkeys.json'
+        # Write updated hotkeys to disk
         coldkey_dir = os.path.join(self.base_dir, coldkey_name)
         hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
         with open(hotkey_path, "w") as f:
             json.dump({"hotkeys": hotkeys_dict}, f, indent=2)
 
-        logger.info(f"[import_hotkey] => {hotkey_name} => address={final_address}")
+        logger.info(f"[import_hotkey] => '{hotkey_name}' => address={final_address}")

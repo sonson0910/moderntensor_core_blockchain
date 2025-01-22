@@ -2,74 +2,78 @@
 
 import os
 import json
-import logging
 from bip_utils import Bip39MnemonicGenerator, Bip39Languages
 from cryptography.fernet import InvalidToken
 from pycardano import HDWallet
-from .encryption_utils import get_cipher_suite
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
+from sdk.keymanager.encryption_utils import get_cipher_suite
+from sdk.config.settings import settings, logger
 
 class ColdKeyManager:
-    def __init__(self, base_dir="moderntensor"):
+    """
+    Manages the creation and loading of ColdKeys. A ColdKey typically stores a 
+    mnemonic (encrypted on disk), and is used to derive an HDWallet.
+    """
+
+    def __init__(self, base_dir: str = None):
         """
-        Initialize the ColdKeyManager class.
-        
-        :param base_dir: Base directory (default: 'moderntensor') where 
-                         mnemonic files, hotkeys.json, etc. will be stored.
+        Initialize the ColdKeyManager.
+
+        Args:
+            base_dir (str, optional): Custom base directory for storing coldkeys.
+                                      If None, defaults to settings.HOTKEY_BASE_DIR.
         """
-        # Set the base directory
-        self.base_dir = base_dir
-        # Create the base directory if it doesn't exist
+        # Determine the base directory
+        self.base_dir = base_dir or settings.HOTKEY_BASE_DIR
         os.makedirs(self.base_dir, exist_ok=True)
-        
-        # Dictionary to store coldkeys that are loaded or newly created.
-        # Structure: 
+
+        # Dictionary to store coldkeys that are loaded or newly created:
         # {
         #   "coldkey_name": {
-        #       "wallet": HDWallet_object, 
+        #       "wallet": HDWallet_object,
         #       "cipher_suite": Fernet_object,
-        #       "hotkeys": { ... }
+        #       "hotkeys": {...}
         #   },
         #   ...
         # }
         self.coldkeys = {}
 
-    def create_coldkey(self, name: str, password: str, words_num=24):
+    def create_coldkey(self, name: str, password: str, words_num: int = 24):
         """
-        Create a new Cold Key and generate its mnemonic (commonly 24 words).
-        
+        Create a new ColdKey by generating a mnemonic (commonly 24 words).
+
+        This method:
+          1. Checks whether the coldkey name already exists (in memory or on disk).
+          2. Creates an encryption key (Fernet) derived from `password`.
+          3. Generates a mnemonic, encrypts, and saves it to 'mnemonic.enc'.
+          4. Initializes a corresponding HDWallet.
+          5. Creates a 'hotkeys.json' file to store any future hotkeys.
+          6. Stores the resulting data in self.coldkeys.
+
         Args:
             name (str): Unique name for the coldkey.
             password (str): Password used to encrypt the mnemonic.
             words_num (int): Number of words in the mnemonic (commonly 24).
 
         Raises:
-            Exception: If the coldkey name already exists in memory 
-                       (self.coldkeys) or if the directory already exists.
-        
-        Returns:
-            None
+            Exception: If the coldkey name already exists in memory or on disk.
         """
         # 1) Check if the coldkey name already exists in memory
         if name in self.coldkeys:
             raise Exception(f"Coldkey '{name}' already exists in memory.")
-        
-        # 2) Create the path for the coldkey (directory name is the same as the coldkey name)
+
+        # 2) Create the path for the coldkey (folder name matches the coldkey name)
         coldkey_dir = os.path.join(self.base_dir, name)
-        # If the directory already exists, raise an exception to prevent overwriting
+        # Prevent overwriting an existing directory for a coldkey
         if os.path.exists(coldkey_dir):
             raise Exception(f"Coldkey folder '{coldkey_dir}' already exists.")
-        
-        # Create the coldkey directory
+
         os.makedirs(coldkey_dir, exist_ok=True)
 
-        # Create the cipher_suite (Fernet) using the user-provided password
+        # Create a Fernet cipher suite using the user-provided password + salt
         cipher_suite = get_cipher_suite(password, coldkey_dir)
 
-        # Generate the mnemonic (with 'words_num' words, default language is English)
+        # 3) Generate the mnemonic
         mnemonic = str(
             Bip39MnemonicGenerator(lang=Bip39Languages.ENGLISH).FromWordsNumber(words_num)
         )
@@ -78,64 +82,63 @@ class ColdKeyManager:
             "Please store it securely."
         )
 
-        # Encrypt and save the mnemonic to the mnemonic.enc file
+        # Encrypt and save the mnemonic in "mnemonic.enc"
         enc_path = os.path.join(coldkey_dir, "mnemonic.enc")
         with open(enc_path, "wb") as f:
-            # Encrypt the mnemonic string (converted to bytes) with the cipher_suite
             f.write(cipher_suite.encrypt(mnemonic.encode("utf-8")))
 
-        # Create an HDWallet from the mnemonic (used for generating addresses, keys, etc.)
+        # 4) Initialize an HDWallet from the generated mnemonic
         hdwallet = HDWallet.from_mnemonic(mnemonic)
 
-        # Create an empty hotkeys.json file (if it does not already exist) to store hotkeys
+        # 5) Create an empty "hotkeys.json" file if it doesn't already exist
         hotkeys_path = os.path.join(coldkey_dir, "hotkeys.json")
         if not os.path.exists(hotkeys_path):
             with open(hotkeys_path, "w") as f:
                 json.dump({"hotkeys": {}}, f)
 
-        # Store the newly created coldkey info in self.coldkeys
+        # 6) Store the newly created coldkey data in memory
         self.coldkeys[name] = {
             "wallet": hdwallet,
             "cipher_suite": cipher_suite,
             "hotkeys": {},
         }
-        logger.info(
-            f"[create_coldkey] Cold Key '{name}' has been successfully created."
-        )
+
+        logger.info(f"[create_coldkey] Cold Key '{name}' has been successfully created.")
 
     def load_coldkey(self, name: str, password: str):
         """
-        Read mnemonic.enc, salt.bin, and hotkeys.json. Decrypt the mnemonic 
-        to create an HDWallet and store it in self.coldkeys.
+        Load an existing coldkey from disk, decrypt its mnemonic, and store 
+        the HDWallet in memory.
+
+        Steps:
+          1. Reads 'mnemonic.enc', 'salt.bin', and 'hotkeys.json' from the coldkey directory.
+          2. Decrypts the mnemonic using the provided password.
+          3. Initializes an HDWallet from the mnemonic.
+          4. Loads any existing hotkeys from 'hotkeys.json' into memory.
 
         Args:
-            name (str): The name of the coldkey to be loaded.
+            name (str): The coldkey name (folder) to load.
             password (str): Password used to decrypt the mnemonic.
 
         Raises:
-            FileNotFoundError: If mnemonic.enc does not exist.
-            Exception: If the password is invalid (when decrypting mnemonic).
-        
-        Returns:
-            None
+            FileNotFoundError: If 'mnemonic.enc' is missing.
+            Exception: If the mnemonic decryption fails (invalid password).
         """
-        # Construct the coldkey directory path based on 'name'
+        # Construct the path to the coldkey folder
         coldkey_dir = os.path.join(self.base_dir, name)
-        # Path to the encrypted mnemonic
+        # The encrypted mnemonic
         mnemonic_path = os.path.join(coldkey_dir, "mnemonic.enc")
-        # Path to the hotkeys.json file
+        # The hotkeys.json file
         hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
 
-        # Check if mnemonic.enc exists
+        # Check if the mnemonic file exists
         if not os.path.exists(mnemonic_path):
-            raise FileNotFoundError(
-                f"mnemonic.enc not found for Cold Key '{name}'."
-            )
+            raise FileNotFoundError(f"mnemonic.enc not found for Cold Key '{name}'.")
 
-        # Create cipher_suite for decrypting the mnemonic (using the user's password)
+        # Create the Fernet cipher suite (password + salt)
         cipher_suite = get_cipher_suite(password, coldkey_dir)
 
-        # Read the encrypted mnemonic from file
+        # Read the encrypted mnemonic
         with open(mnemonic_path, "rb") as f:
             encrypted_mnemonic = f.read()
 
@@ -143,24 +146,23 @@ class ColdKeyManager:
         try:
             mnemonic = cipher_suite.decrypt(encrypted_mnemonic).decode("utf-8")
         except InvalidToken:
-            # If decryption fails => password is incorrect
+            # Invalid password => cannot decrypt
             raise Exception("Invalid password: failed to decrypt mnemonic.")
 
-        # Create an HDWallet from the mnemonic (same process as in create_coldkey)
+        # Recreate the HDWallet from the decrypted mnemonic
         hdwallet = HDWallet.from_mnemonic(mnemonic)
 
-        # Read the hotkeys.json file to retrieve the list of hotkeys
+        # Read and parse "hotkeys.json"
         with open(hotkey_path, "r") as f:
             hotkeys_data = json.load(f)
-        
-        # Ensure the "hotkeys" field exists in the JSON. If not, initialize it.
         if "hotkeys" not in hotkeys_data:
             hotkeys_data["hotkeys"] = {}
 
-        # Store the coldkey information (hdwallet, cipher_suite, hotkeys) in self.coldkeys
+        # Store the loaded coldkey data in memory
         self.coldkeys[name] = {
             "wallet": hdwallet,
             "cipher_suite": cipher_suite,
             "hotkeys": hotkeys_data["hotkeys"],
         }
+
         logger.info(f"[load_coldkey] Cold Key '{name}' has been successfully loaded.")

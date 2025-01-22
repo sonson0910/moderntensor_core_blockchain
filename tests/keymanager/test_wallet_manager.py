@@ -1,12 +1,12 @@
-# test_wallet_manager.py
+# tests/keymanager/test_wallet_manager.py
 
 import os
 import json
 import pytest
 import logging
-from pycardano import Network
 from unittest.mock import patch
 
+from sdk.config.settings import settings, logger  # Global logger & settings
 from sdk.keymanager.encryption_utils import (
     get_or_create_salt,
     generate_encryption_key,
@@ -55,7 +55,7 @@ def wallet_manager(tmp_path):
     Creates a WalletManager set to TESTNET network using a temporary base directory.
     This fixture tests all wallet operations in an isolated temp environment.
     """
-    return WalletManager(network=Network.TESTNET, base_dir=str(tmp_path))
+    return WalletManager(network=settings.CARDANO_NETWORK, base_dir=str(tmp_path))
 
 # -------------------------------------------------------------------
 # TEST encryption_utils

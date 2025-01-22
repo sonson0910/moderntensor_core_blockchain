@@ -1,15 +1,11 @@
-# keymanager/wallet_manager.py
+# sdk/keymanager/wallet_manager.py
 
 import os
 import json
-import logging
-from pycardano import Network
-from .coldkey_manager import ColdKeyManager
-from .hotkey_manager import HotKeyManager
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
+from sdk.config.settings import settings, logger
+from sdk.keymanager.coldkey_manager import ColdKeyManager
+from sdk.keymanager.hotkey_manager import HotKeyManager
 
 class WalletManager:
     """
@@ -18,26 +14,27 @@ class WalletManager:
     generate/import hotkeys, and list all wallets and their hotkeys from the base directory.
     """
 
-    def __init__(self, network=Network.TESTNET, base_dir="moderntensor"):
+    def __init__(self, network=None, base_dir=None):
         """
-        Initialize WalletManager with a specific Cardano network and a base directory.
+        Initializes WalletManager with a specific Cardano network and a base directory.
 
         Args:
-            network (Network): The Cardano network to use (TESTNET or MAINNET). Default is TESTNET.
-            base_dir (str): The folder for storing coldkey and hotkey data. Default is "moderntensor".
+            network (Network, optional): The Cardano network to use (TESTNET or MAINNET).
+                                         Defaults to settings.CARDANO_NETWORK if None.
+            base_dir (str, optional): The folder for storing coldkey and hotkey data.
+                                      Defaults to settings.HOTKEY_BASE_DIR if None.
         """
-        self.network = network
-        self.base_dir = base_dir
+        self.network = network or settings.CARDANO_NETWORK
+        self.base_dir = base_dir or settings.HOTKEY_BASE_DIR
 
-        # Create an instance of ColdKeyManager to handle mnemonic-based coldkeys
-        self.ck_manager = ColdKeyManager(base_dir=base_dir)
+        # Initialize the ColdKeyManager with the chosen base directory
+        self.ck_manager = ColdKeyManager(base_dir=self.base_dir)
 
-        # Create a HotKeyManager to handle individual hotkeys. 
-        # We pass self.ck_manager.coldkeys so both managers share the same dictionary reference.
+        # Create a HotKeyManager, sharing the same coldkeys dictionary
         self.hk_manager = HotKeyManager(
             coldkeys_dict=self.ck_manager.coldkeys,
-            base_dir=base_dir,
-            network=network
+            base_dir=self.base_dir,
+            network=self.network
         )
 
     def create_coldkey(self, name: str, password: str):
@@ -49,7 +46,7 @@ class WalletManager:
             password (str): Password used to encrypt the coldkey's mnemonic.
 
         Returns:
-            None (but writes files to disk and updates self.ck_manager.coldkeys)
+            None: Writes files to disk and updates self.ck_manager.coldkeys.
         """
         return self.ck_manager.create_coldkey(name, password)
 
@@ -62,16 +59,16 @@ class WalletManager:
             password (str): Password used to decrypt the mnemonic.
 
         Returns:
-            None (but updates self.ck_manager.coldkeys with the loaded coldkey data)
+            None: Updates self.ck_manager.coldkeys with the loaded coldkey data.
         """
         return self.ck_manager.load_coldkey(name, password)
 
     def generate_hotkey(self, coldkey_name: str, hotkey_name: str):
         """
-        Create a new hotkey under an existing coldkey. 
+        Create a new hotkey under an existing coldkey.
 
         Args:
-            coldkey_name (str): The name of the coldkey to derive this hotkey from.
+            coldkey_name (str): The name of the coldkey from which to derive this hotkey.
             hotkey_name (str): A unique identifier for the new hotkey.
 
         Returns:
@@ -92,7 +89,7 @@ class WalletManager:
 
         Args:
             coldkey_name (str): Name of the coldkey that will own this hotkey.
-            encrypted_hotkey (str): The encrypted hotkey data (base64).
+            encrypted_hotkey (str): The encrypted hotkey data (base64-encoded).
             hotkey_name (str): A unique name for the imported hotkey.
             overwrite (bool): If True, overwrite existing hotkey without prompting.
 
@@ -109,7 +106,8 @@ class WalletManager:
         and build a list describing each coldkey and its hotkeys.
 
         Returns:
-            list of dict: Each dictionary has the form:
+            list of dict: A list of dictionaries, each describing a coldkey and its hotkeys.
+            Example:
             [
                 {
                     "name": <coldkey_name>,
@@ -122,13 +120,11 @@ class WalletManager:
             ]
         """
         wallets = []
-        
-        # If the base directory does not exist, log a warning and return an empty list.
+
         if not os.path.isdir(self.base_dir):
             logger.warning(f"Base directory '{self.base_dir}' does not exist.")
             return wallets
 
-        # Scan through each entry in the base directory to find coldkey folders
         for entry in os.scandir(self.base_dir):
             if entry.is_dir():
                 coldkey_name = entry.name
@@ -155,8 +151,7 @@ class WalletManager:
                     
                     if "hotkeys" in data:
                         for hk_name, hk_info in data["hotkeys"].items():
-                            # hk_info is a dict: {"address": "...", "encrypted_data": "..."}
-                            # We only display the address here without decrypting the private keys
+                            # We only display the address without decrypting keys
                             address_plaintext = hk_info.get("address", None)
                             hotkeys_list.append({
                                 "name": hk_name,
