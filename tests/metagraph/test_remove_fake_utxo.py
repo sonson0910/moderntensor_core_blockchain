@@ -1,21 +1,19 @@
 from dataclasses import dataclass
 import pytest
 from pycardano import (
-    UTxO,
-    TransactionInput,
-    TransactionOutput,
     Address,
-    Value,
     PlutusV3Script,
     Redeemer,
-    PaymentSigningKey,
-    BlockFrostChainContext,
     Network,
-    VerificationKeyHash,
     TransactionId,
     PlutusData
 )
-from remove_fake_utxo import remove_fake_utxos
+from sdk.metagraph.remove_fake_utxo import remove_fake_utxos
+from sdk.service.context import get_chain_context
+from sdk.smartcontract.validator import read_validator
+from sdk.service.utxos import get_utxo_from_str
+from sdk.metagraph.metagraph_datum import MinerDatum  # Lớp MinerDatum từ file metagraph_datum.py
+
 
 # Giả lập lớp HelloWorldDatum từ unlock.py
 @dataclass
@@ -23,40 +21,38 @@ class HelloWorldDatum(PlutusData):
     CONSTR_ID = 0
     owner: bytes
 
-# Fixture chain context
-@pytest.fixture
-def chain_context():
-    """Tạo ngữ cảnh chuỗi blockchain cho testnet."""
-    # Thay bằng API key thực tế khi chạy
-    api_key = "your_blockfrost_api_key"
-    return BlockFrostChainContext(api_key, Network.TESTNET)
+# Fixture cung cấp chain context
+@pytest.fixture(scope="session")
+def chain_context_fixture():
+    """
+    Creates a chain context, specifically a BlockFrostChainContext in TESTNET mode, 
+    for use throughout the test session.
+
+    Steps:
+      1) Reads the BLOCKFROST_PROJECT_ID from environment or settings (if implemented).
+      2) Calls get_chain_context() with method="blockfrost".
+      3) Returns the resulting chain context, which can be injected into test functions.
+
+    Returns:
+        BlockFrostChainContext: A chain context configured for Cardano TESTNET via Blockfrost.
+    """
+    # If you want to pass in a specific project_id, you can read from settings:
+    # project_id = settings.BLOCKFROST_PROJECT_ID
+    # return get_chain_context(method="blockfrost", project_id=project_id, network=Network.TESTNET)
+    return get_chain_context(method="blockfrost")
 
 # Fixture giả lập danh sách UTxO giả mạo
 @pytest.fixture
 def fake_utxos():
-    """Tạo danh sách UTxO giả mạo để kiểm thử."""
-    contract_address = Address.from_primitive("your_contract_address")  # Thay bằng địa chỉ hợp đồng thực tế
-    # UTxO giả mạo 1
-    datum1 = HelloWorldDatum(owner=b'fake_owner_1')
-    utxo1 = UTxO(
-        input=TransactionInput.from_primitive(["fake_tx_hash_1", 0]),
-        output=TransactionOutput(
-            address=contract_address,
-            amount=Value(2_000_000),  # 2 tADA
-            datum=datum1,
-        ),
+    """Tạo một UTxO giả lập với datum ban đầu."""
+    validator=read_validator()
+    script_hash = validator["script_hash"]  # Thay bằng hash của hợp đồng Plutus
+    contract_address = Address(
+        payment_part = script_hash,
+        network=Network.TESTNET,
     )
-    # UTxO giả mạo 2
-    datum2 = HelloWorldDatum(owner=b'fake_owner_2')
-    utxo2 = UTxO(
-        input=TransactionInput.from_primitive(["fake_tx_hash_2", 1]),
-        output=TransactionOutput(
-            address=contract_address,
-            amount=Value(3_000_000),  # 3 tADA
-            datum=datum2,
-        ),
-    )
-    return [utxo1, utxo2]
+    utxo=get_utxo_from_str(contract_address=contract_address, datumclass=MinerDatum, context=chain_context_fixture)
+    return [utxo]
 
 # Fixture script hợp đồng
 @pytest.fixture
@@ -70,27 +66,24 @@ def redeemer():
     """Tạo redeemer đơn giản."""
     return Redeemer(0)
 
-# Fixture signing key và owner
-@pytest.fixture
-def signing_key_and_owner():
-    """Tạo signing key và owner giả lập."""
-    signing_key = PaymentSigningKey.from_json('{"type": "PaymentSigningKeyShelley_ed25519", "description": "Payment Signing Key", "cborHex": "5820..."}')  # Thay bằng khóa thực tế
-    owner = VerificationKeyHash(bytes.fromhex("fake_owner_hash"))  # Thay bằng hash thực tế
-    return signing_key, owner
 
 # Hàm kiểm thử
-def test_remove_fake_utxos(chain_context, fake_utxos, script, redeemer, signing_key_and_owner):
+def test_remove_fake_utxos(chain_context_fixture, fake_utxos, script, redeemer, hotkey_skey_fixture):
     """Kiểm thử service xóa UTxO giả mạo."""
-    signing_key, owner = signing_key_and_owner
+    (payment_xsk, stake_xsk) = hotkey_skey_fixture
+    network = Network.TESTNET
+    validator=read_validator()
+    script = validator["script_bytes"]  # Thay bằng hash của hợp đồng Plutus
 
     # Gọi service để xóa UTxO giả mạo
     tx_id = remove_fake_utxos(
+        payment_xsk=payment_xsk,
+        stake_xsk=stake_xsk,
         fake_utxos=fake_utxos,
         script=script,
         redeemer=redeemer,
-        signing_key=signing_key,
-        owner=owner,
-        context=chain_context,
+        context=chain_context_fixture,
+        network=network
     )
 
     # Kiểm tra kết quả

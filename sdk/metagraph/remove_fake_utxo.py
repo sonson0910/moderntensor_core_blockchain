@@ -5,19 +5,21 @@ from pycardano import (
     UTxO,
     PlutusV3Script,
     Redeemer,
-    PaymentSigningKey,
     BlockFrostChainContext,
     TransactionId,
-    VerificationKeyHash,
+    ExtendedSigningKey,
+    Network
 )
 from typing import List
+from sdk.config.settings import settings, logger
 
 def remove_fake_utxos(
+    payment_xsk: ExtendedSigningKey,
+    stake_xsk: ExtendedSigningKey,
     fake_utxos: List[UTxO],
     script: PlutusV3Script,
     redeemer: Redeemer,
-    signing_key: PaymentSigningKey,
-    owner: VerificationKeyHash,
+    network: Network,
     context: BlockFrostChainContext,
 ) -> TransactionId:
     """
@@ -34,9 +36,17 @@ def remove_fake_utxos(
     Returns:
         TransactionId: ID của giao dịch đã gửi.
     """
-    # Đọc địa chỉ của người thực hiện từ file me.addr
-    with open("me.addr", "r") as f:
-        owner_address = Address.from_primitive(f.read())
+
+    network = network or settings.CARDANO_NETWORK
+
+    pay_xvk = payment_xsk.to_verification_key()
+    if stake_xsk:
+        stk_xvk = stake_xsk.to_verification_key()
+        owner_address = Address(payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network)
+    else:
+        owner_address = Address(payment_part=pay_xvk.hash(), network=network)
+
+    owner=pay_xvk.hash()
 
     # Xây dựng giao dịch
     builder = TransactionBuilder(context=context)
@@ -68,7 +78,7 @@ def remove_fake_utxos(
 
     # Ký và gửi giao dịch
     signed_tx = builder.build_and_sign(
-        signing_keys=[signing_key],
+        signing_keys=[payment_xsk],
         change_address=owner_address,
     )
     tx_id = context.submit_tx(signed_tx)

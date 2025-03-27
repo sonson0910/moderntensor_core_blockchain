@@ -1,15 +1,15 @@
-from pycardano import TransactionBuilder, TransactionOutput, Address, UTxO, PlutusData, Redeemer
-from typing import Optional
+from pycardano import TransactionBuilder, TransactionOutput, Address, UTxO, PlutusData, Redeemer, ScriptHash, Network, BlockFrostChainContext, ExtendedSigningKey
 
 from sdk.config.settings import settings  # Cấu hình mạng Cardano
-from sdk.service.context import get_chain_context  # Lấy chain context
 
 def update_datum(
+    payment_xsk: ExtendedSigningKey,
+    stake_xsk: ExtendedSigningKey,
     utxo: UTxO,
     new_datum: PlutusData,
-    signing_key,
-    owner_address: Address,
-    script_hash: Optional[bytes] = None
+    script_hash: ScriptHash,
+    context: BlockFrostChainContext,
+    network: Network
 ) -> str:
     """
     Cập nhật datum của UTxO cho bất kỳ đối tượng nào.
@@ -24,13 +24,22 @@ def update_datum(
     Returns:
         tx_id: ID của giao dịch đã gửi lên blockchain
     """
-    # Khởi tạo chain context
-    context = get_chain_context()
+
+    network = network or settings.CARDANO_NETWORK
+
+    pay_xvk = payment_xsk.to_verification_key()
+    if stake_xsk:
+        stk_xvk = stake_xsk.to_verification_key()
+        owner_address = Address(payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network)
+    else:
+        owner_address = Address(payment_part=pay_xvk.hash(), network=network)
+
+    owner=pay_xvk.hash()
 
     # Lấy địa chỉ hợp đồng từ UTxO hiện tại
     contract_address = Address(
         payment_part=utxo.output.address.payment_part,
-        network=settings.CARDANO_NETWORK
+        network=network
     )
 
     # Tạo giao dịch
@@ -41,6 +50,7 @@ def update_datum(
     if script_hash:
         redeemer = Redeemer(0)
         builder.add_script_input(utxo=utxo, script_hash=script_hash, redeemer=redeemer)
+    
 
     # Tạo UTxO mới với datum đã cập nhật
     builder.add_output(
@@ -51,9 +61,12 @@ def update_datum(
         )
     )
 
+    # Yêu cầu chữ ký từ owner
+    builder.required_signers = [owner]
+
     # Ký và gửi giao dịch
     signed_tx = builder.build_and_sign(
-        signing_keys=[signing_key],
+        signing_keys=[payment_xsk],
         change_address=owner_address
     )
     tx_id = context.submit_tx(signed_tx)

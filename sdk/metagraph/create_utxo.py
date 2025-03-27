@@ -4,23 +4,21 @@ from pycardano import (
     Address,
     ScriptHash,
     PlutusData,
-    PaymentSigningKey,
     BlockFrostChainContext,
     Network,
-    TransactionId
+    TransactionId, 
+    ExtendedSigningKey
 )
-from typing import Optional
 
-# Giả định bạn đã có hàm get_chain_context trong context.py
-from context import get_chain_context
 
 def create_utxo(
+    payment_xsk: ExtendedSigningKey,
+    stake_xsk: ExtendedSigningKey,
     amount: int,
     script_hash: ScriptHash,
     datum: PlutusData,
-    signing_key: PaymentSigningKey,
-    owner_address: Address,
-    context: Optional[BlockFrostChainContext] = None
+    context: BlockFrostChainContext,
+    network: Network
 ) -> TransactionId:
     """
     Sinh một UTxO với số ADA và datum được khóa vào hợp đồng Plutus.
@@ -36,13 +34,21 @@ def create_utxo(
     Returns:
         TransactionId: ID của giao dịch đã gửi lên blockchain.
     """
-    # Lấy chain context nếu không được cung cấp
-    context = context or get_chain_context()
+    network = network or settings.CARDANO_NETWORK
+
+    pay_xvk = payment_xsk.to_verification_key()
+    if stake_xsk:
+        stk_xvk = stake_xsk.to_verification_key()
+        owner_address = Address(payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network)
+    else:
+        owner_address = Address(payment_part=pay_xvk.hash(), network=network)
+    
+    print(owner_address)
 
     # Tạo địa chỉ hợp đồng từ script_hash
     contract_address = Address(
         payment_part=script_hash,
-        network=Network.TESTNET  # Có thể thay đổi thành Network.MAINNET nếu cần
+        network=network  # Có thể thay đổi thành Network.MAINNET nếu cần
     )
 
     # Xây dựng giao dịch
@@ -58,7 +64,7 @@ def create_utxo(
 
     # Ký và gửi giao dịch
     signed_tx = builder.build_and_sign(
-        signing_keys=[signing_key],
+        signing_keys=[payment_xsk],
         change_address=owner_address
     )
     tx_id = context.submit_tx(signed_tx)
