@@ -2,90 +2,121 @@ from dataclasses import dataclass
 import pytest
 from pycardano import (
     Address,
-    PlutusV3Script,
-    Redeemer,
     Network,
-    TransactionId,
-    PlutusData
+    PlutusData,
 )
 from sdk.metagraph.remove_fake_utxo import remove_fake_utxos
 from sdk.service.context import get_chain_context
 from sdk.smartcontract.validator import read_validator
-from sdk.service.utxos import get_utxo_from_str
-from sdk.metagraph.metagraph_datum import MinerDatum  # Lớp MinerDatum từ file metagraph_datum.py
-from sdk.config.settings import settings, logger  # Use the global logger & settings
+from sdk.config.settings import logger
 
-# Giả lập lớp HelloWorldDatum từ unlock.py
+
+# Mock HelloWorldDatum class to simulate datum from unlock.py
 @dataclass
 class HelloWorldDatum(PlutusData):
+    """A mock Plutus data class representing the HelloWorldDatum."""
     CONSTR_ID = 0
 
-# Fixture cung cấp chain context
+
+# Fixture for blockchain context
 @pytest.fixture(scope="session")
 def chain_context_fixture():
     """
-    Creates a chain context, specifically a BlockFrostChainContext in TESTNET mode, 
-    for use throughout the test session.
+    Provides a blockchain context for the Cardano TESTNET using BlockFrost.
+
+    This fixture creates a BlockFrostChainContext configured for the TESTNET, which is reused
+    throughout the test session for efficiency.
 
     Steps:
-      1) Reads the BLOCKFROST_PROJECT_ID from environment or settings (if implemented).
-      2) Calls get_chain_context() with method="blockfrost".
-      3) Returns the resulting chain context, which can be injected into test functions.
+        1. Optionally retrieves BLOCKFROST_PROJECT_ID from settings (commented out).
+        2. Calls get_chain_context with the "blockfrost" method.
+        3. Returns the configured chain context.
 
     Returns:
-        BlockFrostChainContext: A chain context configured for Cardano TESTNET via Blockfrost.
+        BlockFrostChainContext: A chain context for interacting with Cardano TESTNET.
     """
-    # If you want to pass in a specific project_id, you can read from settings:
+    # Uncomment to use a specific project ID from settings if needed:
     # project_id = settings.BLOCKFROST_PROJECT_ID
     # return get_chain_context(method="blockfrost", project_id=project_id, network=Network.TESTNET)
     return get_chain_context(method="blockfrost")
 
-# Fixture giả lập danh sách UTxO giả mạo
+
+# Fixture for fake UTxOs
 @pytest.fixture
 def fake_utxos(chain_context_fixture):
-    """Tạo một UTxO giả lập với datum ban đầu."""
-    validator=read_validator()
-    script_hash = validator["script_hash"]  # Thay bằng hash của hợp đồng Plutus
+    """
+    Simulates a list of fake UTxOs associated with a Plutus contract address.
+
+    This fixture constructs a contract address using the validator's script hash and retrieves
+    all UTxOs from that address using the provided chain context.
+
+    Args:
+        chain_context_fixture (BlockFrostChainContext): The blockchain context fixture.
+
+    Returns:
+        List[UTxO]: A list of UTxOs from the contract address.
+    """
+    validator = read_validator()
+    script_hash = validator["script_hash"]
     contract_address = Address(
-        payment_part = script_hash,
+        payment_part=script_hash,
         network=Network.TESTNET,
     )
-    utxo=get_utxo_from_str(contract_address=contract_address, datumclass=MinerDatum, context=chain_context_fixture)
-    return [utxo]
+    utxos = chain_context_fixture.utxos(str(contract_address))
+    return utxos
 
-# Fixture script hợp đồng
+
+# Fixture for Plutus contract script
 @pytest.fixture
 def script():
-    """Tạo script hợp đồng Plutus giả lập."""
-    return PlutusV3Script(b'fake_script_bytes')
+    """
+    Provides the Plutus contract script for testing.
 
-# Fixture redeemer
-@pytest.fixture
-def redeemer():
-    """Tạo redeemer đơn giản."""
-    return Redeemer(0)
+    This fixture loads the script bytes from the validator, representing the Plutus smart contract.
+
+    Returns:
+        PlutusV3Script: The Plutus script bytes.
+    """
+    validator = read_validator()
+    return validator["script_bytes"]
 
 
-# Hàm kiểm thử
+# Main test function
 @pytest.mark.integration
 def test_remove_fake_utxos(chain_context_fixture, fake_utxos, script, hotkey_skey_fixture):
-    """Kiểm thử service xóa UTxO giả mạo."""
-    (payment_xsk, stake_xsk) = hotkey_skey_fixture
-    network = Network.TESTNET
-    validator=read_validator()
-    script = validator["script_bytes"]  # Thay bằng hash của hợp đồng Plutus
+    """
+    Tests the remove_fake_utxos function to ensure it removes fake UTxOs successfully.
 
-    # Gọi service để xóa UTxO giả mạo
+    This integration test verifies that the remove_fake_utxos function processes a list of fake
+    UTxOs, submits a transaction to the Cardano TESTNET, and returns a valid transaction ID.
+
+    Args:
+        chain_context_fixture (BlockFrostChainContext): The blockchain context fixture.
+        fake_utxos (List[UTxO]): The list of fake UTxOs to remove.
+        script (PlutusV3Script): The Plutus contract script.
+        hotkey_skey_fixture (tuple): A tuple containing payment and stake signing keys.
+
+    Asserts:
+        - The transaction ID is not None.
+        - The transaction ID is a non-empty string.
+    """
+    # Unpack signing keys
+    payment_xsk, stake_xsk = hotkey_skey_fixture
+
+    # Define network
+    network = Network.TESTNET
+
+    # Execute the function to remove fake UTxOs
     tx_id = remove_fake_utxos(
         payment_xsk=payment_xsk,
         stake_xsk=stake_xsk,
         fake_utxos=fake_utxos,
         script=script,
         context=chain_context_fixture,
-        network=network
+        network=network,
     )
 
-    # Kiểm tra kết quả
-    assert tx_id is not None, "Transaction ID không được rỗng"
-    logger.info(f"send_ada => {tx_id}")
-    assert len(tx_id) > 0, "Transaction ID should be a non-empty string upon success."
+    # Validate the transaction ID
+    assert tx_id is not None, "Transaction ID must not be None"
+    logger.info(f"Transaction ID: {tx_id}")
+    assert len(tx_id) > 0, "Transaction ID must be a non-empty string"

@@ -1,89 +1,126 @@
-from pycardano import TransactionBuilder, TransactionOutput, Address, UTxO, PlutusData, Redeemer, ScriptHash, Network, BlockFrostChainContext, ExtendedSigningKey, PlutusV3Script, RawCBOR, PaymentExtendedVerificationKey
-from sdk.service.context import get_chain_context
+from typing import Optional
 
-from sdk.config.settings import settings  # Cấu hình mạng Cardano
-from dataclasses import dataclass
+from pycardano import (
+    TransactionBuilder,
+    TransactionOutput,
+    Address,
+    UTxO,
+    PlutusData,
+    Redeemer,
+    ScriptHash,
+    Network,
+    BlockFrostChainContext,
+    ExtendedSigningKey,
+    PlutusV3Script,
+    PaymentExtendedVerificationKey,
+)
 
+from sdk.config.settings import settings  # Configuration for Cardano network settings
 
 def update_datum(
     payment_xsk: ExtendedSigningKey,
-    stake_xsk: ExtendedSigningKey,
+    stake_xsk: Optional[ExtendedSigningKey],
     into: ScriptHash,
     utxo: UTxO,
     new_datum: PlutusData,
     script: PlutusV3Script,
     context: BlockFrostChainContext,
-    network: Network
-):
+    network: Optional[Network] = None,
+    redeemer: Optional[Redeemer] = None,
+) -> str:
     """
-    Cập nhật datum của UTxO cho bất kỳ đối tượng nào.
+    Updates the datum of a UTxO locked in a Plutus smart contract on the Cardano blockchain.
+
+    This function constructs and submits a transaction that consumes an existing UTxO from a Plutus script,
+    updates its datum with the provided `new_datum`, and locks the same amount of lovelace back into the
+    contract. The transaction is signed using the provided payment signing key, and any change (e.g., from
+    transaction fees) is returned to the owner's address.
 
     Args:
-        utxo: UTxO hiện có chứa datum cần cập nhật
-        new_datum: Datum mới đã được cập nhật
-        signing_key: Khóa ký giao dịch
-        owner_address: Địa chỉ của chủ sở hữu (nhận tiền thừa nếu có)
-        script_hash: Hash của hợp đồng Plutus (nếu có)
+        payment_xsk (ExtendedSigningKey): The extended signing key for the payment part of the transaction.
+        stake_xsk (Optional[ExtendedSigningKey]): The extended signing key for staking, if applicable.
+            If provided, the owner's address will include a staking part.
+        into (ScriptHash): The hash of the Plutus script (smart contract) where the UTxO is locked.
+        utxo (UTxO): The Unspent Transaction Output containing the current datum to be updated.
+        new_datum (PlutusData): The new datum to attach to the UTxO.
+        script (PlutusV3Script): The Plutus script associated with the smart contract.
+        context (BlockFrostChainContext): The blockchain context (e.g., BlockFrost API) for interacting
+            with the Cardano network.
+        network (Optional[Network]): The Cardano network to operate on (e.g., Network.TESTNET or Network.MAINNET).
+            Defaults to `settings.CARDANO_NETWORK` if not specified.
+        redeemer (Optional[Redeemer]): The redeemer required for script validation. Defaults to a simple
+            `HelloWorldRedeemer` if not provided.
 
     Returns:
-        tx_id: ID của giao dịch đã gửi lên blockchain
-    """
-    # context = get_chain_context(method="blockfrost")
-    print(utxo)
-    network = network
+        str: The transaction ID of the submitted transaction.
 
+    Raises:
+        ValueError: If critical inputs (e.g., `payment_xsk`, `utxo`, or `context`) are invalid or missing.
+        Exception: If the transaction fails to build or submit due to network issues or invalid data.
+    """
+    # Default to configured network if not provided
+    network = network or settings.CARDANO_NETWORK
+
+    # Derive payment verification key from signing key
     pay_xvk = PaymentExtendedVerificationKey.from_signing_key(payment_xsk)
+
+    # Construct owner's address, including staking part if stake_xsk is provided
     if stake_xsk:
         stk_xvk = stake_xsk.to_verification_key()
-        owner_address = Address(payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network)
+        owner_address = Address(
+            payment_part=pay_xvk.hash(),
+            staking_part=stk_xvk.hash(),
+            network=network,
+        )
     else:
-        owner_address = Address(payment_part=pay_xvk.hash(), network=network)
-    print(owner_address)
-    owner=PaymentExtendedVerificationKey.from_signing_key(payment_xsk).hash()
+        owner_address = Address(
+            payment_part=pay_xvk.hash(),
+            network=network,
+        )
 
-    # # Lấy địa chỉ hợp đồng từ UTxO hiện tại
-    # contract_address = Address(
-    #     payment_part=utxo.output.address.payment_part,
-    #     network=network
-    # )
-        # Tạo địa chỉ hợp đồng từ script_hash
+    # Define the owner as the hash of the payment verification key
+    owner = pay_xvk.hash()
+
+    # Create the contract address using the provided script hash
     contract_address = Address(
         payment_part=into,
-        network=network  # Có thể thay đổi thành Network.MAINNET nếu cần
+        network=network,
     )
-    redeemer = Redeemer(data=HelloWorldRedeemer())
 
-    # Tạo giao dịch
+    # Use provided redeemer or default to a simple HelloWorldRedeemer
+    redeemer = redeemer or Redeemer(0)
+
+    # Initialize the transaction builder with the blockchain context
     builder = TransactionBuilder(context=context)
+
+    # Add the script input to consume the UTxO from the contract
     builder.add_script_input(
         utxo=utxo,
         script=script,
         redeemer=redeemer,
     )
+
+    # Add an input from the owner's address to cover transaction fees
     builder.add_input_address(owner_address)
 
-    print("CBOR của MinerDatum:", new_datum.to_cbor_hex())
-
-    # Yêu cầu chữ ký từ owner
+    # Specify that the owner's signature is required
     builder.required_signers = [owner]
 
-    # Tạo UTxO mới với datum đã cập nhật
+    # Add an output back to the contract with the same amount and updated datum
     builder.add_output(
         TransactionOutput(
             address=contract_address,
-            amount=utxo.output.amount.coin,  # Giữ nguyên số tiền
-            datum=new_datum    # Datum mới
+            amount=utxo.output.amount.coin,  # Preserve the original amount
+            datum=new_datum,                # Attach the new datum
         )
     )
 
-    # Ký và gửi giao dịch
+    # Build and sign the transaction, sending any change back to the owner
     signed_tx = builder.build_and_sign(
         signing_keys=[payment_xsk],
-        change_address=owner_address
+        change_address=owner_address,
     )
 
-    return context.submit_tx(signed_tx)
-
-@dataclass
-class HelloWorldRedeemer(PlutusData):
-    CONSTR_ID = 0
+    # Submit the transaction to the blockchain and return its ID
+    tx_id = context.submit_tx(signed_tx)
+    return tx_id

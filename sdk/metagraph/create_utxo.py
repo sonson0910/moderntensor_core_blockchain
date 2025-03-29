@@ -6,10 +6,10 @@ from pycardano import (
     PlutusData,
     BlockFrostChainContext,
     Network,
-    TransactionId, 
-    ExtendedSigningKey
+    TransactionId,
+    ExtendedSigningKey,
 )
-
+from sdk.config.settings import settings
 
 def create_utxo(
     payment_xsk: ExtendedSigningKey,
@@ -18,55 +18,76 @@ def create_utxo(
     script_hash: ScriptHash,
     datum: PlutusData,
     context: BlockFrostChainContext,
-    network: Network
+    network: Network = None,
 ) -> TransactionId:
     """
-    Sinh một UTxO với số ADA và datum được khóa vào hợp đồng Plutus.
-    
+    Creates a UTxO with the specified amount of lovelace and datum locked into a Plutus smart contract.
+
+    This function builds and submits a transaction that locks a given amount of lovelace into a Plutus script
+    address, attaching the provided datum. The transaction is signed with the provided payment signing key,
+    and any change is returned to the owner's address.
+
     Args:
-        amount: Số lượng lovelace (ví dụ: 2_000_000 cho 2 tADA).
-        script_hash: Hash của hợp đồng Plutus (ScriptHash).
-        datum: Dữ liệu datum (PlutusData) để gắn vào UTxO.
-        signing_key: Khóa ký giao dịch (PaymentSigningKey).
-        owner_address: Địa chỉ của chủ sở hữu, dùng làm đầu vào và nhận tiền thừa.
-        context: Chain context (BlockFrostChainContext). Nếu không cung cấp, lấy từ get_chain_context().
-    
+        payment_xsk (ExtendedSigningKey): The extended signing key for payment.
+        stake_xsk (ExtendedSigningKey): The extended signing key for staking (optional).
+        amount (int): The amount of lovelace to lock into the UTxO (e.g., 2_000_000 for 2 tADA).
+        script_hash (ScriptHash): The hash of the Plutus script (smart contract).
+        datum (PlutusData): The datum (data) to attach to the UTxO.
+        context (BlockFrostChainContext): The blockchain context for interacting with the Cardano network.
+        network (Network, optional): The Cardano network to use (e.g., Network.TESTNET or Network.MAINNET).
+                                     Defaults to settings.CARDANO_NETWORK if not provided.
+
     Returns:
-        TransactionId: ID của giao dịch đã gửi lên blockchain.
+        TransactionId: The ID of the transaction submitted to the blockchain.
     """
+    # Set the network, defaulting to settings.CARDANO_NETWORK if not provided
     network = network or settings.CARDANO_NETWORK
 
+    # Derive the payment verification key from the signing key
     pay_xvk = payment_xsk.to_verification_key()
+
+    # Create the owner's address, including staking part if stake_xsk is provided
     if stake_xsk:
         stk_xvk = stake_xsk.to_verification_key()
-        owner_address = Address(payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network)
+        owner_address = Address(
+            payment_part=pay_xvk.hash(),
+            staking_part=stk_xvk.hash(),
+            network=network,
+        )
     else:
-        owner_address = Address(payment_part=pay_xvk.hash(), network=network)
-    
-    print(owner_address)
+        owner_address = Address(
+            payment_part=pay_xvk.hash(),
+            network=network,
+        )
+    print(f"Owner Address: {owner_address}")
 
-    # Tạo địa chỉ hợp đồng từ script_hash
+    # Create the contract address using the provided script hash
     contract_address = Address(
         payment_part=script_hash,
-        network=network  # Có thể thay đổi thành Network.MAINNET nếu cần
+        network=network,
     )
 
-    # Xây dựng giao dịch
+    # Initialize the transaction builder with the blockchain context
     builder = TransactionBuilder(context=context)
+
+    # Add an input from the owner's address to fund the transaction
     builder.add_input_address(owner_address)
+
+    # Add an output to the contract address with the specified amount and datum
     builder.add_output(
         TransactionOutput(
             address=contract_address,
             amount=amount,
-            datum=datum
+            datum=datum,
         )
     )
 
-    # Ký và gửi giao dịch
+    # Build and sign the transaction, sending change back to the owner
     signed_tx = builder.build_and_sign(
         signing_keys=[payment_xsk],
-        change_address=owner_address
+        change_address=owner_address,
     )
-    tx_id = context.submit_tx(signed_tx)
 
+    # Submit the transaction to the blockchain and return the transaction ID
+    tx_id = context.submit_tx(signed_tx)
     return tx_id
