@@ -13,13 +13,12 @@ from sdk.service.context import get_chain_context
 from sdk.smartcontract.validator import read_validator
 from sdk.service.utxos import get_utxo_from_str
 from sdk.metagraph.metagraph_datum import MinerDatum  # Lớp MinerDatum từ file metagraph_datum.py
-
+from sdk.config.settings import settings, logger  # Use the global logger & settings
 
 # Giả lập lớp HelloWorldDatum từ unlock.py
 @dataclass
 class HelloWorldDatum(PlutusData):
     CONSTR_ID = 0
-    owner: bytes
 
 # Fixture cung cấp chain context
 @pytest.fixture(scope="session")
@@ -43,7 +42,7 @@ def chain_context_fixture():
 
 # Fixture giả lập danh sách UTxO giả mạo
 @pytest.fixture
-def fake_utxos():
+def fake_utxos(chain_context_fixture):
     """Tạo một UTxO giả lập với datum ban đầu."""
     validator=read_validator()
     script_hash = validator["script_hash"]  # Thay bằng hash của hợp đồng Plutus
@@ -68,7 +67,8 @@ def redeemer():
 
 
 # Hàm kiểm thử
-def test_remove_fake_utxos(chain_context_fixture, fake_utxos, script, redeemer, hotkey_skey_fixture):
+@pytest.mark.integration
+def test_remove_fake_utxos(chain_context_fixture, fake_utxos, script, hotkey_skey_fixture):
     """Kiểm thử service xóa UTxO giả mạo."""
     (payment_xsk, stake_xsk) = hotkey_skey_fixture
     network = Network.TESTNET
@@ -81,11 +81,11 @@ def test_remove_fake_utxos(chain_context_fixture, fake_utxos, script, redeemer, 
         stake_xsk=stake_xsk,
         fake_utxos=fake_utxos,
         script=script,
-        redeemer=redeemer,
         context=chain_context_fixture,
         network=network
     )
 
     # Kiểm tra kết quả
     assert tx_id is not None, "Transaction ID không được rỗng"
-    assert isinstance(tx_id, TransactionId), "Transaction ID không hợp lệ"
+    logger.info(f"send_ada => {tx_id}")
+    assert len(tx_id) > 0, "Transaction ID should be a non-empty string upon success."

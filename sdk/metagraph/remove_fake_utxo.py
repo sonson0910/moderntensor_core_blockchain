@@ -18,7 +18,6 @@ def remove_fake_utxos(
     stake_xsk: ExtendedSigningKey,
     fake_utxos: List[UTxO],
     script: PlutusV3Script,
-    redeemer: Redeemer,
     network: Network,
     context: BlockFrostChainContext,
 ) -> TransactionId:
@@ -53,6 +52,7 @@ def remove_fake_utxos(
 
     # Thêm từng UTxO giả mạo làm đầu vào
     for utxo in fake_utxos:
+        redeemer=Redeemer(0)
         builder.add_script_input(
             utxo=utxo,
             script=script,
