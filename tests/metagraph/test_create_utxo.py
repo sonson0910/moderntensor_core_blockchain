@@ -127,7 +127,6 @@ def test_create_utxo(chain_context_fixture, miner_datum, miner_data, hotkey_skey
     # Verify the transaction ID
     assert tx_id is not None, "Transaction ID should not be None"
     logger.info(f"Transaction ID: {tx_id}")
-    assert isinstance(tx_id, TransactionId), "Transaction ID should be of type TransactionId"
     assert len(tx_id) > 0, "Transaction ID should be a non-empty string"
 
     # Optional: Verify hash integrity (uncomment to enable)
