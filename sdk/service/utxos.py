@@ -1,21 +1,40 @@
-from pycardano import (
-    Address,
-    BlockFrostChainContext,
-    UTxO,
-)
-import cbor2
 from typing import Type
+from pycardano import Address, BlockFrostChainContext, UTxO
+import cbor2
 
-def get_utxo_from_str(contract_address: Address, datumclass: Type, context: BlockFrostChainContext) -> UTxO:
+def get_utxo_from_str(
+    contract_address: Address,
+    datumclass: Type,
+    context: BlockFrostChainContext,
+    search_uid: bytes = b"miner_002"
+) -> UTxO:
+    """
+    Retrieve a UTxO from the contract address based on a specific UID in the datum.
+
+    This function iterates through all UTxOs at the given contract address, decodes their datums,
+    and checks if the 'uid' field matches the provided search_uid.
+
+    Args:
+        contract_address (Address): The address of the Plutus smart contract.
+        datumclass (Type): The class type of the datum (e.g., MinerDatum).
+        context (BlockFrostChainContext): The blockchain context to query UTxOs.
+        search_uid (bytes): The UID to search for in the datum (default: b"miner_002").
+
+    Returns:
+        UTxO: The UTxO with the matching UID.
+
+    Raises:
+        Exception: If no UTxO with the specified UID is found.
+    """
     for utxo in context.utxos(str(contract_address)):
+        # Decode the datum from CBOR format
         outputdatum = cbor2.loads(utxo.output.datum.cbor)
-        # Truyền tất cả giá trị từ outputdatum.value vào datumclass
+        # Map the decoded datum values into the datumclass
         param = datumclass(*outputdatum.value)
-        # So sánh owner (bytes) trực tiếp với b"miner_001"
-        if b"miner_002" == param.uid:
+        # Compare the UID directly with the search_uid
+        if search_uid == param.uid:
             return utxo
-    raise Exception(f"UTxO not found for transaction")
-
+    raise Exception(f"UTxO not found for UID: {search_uid}")
 
 def get_utxo_with_lowest_incentive(
     contract_address: Address,
@@ -23,39 +42,39 @@ def get_utxo_with_lowest_incentive(
     context: BlockFrostChainContext
 ) -> UTxO:
     """
-    Tìm UTxO có giá trị incentive thấp nhất từ hợp đồng thông minh.
+    Find the UTxO with the lowest 'incentive' value from the smart contract.
 
-    Hàm này duyệt qua tất cả UTxO tại địa chỉ hợp đồng, giải mã datum của chúng,
-    và xác định UTxO có giá trị 'incentive' nhỏ nhất trong datum.
+    This function iterates through all UTxOs at the contract address, decodes their datums,
+    and identifies the UTxO with the smallest 'incentive' value in the datum.
 
     Args:
-        contract_address (Address): Địa chỉ của hợp đồng thông minh Plutus.
-        datumclass (Type): Kiểu lớp của datum (ví dụ: MinerDatum).
-        context (BlockFrostChainContext): Context blockchain để truy vấn UTxO.
+        contract_address (Address): The address of the Plutus smart contract.
+        datumclass (Type): The class type of the datum (e.g., MinerDatum).
+        context (BlockFrostChainContext): The blockchain context to query UTxOs.
 
     Returns:
-        UTxO: UTxO có giá trị incentive thấp nhất.
+        UTxO: The UTxO with the lowest incentive value.
 
     Raises:
-        Exception: Nếu không tìm thấy UTxO nào tại địa chỉ hợp đồng.
+        Exception: If no UTxOs are found at the contract address.
     """
     lowest_incentive_utxo = None
     lowest_incentive = None
 
     for utxo in context.utxos(str(contract_address)):
-        # Giải mã datum từ CBOR
+        # Decode the datum from CBOR format
         outputdatum = cbor2.loads(utxo.output.datum.cbor)
-        # Ánh xạ datum vào lớp datumclass
+        # Map the decoded datum values into the datumclass
         param = datumclass(*outputdatum.value)
-        # Lấy giá trị incentive (giả sử 'incentive' là một trường trong datumclass)
+        # Get the incentive value (assumes 'incentive' is a field in datumclass)
         incentive = param.incentive
 
-        # Theo dõi UTxO có incentive thấp nhất
+        # Track the UTxO with the lowest incentive
         if lowest_incentive is None or incentive < lowest_incentive:
             lowest_incentive = incentive
             lowest_incentive_utxo = utxo
 
     if lowest_incentive_utxo is None:
-        raise Exception("Không tìm thấy UTxO nào tại địa chỉ hợp đồng.")
+        raise Exception("No UTxOs found at the contract address.")
     
     return lowest_incentive_utxo
