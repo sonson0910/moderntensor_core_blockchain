@@ -11,7 +11,7 @@ from pycardano import (
 )
 from sdk.service.utxos import get_utxo_with_lowest_incentive
 from sdk.metagraph.update_metagraph import update_datum
-from sdk.metagraph.metagraph_datum import MinerDatum  # Giả sử đây là lớp datum của bạn
+from sdk.metagraph.metagraph_datum import MinerDatum
 from sdk.config.settings import settings
 
 def register_key(
@@ -22,49 +22,50 @@ def register_key(
     script: PlutusV3Script,
     context: BlockFrostChainContext,
     network: Optional[Network] = None,
-    contract_address: ScriptHash = None,
+    contract_address: Optional[ScriptHash] = None,
     redeemer: Optional[Redeemer] = None,
 ) -> str:
     """
-    Dịch vụ đăng ký khóa mới bằng cách cập nhật UTxO có incentive thấp nhất.
+    Service to register a new key by updating the UTxO with the lowest incentive.
 
-    Dịch vụ này tìm UTxO có incentive thấp nhất từ hợp đồng thông minh, sau đó sử dụng hàm update_datum
-    để cập nhật UTxO đó với dữ liệu mới được cung cấp.
+    This service identifies the UTxO with the lowest incentive from the smart contract, then uses
+    the update_datum function to update that UTxO with the provided new datum.
 
     Args:
-        payment_xsk (ExtendedSigningKey): Khóa ký thanh toán của người dùng.
-        stake_xsk (Optional[ExtendedSigningKey]): Khóa ký staking của người dùng (tùy chọn).
-        new_datum (PlutusData): Dữ liệu mới để gắn vào UTxO.
-        script (PlutusV3Script): Script Plutus của hợp đồng thông minh.
-        context (BlockFrostChainContext): Context blockchain để tương tác với mạng Cardano.
-        network (Optional[Network]): Mạng Cardano (mainnet hoặc testnet). Mặc định là settings.CARDANO_NETWORK.
-        contract_address (ScriptHash): Địa chỉ của hợp đồng thông minh. Mặc định là settings.CONTRACT_ADDRESS.
-        redeemer (Optional[Redeemer]): Redeemer dùng để xác thực script. Mặc định là Redeemer(0).
+        payment_xsk (ExtendedSigningKey): The user's payment signing key.
+        stake_xsk (Optional[ExtendedSigningKey]): The user's stake signing key (optional).
+        script_hash (ScriptHash): The hash of the Plutus script (smart contract).
+        new_datum (PlutusData): The new datum to attach to the UTxO.
+        script (PlutusV3Script): The Plutus script of the smart contract.
+        context (BlockFrostChainContext): Blockchain context for interacting with the Cardano network.
+        network (Optional[Network]): The Cardano network (mainnet or testnet). Defaults to settings.CARDANO_NETWORK.
+        contract_address (Optional[ScriptHash]): The address of the smart contract. Defaults to settings.TEST_CONTRACT_ADDRESS.
+        redeemer (Optional[Redeemer]): The redeemer used for script validation. Defaults to Redeemer(0).
 
     Returns:
-        str: ID giao dịch của giao dịch đã được gửi.
+        str: The transaction ID of the submitted transaction.
 
     Raises:
-        ValueError: Nếu không tìm thấy UTxO nào tại địa chỉ hợp đồng.
+        ValueError: If no UTxO is found at the contract address.
     """
-    # Sử dụng giá trị mặc định từ settings nếu không được cung cấp
+    # Use default values from settings if not provided
     network = network or settings.CARDANO_NETWORK
     contract_address = contract_address or settings.TEST_CONTRACT_ADDRESS
 
-    # Tìm UTxO có incentive thấp nhất
+    # Find the UTxO with the lowest incentive
     lowest_utxo: UTxO = get_utxo_with_lowest_incentive(
-        contract_address=contract_address, 
-        datumclass=MinerDatum, 
-        context=context
+        contract_address=contract_address,
+        datumclass=MinerDatum,  # Assumes MinerDatum is the correct datum class
+        context=context,
     )
     if not lowest_utxo:
-        raise ValueError("Không tìm thấy UTxO nào tại địa chỉ hợp đồng.")
+        raise ValueError("No UTxO found at the contract address.")
 
-    # Cập nhật UTxO với dữ liệu mới bằng hàm update_datum
+    # Update the UTxO with the new datum using the update_datum function
     tx_id = update_datum(
         payment_xsk=payment_xsk,
         stake_xsk=stake_xsk,
-        script_hash=script_hash,
+        into=script_hash,
         utxo=lowest_utxo,
         new_datum=new_datum,
         script=script,

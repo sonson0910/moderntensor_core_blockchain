@@ -1,56 +1,101 @@
 import pytest
-from pycardano import (
-    Address,
-    Network,
-    Redeemer,
-)
+from pycardano import Address, Network, Redeemer
 from sdk.service.context import get_chain_context
 from sdk.smartcontract.validator import read_validator
 from sdk.service.register_key import register_key
-from sdk.metagraph.metagraph_datum import MinerDatum  # Giả sử đây là lớp datum của bạn
+from sdk.metagraph.metagraph_datum import MinerDatum
 
-# Định nghĩa mạng (sử dụng testnet để tránh ảnh hưởng đến mainnet)
+# Define the network as a constant for consistency
+NETWORK = Network.TESTNET
 
-# Fixture cho chain context thực tế
+# Fixture to provide a real blockchain context
 @pytest.fixture(scope="session")
 def chain_context():
-    """Cung cấp kết nối thực tế đến blockchain Cardano qua BlockFrost."""
+    """
+    Provides a real blockchain context to interact with the Cardano blockchain.
+
+    This fixture establishes a connection to the Cardano blockchain using BlockFrost, enabling
+    real-time queries and transactions on the specified network (TESTNET by default).
+
+    Returns:
+        BlockFrostChainContext: A configured chain context for blockchain interaction.
+    """
     return get_chain_context(method="blockfrost")
 
-# Fixture cho chain context thực tế
+# Fixture to provide the Cardano network
 @pytest.fixture(scope="session")
 def get_network():
-    """Cung cấp kết nối thực tế đến blockchain Cardano qua BlockFrost."""
-    return Network.TESTNET
+    """
+    Provides the Cardano network for the test environment.
 
-# Fixture cho script Plutus
+    This fixture returns the network constant defined at the module level, set to TESTNET to
+    ensure tests do not affect the mainnet.
+
+    Returns:
+        Network: The Cardano network (e.g., Network.TESTNET).
+    """
+    return NETWORK
+
+# Fixture to provide the Plutus script
 @pytest.fixture
 def script():
-    """Cung cấp script Plutus thực tế từ validator."""
+    """
+    Provides the Plutus script bytes from the validator.
+
+    This fixture retrieves the Plutus script bytes from the validator configuration, which are
+    used to interact with the smart contract on the blockchain.
+
+    Returns:
+        PlutusV3Script: The bytes of the Plutus script.
+    """
     validator = read_validator()
     return validator["script_bytes"]
 
-# Fixture cho script Plutus
+# Fixture to provide the script hash
 @pytest.fixture
 def script_hash():
-    """Cung cấp script hash thực tế từ validator."""
+    """
+    Provides the script hash of the Plutus smart contract.
+
+    This fixture retrieves the script hash from the validator configuration, used to uniquely
+    identify the smart contract on the blockchain.
+
+    Returns:
+        ScriptHash: The hash of the Plutus script.
+    """
     validator = read_validator()
     return validator["script_hash"]
 
-# Fixture cho địa chỉ hợp đồng
+# Fixture to provide the contract address
 @pytest.fixture
 def contract_address(get_network):
-    """Tạo địa chỉ hợp đồng thực tế từ script hash."""
+    """
+    Creates the contract address using the script hash and network.
+
+    This fixture constructs the smart contract address by combining the script hash with the
+    specified network (TESTNET by default).
+
+    Args:
+        get_network (Network): The Cardano network fixture.
+
+    Returns:
+        Address: The address of the smart contract on the blockchain.
+    """
     validator = read_validator()
     script_hash = validator["script_hash"]
     return Address(payment_part=script_hash, network=get_network)
 
-# Fixture cho dữ liệu mới (new_datum)
+# Fixture to provide new datum for updating the UTxO
 @pytest.fixture
 def new_datum():
     """
-    Cung cấp dữ liệu mới để cập nhật UTxO.
-    Điều chỉnh theo cấu trúc datum của hợp đồng.
+    Provides new datum to update the UTxO on the blockchain.
+
+    This fixture creates a new MinerDatum instance with sample data for testing purposes.
+    The structure should be adjusted to match the actual datum expected by the smart contract.
+
+    Returns:
+        MinerDatum: A new instance of MinerDatum with sample data.
     """
     return MinerDatum(
         uid=b"new_miner",
@@ -65,7 +110,7 @@ def new_datum():
         block_reg_at=0,
     )
 
-# Test hàm register_new_key_service với UTxO thực tế
+# Test function to verify register_key with real UTxOs
 def test_register_new_key_service_real_utxo(
     chain_context,
     script,
@@ -76,19 +121,37 @@ def test_register_new_key_service_real_utxo(
     get_network
 ):
     """
-    Kiểm tra hàm register_new_key_service với hợp đồng và UTxO thực tế.
-    
-    Các bước:
-    1. Lấy payment_xsk và stake_xsk thực tế.
-    2. Gọi hàm với redeemer đơn giản (Redeemer(0)).
-    3. Kiểm tra transaction ID trả về.
-    
-    Kết quả mong đợi:
-    - Transaction ID không rỗng.
+    Tests the register_key function using real UTxOs from a smart contract address.
+
+    This test verifies that the register_key function can successfully update the datum of a
+    real UTxO on the Cardano blockchain and return a valid transaction ID.
+
+    Args:
+        chain_context (BlockFrostChainContext): Fixture providing the blockchain context.
+        script (PlutusV3Script): Fixture providing the Plutus script bytes.
+        script_hash (ScriptHash): Fixture providing the script hash.
+        contract_address (Address): Fixture providing the contract address.
+        new_datum (MinerDatum): Fixture providing the new datum to update the UTxO.
+        hotkey_skey_fixture (tuple): Fixture providing payment and stake signing keys.
+        get_network (Network): Fixture providing the Cardano network.
+
+    Steps:
+        1. Extract payment and stake signing keys from the hotkey_skey_fixture.
+        2. Call the register_key function with a simple redeemer (Redeemer(0)).
+        3. Verify that the returned transaction ID is valid.
+
+    Asserts:
+        - The transaction ID is not None.
+        - The transaction ID is a non-empty string.
+
+    Notes:
+        - The transaction ID is printed for manual verification (e.g., via a blockchain explorer).
+        - Adjust the redeemer value if the smart contract requires a specific one.
     """
+    # Extract payment and stake signing keys from the fixture
     payment_xsk, stake_xsk = hotkey_skey_fixture
 
-    # Gọi hàm register_new_key_service
+    # Call the register_key function with the provided parameters
     tx_id = register_key(
         payment_xsk=payment_xsk,
         stake_xsk=stake_xsk,
@@ -98,12 +161,12 @@ def test_register_new_key_service_real_utxo(
         context=chain_context,
         network=get_network,
         contract_address=contract_address,
-        redeemer=Redeemer(0),  # Điều chỉnh nếu script yêu cầu redeemer khác
+        redeemer=Redeemer(0),  # Adjust this if the script requires a different redeemer
     )
 
-    # Kiểm tra kết quả
-    assert tx_id is not None, "Transaction ID không được là None"
-    assert len(tx_id) > 0, "Transaction ID phải là chuỗi không rỗng"
+    # Verify the transaction ID is valid
+    assert tx_id is not None, "Transaction ID must not be None"
+    assert len(tx_id) > 0, "Transaction ID must be a non-empty string"
 
-    # In transaction ID để kiểm tra thủ công
+    # Print the transaction ID for manual inspection
     print(f"Transaction ID: {tx_id}")
