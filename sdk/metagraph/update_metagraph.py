@@ -20,7 +20,7 @@ from sdk.config.settings import settings  # Configuration for Cardano network se
 def update_datum(
     payment_xsk: ExtendedSigningKey,
     stake_xsk: Optional[ExtendedSigningKey],
-    into: ScriptHash,
+    script_hash: ScriptHash,
     utxo: UTxO,
     new_datum: PlutusData,
     script: PlutusV3Script,
@@ -83,7 +83,7 @@ def update_datum(
 
     # Create the contract address using the provided script hash
     contract_address = Address(
-        payment_part=into,
+        payment_part=script_hash,
         network=network,
     )
 

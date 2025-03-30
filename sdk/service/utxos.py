@@ -58,8 +58,8 @@ def get_utxo_with_lowest_incentive(
     Raises:
         Exception: If no UTxOs are found at the contract address.
     """
-    lowest_incentive_utxo = None
-    lowest_incentive = None
+    lowest_performance_utxo = None
+    lowest_performance = None
 
     for utxo in context.utxos(str(contract_address)):
         # Decode the datum from CBOR format
@@ -67,14 +67,14 @@ def get_utxo_with_lowest_incentive(
         # Map the decoded datum values into the datumclass
         param = datumclass(*outputdatum.value)
         # Get the incentive value (assumes 'incentive' is a field in datumclass)
-        incentive = param.incentive
+        performance = param.performance
 
         # Track the UTxO with the lowest incentive
-        if lowest_incentive is None or incentive < lowest_incentive:
-            lowest_incentive = incentive
-            lowest_incentive_utxo = utxo
+        if lowest_performance is None or performance < lowest_performance:
+            lowest_incentive = performance
+            lowest_performance_utxo = utxo
 
-    if lowest_incentive_utxo is None:
+    if lowest_performance_utxo is None:
         raise Exception("No UTxOs found at the contract address.")
     
-    return lowest_incentive_utxo
+    return lowest_performance_utxo

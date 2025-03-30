@@ -46,6 +46,7 @@ class Settings(BaseSettings):
         default="b9107b627e28700da1c5c2077c40b1c7d1fe2e9b23ff20e0e6b8fec1",
         alias="TEST_POLICY_ID_HEX"
     )
+    TEST_CONTRACT_ADDRESS: str = Field(default="addr_test1wqlerxnfzfcgx72zpuepgchl6p5mnjsxm27cwjxqq9wuthch489d5", alias="TEST_CONTRACT_ADDRESS")
 
     CARDANO_NETWORK: str = Field(default="TESTNET", alias="CARDANO_NETWORK")
     """
