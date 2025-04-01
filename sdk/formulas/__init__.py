@@ -1,4 +1,4 @@
-# sdk/formulas/__init__.py
+# sdk/moderntensor_formulas/__init__.py
 from .incentive import calculate_miner_incentive, calculate_validator_incentive
 from .performance import calculate_task_completion_rate, calculate_adjusted_miner_performance
 from .trust_score import update_trust_score, calculate_selection_probability
