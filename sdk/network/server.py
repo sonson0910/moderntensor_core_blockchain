@@ -1,222 +1,176 @@
-from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ValidationError
-from typing import Optional
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
 import uvicorn
-import json
+import requests
+import time
+import threading
 
-# Initialize the FastAPI application
-app = FastAPI()
-
-# Temporary storage for task and result data
-current_task = None
-current_result = None
-
-# Define the Pydantic model for Task data structure
+# Define common data models
 class TaskModel(BaseModel):
     """
     Pydantic model for task data sent from validator to miner.
-    This model defines the structure and validation rules for task-related data.
     """
-    task_id: str = Field(..., description="Unique identifier for the task, must be provided")
-    description: str = Field(..., description="Detailed description of the task, must be provided")
-    deadline: Optional[str] = Field(None, description="Deadline for task completion, optional (e.g., '2024-12-31')")
-    priority: Optional[int] = Field(None, description="Priority level of the task (1-5), optional")
+    task_id: str = Field(..., description="Unique ID of the task")
+    description: str = Field(..., description="Detailed description of the task")
+    deadline: str = Field(..., description="Deadline for task completion")
+    priority: int = Field(..., description="Priority of the task (1-5)")
 
-# Define the Pydantic model for Result data structure
 class ResultModel(BaseModel):
     """
     Pydantic model for result data sent from miner to validator.
-    This model defines the structure and validation rules for result-related data.
     """
-    result_id: str = Field(..., description="Unique identifier for the result, must be provided")
-    description: str = Field(..., description="Detailed description of the result, must be provided")
-    processing_time: Optional[float] = Field(None, description="Time taken to process the task in seconds, optional")
-    miner_id: Optional[str] = Field(None, description="Identifier of the miner who processed the task, optional")
+    result_id: str = Field(..., description="Unique ID of the result")
+    description: str = Field(..., description="Detailed description of the result")
+    processing_time: float = Field(..., description="Processing time in seconds")
+    miner_id: str = Field(..., description="ID of the miner who processed the task")
 
-# Endpoint for the validator to send a task to the miner
-@app.post("/send-task")
-async def send_task(
-    task_json: str = Form(..., alias="task"),
-    task_file: UploadFile = File(None)
-):
+# Base class for Miner
+class BaseMiner:
+    def __init__(self, validator_url, host="0.0.0.0", port=8000):
+        """
+        Initialize BaseMiner.
+        
+        Args:
+            validator_url (str): URL of the validator to send results to.
+            host (str): Host address for the miner server.
+            port (int): Port for the miner server.
+        """
+        self.app = FastAPI()
+        self.validator_url = validator_url
+        self.host = host
+        self.port = port
+        self.setup_routes()
+
+    def setup_routes(self):
+        """Set up routes for the miner server."""
+        @self.app.post("/receive-task")
+        async def receive_task(task: TaskModel):
+            print(f"[Miner] Received new task: {task.task_id} - {task.description} - Deadline: {task.deadline}")
+            threading.Thread(target=self.handle_task, args=(task,)).start()
+            return {"message": f"Task {task.task_id} received and processing"}
+
+    def process_task(self, task: TaskModel) -> dict:
+        """
+        Process the task (can be overridden for customization).
+        
+        Args:
+            task (TaskModel): Task to be processed.
+        
+        Returns:
+            dict: Result of the task processing.
+        """
+        print(f"[Miner] Starting task: {task.task_id} - {task.description} (Priority: {task.priority})")
+        processing_time = 3 + (task.priority % 3)  # Simulate processing time based on priority
+        time.sleep(processing_time)
+        result = {
+            "result_id": f"result_{task.task_id}",
+            "description": f"Result from task: {task.description}",
+            "processing_time": processing_time,
+            "miner_id": "miner_001"
+        }
+        print(f"[Miner] Completed task: {task.task_id} - Processing time: {processing_time}s")
+        return result
+
+    def handle_task(self, task: TaskModel):
+        """Send the result back to the validator after processing."""
+        result = self.process_task(task)
+        try:
+            print(f"[Miner] Sending result to validator: {result}")
+            response = requests.post(self.validator_url, json=result, timeout=5)
+            print(f"[Miner] Validator response: {response.json()}")
+        except Exception as e:
+            print(f"[Miner] Error sending result: {e}")
+
+    def run(self):
+        """Start the miner server."""
+        print(f"[Miner] Starting server at http://{self.host}:{self.port}")
+        uvicorn.run(self.app, host=self.host, port=self.port)
+
+# Base class for Validator
+class BaseValidator:
+    def __init__(self, miner_url, host="0.0.0.0", port=8001):
+        """
+        Initialize BaseValidator.
+        
+        Args:
+            miner_url (str): URL of the miner to send tasks to.
+            host (str): Host address for the validator server.
+            port (int): Port for the validator server.
+        """
+        self.app = FastAPI()
+        self.miner_url = miner_url
+        self.host = host
+        self.port = port
+        self.setup_routes()
+
+    def setup_routes(self):
+        """Set up routes for the validator server."""
+        @self.app.post("/submit-result")
+        async def submit_result(result: ResultModel):
+            print(f"[Validator] Received result: {result.result_id} - {result.description} "
+                  f"(Processing time: {result.processing_time}s, Miner: {result.miner_id})")
+            return {"message": f"Result {result.result_id} received and processed"}
+
+    def send_task(self, task_counter: int):
+        """
+        Send a task to the miner (can be overridden for customization).
+        
+        Args:
+            task_counter (int): Task counter for generating task ID.
+        """
+        task = {
+            "task_id": f"task_{task_counter:03d}",
+            "description": f"Process data batch {task_counter}",
+            "deadline": "2024-12-31",
+            "priority": (task_counter % 5) + 1
+        }
+        try:
+            print(f"[Validator] Sending task: {task['task_id']} - {task['description']} (Priority: {task['priority']})")
+            response = requests.post(self.miner_url, json=task, timeout=5)
+            print(f"[Validator] Miner response: {response.json()}")
+        except Exception as e:
+            print(f"[Validator] Error sending task: {e}")
+
+    def run(self):
+        """Start the validator server and continuously send tasks."""
+        print(f"[Validator] Starting server at http://{self.host}:{self.port}")
+        threading.Thread(target=lambda: uvicorn.run(self.app, host=self.host, port=self.port)).start()
+        task_counter = 0
+        while True:
+            task_counter += 1
+            self.send_task(task_counter)
+            time.sleep(5)  # Send a task every 5 seconds
+
+# Utility functions to run Miner and Validator from the SDK
+def run_miner(validator_url: str, host: str = "0.0.0.0", port: int = 8000):
     """
-    Endpoint for the validator to send a task to the miner.
-    Expects 'task' as a form field containing a JSON string representing the TaskModel,
-    and an optional 'task_file' for additional file data.
-
+    Run the miner server with custom configuration.
+    
     Args:
-        task_json (str): JSON string representing the TaskModel, sent via form field named 'task'.
-        task_file (UploadFile, optional): Optional file attached to the task (e.g., a dataset or document).
-
-    Returns:
-        JSONResponse: Confirmation with detailed task information or an error message if validation fails.
+        validator_url (str): URL of the validator.
+        host (str): Host address of the miner.
+        port (int): Port of the miner.
     """
-    try:
-        # Parse the JSON string from the form field into a Python dictionary
-        task_data = json.loads(task_json)
-        # Validate the task data against the TaskModel
-        task = TaskModel(**task_data)
-    except json.JSONDecodeError:
-        # Handle invalid JSON format in the task field
-        print(f"Error decoding JSON from task field: {task_json}")
-        return JSONResponse(status_code=400, content={"message": "Invalid JSON format for task field"})
-    except ValidationError as e:
-        # Handle validation errors if task data doesn't match TaskModel
-        print(f"Validation error for task data: {task_data} - Errors: {e.errors()}")
-        return JSONResponse(status_code=422, content={"detail": f"Validation error for task: {e.errors()}"})
-    except Exception as e:
-        # Handle any other unexpected errors
-        print(f"Unexpected error processing task: {e}")
-        return JSONResponse(status_code=500, content={"message": f"Internal server error: {e}"})
+    miner = BaseMiner(validator_url, host, port)
+    miner.run()
 
-    global current_task
-    if task_file:
-        # Read the content of the uploaded file (if provided)
-        file_content = await task_file.read()
-        print(f"Received task file: {task_file.filename}, size: {len(file_content)} bytes")
-    else:
-        print("No task file provided.")
-
-    # Store the task data in the global variable for later retrieval
-    current_task = {
-        "task_id": task.task_id,
-        "description": task.description,
-        "deadline": task.deadline,
-        "priority": task.priority,
-        "file": task_file.filename if task_file else None
-    }
-
-    # Log the received task details
-    print(f"Task received and stored: ID={task.task_id}, Description={task.description}, "
-          f"Deadline={task.deadline}, Priority={task.priority}")
-
-    # Return a success response with task details
-    return JSONResponse(content={
-        "message": "Task sent to miner",
-        "task_id": task.task_id,
-        "description": task.description,
-        "deadline": task.deadline,
-        "priority": task.priority,
-        "file": task_file.filename if task_file else None
-    })
-
-# Endpoint for the miner to retrieve the latest task
-@app.get("/get-task")
-async def get_task():
+def run_validator(miner_url: str, host: str = "0.0.0.0", port: int = 8001):
     """
-    Endpoint for the miner to retrieve the latest task from the validator.
-
-    Returns:
-        JSONResponse: The latest task data if available, or a message indicating no task is available.
-    """
-    global current_task
-    if current_task:
-        # Retrieve and clear the current task to prevent duplicate retrieval
-        task = current_task
-        current_task = None
-        return JSONResponse(content={
-            "message": "Task retrieved",
-            "task": task
-        })
-    else:
-        # Return a message if no task is available
-        return JSONResponse(content={
-            "message": "No task available"
-        })
-
-# Endpoint for the miner to submit a result to the validator
-@app.post("/submit-result")
-async def submit_result(
-    result_json: str = Form(..., alias="result"),
-    result_file: UploadFile = File(None)
-):
-    """
-    Endpoint for the miner to submit the result to the validator.
-    Expects 'result' as a form field containing a JSON string representing the ResultModel,
-    and an optional 'result_file' for additional file data.
-
+    Run the validator server with custom configuration.
+    
     Args:
-        result_json (str): JSON string representing the ResultModel, sent via form field named 'result'.
-        result_file (UploadFile, optional): Optional file attached to the result (e.g., output data).
-
-    Returns:
-        JSONResponse: Confirmation with detailed result information or an error message if validation fails.
+        miner_url (str): URL of the miner.
+        host (str): Host address of the validator.
+        port (int): Port of the validator.
     """
-    try:
-        # Parse the JSON string from the form field into a Python dictionary
-        result_data = json.loads(result_json)
-        # Validate the result data against the ResultModel
-        result = ResultModel(**result_data)
-    except json.JSONDecodeError:
-        # Handle invalid JSON format in the result field
-        print(f"Error decoding JSON from result field: {result_json}")
-        return JSONResponse(status_code=400, content={"message": "Invalid JSON format for result field"})
-    except ValidationError as e:
-        # Handle validation errors if result data doesn't match ResultModel
-        print(f"Validation error for result data: {result_data} - Errors: {e.errors()}")
-        return JSONResponse(status_code=422, content={"detail": f"Validation error for result: {e.errors()}"})
-    except Exception as e:
-        # Handle any other unexpected errors
-        print(f"Unexpected error processing result: {e}")
-        return JSONResponse(status_code=500, content={"message": f"Internal server error: {e}"})
+    validator = BaseValidator(miner_url, host, port)
+    validator.run()
 
-    global current_result
-    if result_file:
-        # Read the content of the uploaded file (if provided)
-        file_content = await result_file.read()
-        print(f"Received result file: {result_file.filename}, size: {len(file_content)} bytes")
-    else:
-        print("No result file provided.")
-
-    # Store the result data in the global variable for later retrieval
-    current_result = {
-        "result_id": result.result_id,
-        "description": result.description,
-        "processing_time": result.processing_time,
-        "miner_id": result.miner_id,
-        "file": result_file.filename if result_file else None
-    }
-
-    # Log the received result details
-    print(f"Result received and stored: ID={result.result_id}, Description={result.description}, "
-          f"Processing Time={result.processing_time}, Miner ID={result.miner_id}")
-
-    # Return a success response with result details
-    return JSONResponse(content={
-        "message": "Result submitted to validator",
-        "result_id": result.result_id,
-        "description": result.description,
-        "processing_time": result.processing_time,
-        "miner_id": result.miner_id,
-        "file": result_file.filename if result_file else None
-    })
-
-# Endpoint for the validator to retrieve the latest result
-@app.get("/get-result")
-async def get_result():
-    """
-    Endpoint for the validator to retrieve the latest result from the miner.
-
-    Returns:
-        JSONResponse: The latest result data if available, or a message indicating no result is available.
-    """
-    global current_result
-    if current_result:
-        # Retrieve and clear the current result to prevent duplicate retrieval
-        result = current_result
-        current_result = None
-        return JSONResponse(content={
-            "message": "Result retrieved",
-            "result": result
-        })
-    else:
-        # Return a message if no result is available
-        return JSONResponse(content={
-            "message": "No result available"
-        })
-
-# Run the FastAPI server
+# Example usage
 if __name__ == "__main__":
-    # Start the server on host 0.0.0.0 and port 8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Start miner
+    # run_miner(validator_url="http://116.98.177.250:33001/submit-result", host="172.17.0.2", port=17812)
+
+    # Start validator
+    # run_validator(miner_url="http://172.17.0.2:17812/receive-task", host="172.17.0.3", port=33001)
+    pass
