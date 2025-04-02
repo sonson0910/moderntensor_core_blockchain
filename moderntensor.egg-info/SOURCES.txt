@@ -67,6 +67,8 @@ sdk/service/address.py
 sdk/service/context.py
 sdk/service/contract_service.py
 sdk/service/query_service.py
+sdk/service/register_key.py
+sdk/service/stake_service.py
 sdk/service/tx_service.py
 sdk/service/utxos.py
 sdk/smartcontract/__init__.py
