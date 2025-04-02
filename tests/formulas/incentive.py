@@ -1,6 +1,6 @@
 # sdk/moderntensor_formulas/tests/test_incentive.py
 import pytest
-from ..incentive import calculate_miner_incentive, calculate_validator_incentive
+from sdk.formulas.incentive import calculate_miner_incentive, calculate_validator_incentive
 
 def test_calculate_miner_incentive():
     # Input

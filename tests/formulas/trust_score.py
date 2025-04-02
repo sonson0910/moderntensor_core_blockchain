@@ -1,7 +1,7 @@
 # sdk/moderntensor_formulas/tests/test_trust_score.py
 import pytest
 import math
-from ..trust_score import update_trust_score, calculate_selection_probability
+from sdk.formulas.trust_score import update_trust_score, calculate_selection_probability
 
 def test_update_trust_score():
     # Input

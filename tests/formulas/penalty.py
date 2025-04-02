@@ -1,6 +1,6 @@
 # sdk/moderntensor_formulas/tests/test_penalty.py
 import pytest
-from ..penalty import calculate_performance_adjustment, calculate_slash_amount
+from sdk.formulas.penalty import calculate_performance_adjustment, calculate_slash_amount
 
 def test_calculate_performance_adjustment():
     # Input

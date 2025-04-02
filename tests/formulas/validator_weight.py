@@ -1,6 +1,6 @@
 # sdk/moderntensor_formulas/tests/test_validator_weight.py
 import pytest
-from ..validator_weight import calculate_validator_weight
+from sdk.formulas.validator_weight import calculate_validator_weight
 
 def test_calculate_validator_weight():
     # Input

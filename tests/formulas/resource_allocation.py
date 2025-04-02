@@ -1,6 +1,6 @@
 # sdk/moderntensor_formulas/tests/test_resource_allocation.py
 import pytest
-from ..resource_allocation import calculate_subnet_resource
+from sdk.formulas.resource_allocation import calculate_subnet_resource
 
 def test_calculate_subnet_resource():
     # Input

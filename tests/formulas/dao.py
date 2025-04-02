@@ -1,6 +1,6 @@
 # sdk/moderntensor_formulas/tests/test_dao.py
 import pytest
-from ..dao import calculate_voting_power
+from sdk.formulas.dao import calculate_voting_power
 
 def test_calculate_voting_power():
     # Input

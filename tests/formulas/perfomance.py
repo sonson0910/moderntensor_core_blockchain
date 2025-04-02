@@ -1,7 +1,7 @@
 # sdk/moderntensor_formulas/tests/test_performance.py
 import pytest
 import math
-from ..performance import calculate_task_completion_rate, calculate_adjusted_miner_performance
+from sdk.formulas.performance import calculate_task_completion_rate, calculate_adjusted_miner_performance
 
 def test_calculate_task_completion_rate():
     # Input
