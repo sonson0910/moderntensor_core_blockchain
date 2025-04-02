@@ -1,20 +1,18 @@
-# sdk/moderntensor_formulas/dao.py
+# sdk/formulas/dao.py
 
-def calculate_voting_power(
-    stake: float,
-    participation_score: float,
-    total_stake: float
-) -> float:
+def calculate_voting_power(stake: float, time_staked: float, total_time: float) -> float:
     """
-    Tính quyền biểu quyết trong DAO dựa trên stake và mức độ tham gia.
-
+    Tính quyền biểu quyết trong DAO dựa trên stake và thời gian stake.
+    
     Args:
         stake (float): Số tiền stake của thành viên.
-        participation_score (float): Điểm tham gia của thành viên.
-        total_stake (float): Tổng số tiền stake trong DAO.
-
+        time_staked (float): Thời gian stake của thành viên.
+        total_time (float): Thời gian tổng để chuẩn hóa.
+    
     Returns:
         float: Quyền biểu quyết của thành viên.
     """
-    voting_power = (stake / total_stake) * participation_score if total_stake != 0 else 0.0
+    if total_time == 0:
+        return stake  # Tránh chia cho 0, quyền biểu quyết chỉ dựa trên stake
+    voting_power = stake * (1 + time_staked / total_time)
     return max(0.0, voting_power)
