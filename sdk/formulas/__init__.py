@@ -35,6 +35,7 @@ __all__ = [
     "calculate_validator_weight",
     "calculate_subnet_resource",
     "calculate_voting_power",
+    "calculate_miner_weight",
     # Thêm các hàm utils vào đây nếu muốn export
     # "sigmoid",
     # "calculate_alpha_effective",
