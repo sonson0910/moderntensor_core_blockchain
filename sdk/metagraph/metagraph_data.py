@@ -1,98 +1,165 @@
-from typing import (
-    List, 
-    Type, 
-    Dict, 
-    Any
-)
+# sdk/metagraph/metagraph_data.py
+import logging
+from typing import List, Dict, Any, Optional, Type
 from pycardano import (
-    Address, 
-    BlockFrostChainContext, 
-    PlutusData, 
-    ScriptHash, 
-    Network    
+    Address, BlockFrostChainContext, UTxO, PlutusData, ScriptHash, Network
 )
-import cbor2
+import cbor2 # Vẫn cần cho trường hợp datum không chuẩn
 
-def get_all_utxo_data(
-    script_hash: ScriptHash,
-    datumclass: Type[PlutusData],
+# Import các lớp Datum đã cập nhật
+from .metagraph_datum import MinerDatum, ValidatorDatum, SubnetDynamicDatum, SubnetStaticDatum
+
+
+logger = logging.getLogger(__name__)
+
+# --- Hàm lấy dữ liệu cho Miners ---
+async def get_all_miner_data(
     context: BlockFrostChainContext,
+    script_hash: ScriptHash,
     network: Network
 ) -> List[Dict[str, Any]]:
     """
-    Retrieves all UTxO data from a Plutus smart contract on the Cardano blockchain and returns it as an array.
-
-    This service fetches all UTxOs at the specified contract address, decodes their datums using the provided
-    datum class, and returns a list of dictionaries containing the UTxO details and datum fields.
+    Lấy và decode tất cả dữ liệu MinerDatum từ các UTXO tại địa chỉ script.
 
     Args:
-        contract_address (Address): The address of the Plutus smart contract.
-        datumclass (Type[PlutusData]): The class type of the datum (e.g., MinerDatum).
-        context (BlockFrostChainContext): The blockchain context to query UTxOs.
+        context: Context blockchain (ví dụ: BlockFrostChainContext).
+        script_hash: Script hash của smart contract chứa Datum.
+        network: Mạng Cardano đang sử dụng (Network.TESTNET hoặc Network.MAINNET).
 
     Returns:
-        List[Dict[str, Any]]: A list of dictionaries, where each dictionary contains:
-            - tx_id: The transaction ID of the UTxO.
-            - index: The output index of the UTxO.
-            - amount: The amount of lovelace in the UTxO.
-            - datum: A dictionary of the decoded datum fields.
-
-    Raises:
-        Exception: If there is an error decoding the datum or if no UTxOs are found.
+        Một list các dictionary, mỗi dictionary chứa thông tin chi tiết của một UTXO
+        và Datum đã được decode thành các trường dễ đọc. Trả về list rỗng nếu
+        không tìm thấy UTXO hợp lệ hoặc có lỗi xảy ra.
     """
-    # Initialize an empty list to store UTxO data
-    utxo_data_list = []
+    miner_data_list = []
+    contract_address = Address(payment_part=script_hash, network=network)
+    logger.info(f"Fetching Miner UTxOs from address: {contract_address}")
 
-    # Create the contract address using the provided script hash
-    contract_address = Address(
-        payment_part=script_hash,
-        network=network
-    )
+    try:
+        utxos = await context.utxos(str(contract_address)) # Sử dụng await nếu context.utxos là async
+        logger.info(f"Found {len(utxos)} potential UTxOs at miner contract address.")
+    except Exception as e:
+        logger.exception(f"Failed to fetch UTxOs for address {contract_address}: {e}")
+        return [] # Trả về list rỗng nếu không fetch được
 
-    # Fetch all UTxOs from the contract address
-    utxos = context.utxos(str(contract_address))
-
-    # Iterate through each UTxO
     for utxo in utxos:
-        try:
-            # Decode the datum from CBOR format
-            outputdatum = cbor2.loads(utxo.output.datum.cbor)
-            # Map the decoded datum values into the datumclass
-            param = datumclass(*outputdatum.value)
+        if utxo.output.datum:
+            try:
+                # Decode bằng phương thức của lớp MinerDatum
+                decoded_datum: MinerDatum = MinerDatum.from_cbor(utxo.output.datum.cbor)
 
-            # Extract datum fields into a dictionary
-            # Assuming datumclass has fields like uid, stake, etc.
-            datum_dict = {
-                "uid": param.uid.decode() if isinstance(param.uid, bytes) else param.uid,
-                "stake": param.stake,
-                "performance": param.performance,
-                "trust_score": param.trust_score,
-                "accumulated_rewards": param.accumulated_rewards,
-                "last_evaluated": param.last_evaluated,
-                "history_hash": param.history_hash.hex() if isinstance(param.history_hash, bytes) else param.history_hash,
-                "wallet_addr_hash": param.wallet_addr_hash.hex() if isinstance(param.wallet_addr_hash, bytes) else param.wallet_addr_hash,
-                "status": param.status.decode() if isinstance(param.status, bytes) else param.status,
-                "block_reg_at": param.block_reg_at,
-            }
+                # Trích xuất thông tin từ datum đã decode
+                # Sử dụng property để lấy giá trị float đã unscale
+                datum_dict = {
+                    "uid": getattr(decoded_datum, 'uid', b'').hex(), # Chuyển bytes thành hex
+                    "subnet_uid": getattr(decoded_datum, 'subnet_uid', -1),
+                    "stake": getattr(decoded_datum, 'stake', 0),
+                    "last_performance": getattr(decoded_datum, 'last_performance', 0.0), # Dùng property
+                    "trust_score": getattr(decoded_datum, 'trust_score', 0.0), # Dùng property
+                    "accumulated_rewards": getattr(decoded_datum, 'accumulated_rewards', 0),
+                    "last_update_slot": getattr(decoded_datum, 'last_update_slot', 0),
+                    "performance_history_hash": getattr(decoded_datum, 'performance_history_hash', b'').hex() or None, # hex hoặc None
+                    "wallet_addr_hash": getattr(decoded_datum, 'wallet_addr_hash', b'').hex(),
+                    "status": getattr(decoded_datum, 'status', -1), # Là int
+                    "registration_slot": getattr(decoded_datum, 'registration_slot', 0),
+                    "api_endpoint": getattr(decoded_datum, 'api_endpoint', b'').decode('utf-8', errors='replace') or None, # decode bytes thành str hoặc None
+                }
 
-            # Construct the UTxO data dictionary
-            utxo_data = {
-                "tx_id": str(utxo.input.transaction_id),
-                "index": utxo.input.index,
-                "amount": utxo.output.amount.coin,
-                "datum": datum_dict,
-            }
+                # Lấy thông tin cơ bản của UTXO
+                utxo_info = {
+                    "tx_id": str(utxo.input.transaction_id),
+                    "index": utxo.input.index,
+                    "amount": utxo.output.amount.coin,
+                    "datum": datum_dict,
+                    # Có thể thêm multi_asset nếu cần:
+                    # "multi_asset": utxo.output.amount.multi_asset.to_primitive()
+                }
+                miner_data_list.append(utxo_info)
 
-            # Add the UTxO data to the list
-            utxo_data_list.append(utxo_data)
+            except Exception as e:
+                logger.warning(f"Failed to decode or process MinerDatum for UTxO {utxo.input}: {e}", exc_info=True)
+                logger.debug(f"Datum CBOR: {utxo.output.datum.cbor.hex() if utxo.output.datum.cbor else 'None'}")
+                continue # Bỏ qua UTXO lỗi
+        elif utxo.output.datum_hash:
+             logger.debug(f"Skipping UTxO {utxo.input} with datum hash (inline datum required).")
+        # else: logger.debug(f"Skipping UTxO {utxo.input} with no datum.")
 
-        except Exception as e:
-            # Log the error and continue with the next UTxO
-            print(f"Error decoding datum for UTxO {utxo.input.transaction_id}: {str(e)}")
-            continue
+    if not miner_data_list:
+        logger.warning(f"No valid MinerDatum UTxOs found at address {contract_address}.")
 
-    # Check if any UTxOs were found
-    if not utxo_data_list:
-        raise Exception("No UTxOs found at the contract address.")
+    return miner_data_list
 
-    return utxo_data_list
+# --- Hàm lấy dữ liệu cho Validators ---
+async def get_all_validator_data(
+    context: BlockFrostChainContext,
+    script_hash: ScriptHash,
+    network: Network
+) -> List[Dict[str, Any]]:
+    """
+    Lấy và decode tất cả dữ liệu ValidatorDatum từ các UTXO tại địa chỉ script.
+
+    Args:
+        context: Context blockchain (ví dụ: BlockFrostChainContext).
+        script_hash: Script hash của smart contract chứa Datum.
+        network: Mạng Cardano đang sử dụng.
+
+    Returns:
+        Một list các dictionary chứa thông tin UTXO và ValidatorDatum đã decode.
+        Trả về list rỗng nếu có lỗi hoặc không tìm thấy.
+    """
+    validator_data_list = []
+    contract_address = Address(payment_part=script_hash, network=network)
+    logger.info(f"Fetching Validator UTxOs from address: {contract_address}")
+
+    try:
+        utxos = await context.utxos(str(contract_address))
+        logger.info(f"Found {len(utxos)} potential UTxOs at validator contract address.")
+    except Exception as e:
+        logger.exception(f"Failed to fetch UTxOs for address {contract_address}: {e}")
+        return []
+
+    for utxo in utxos:
+        if utxo.output.datum:
+            try:
+                decoded_datum: ValidatorDatum = ValidatorDatum.from_cbor(utxo.output.datum.cbor)
+
+                datum_dict = {
+                    "uid": getattr(decoded_datum, 'uid', b'').hex(),
+                    "subnet_uid": getattr(decoded_datum, 'subnet_uid', -1),
+                    "stake": getattr(decoded_datum, 'stake', 0),
+                    "last_performance": getattr(decoded_datum, 'last_performance', 0.0), # Dùng property
+                    "trust_score": getattr(decoded_datum, 'trust_score', 0.0), # Dùng property
+                    "accumulated_rewards": getattr(decoded_datum, 'accumulated_rewards', 0),
+                    "last_update_slot": getattr(decoded_datum, 'last_update_slot', 0),
+                    "performance_history_hash": getattr(decoded_datum, 'performance_history_hash', b'').hex() or None,
+                    "wallet_addr_hash": getattr(decoded_datum, 'wallet_addr_hash', b'').hex(),
+                    "status": getattr(decoded_datum, 'status', -1),
+                    "registration_slot": getattr(decoded_datum, 'registration_slot', 0),
+                    "api_endpoint": getattr(decoded_datum, 'api_endpoint', b'').decode('utf-8', errors='replace') or None, # decode bytes
+                }
+
+                utxo_info = {
+                    "tx_id": str(utxo.input.transaction_id),
+                    "index": utxo.input.index,
+                    "amount": utxo.output.amount.coin,
+                    "datum": datum_dict,
+                }
+                validator_data_list.append(utxo_info)
+
+            except Exception as e:
+                logger.warning(f"Failed to decode or process ValidatorDatum for UTxO {utxo.input}: {e}", exc_info=True)
+                logger.debug(f"Datum CBOR: {utxo.output.datum.cbor.hex() if utxo.output.datum.cbor else 'None'}")
+                continue
+        elif utxo.output.datum_hash:
+             logger.debug(f"Skipping UTxO {utxo.input} with datum hash.")
+
+    if not validator_data_list:
+        logger.warning(f"No valid ValidatorDatum UTxOs found at address {contract_address}.")
+
+    return validator_data_list
+
+
+# --- Có thể thêm các hàm tương tự cho SubnetDatum nếu cần ---
+# async def get_all_subnet_dynamic_data(...) -> List[Dict[str, Any]]: ...
+# async def get_subnet_static_data(...) -> Optional[Dict[str, Any]]: ...
+
