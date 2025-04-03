@@ -49,11 +49,15 @@ def create_utxo(
     # Create the owner's address, including staking part if stake_xsk is provided
     if stake_xsk:
         stk_xvk = stake_xsk.to_verification_key()
+        print(pay_xvk.hash())
+        print(stk_xvk.hash())
+
         owner_address = Address(
             payment_part=pay_xvk.hash(),
             staking_part=stk_xvk.hash(),
             network=network,
         )
+        print(owner_address)
     else:
         owner_address = Address(
             payment_part=pay_xvk.hash(),
@@ -66,6 +70,7 @@ def create_utxo(
         payment_part=script_hash,
         network=network,
     )
+    print(contract_address)
 
     # Initialize the transaction builder with the blockchain context
     builder = TransactionBuilder(context=context)

@@ -1,105 +1,97 @@
 # sdk/network/app/main.py
 from fastapi import FastAPI
+import Optional
 import asyncio
 import logging
-import time
-import Optional
+import time # Thêm time
 
 # Import các thành phần cần thiết
 from .api.v1.routes import api_router
 from .dependencies import set_validator_node_instance # Hàm để inject instance
-# Import lớp ValidatorNode và ValidatorInfo
-from sdk.consensus.node import ValidatorNode # Đường dẫn tương đối có thể khác
+from sdk.consensus.node import ValidatorNode
 from sdk.core.datatypes import ValidatorInfo
+from sdk.config.settings import settings # Import settings
 
-# --- Cấu hình logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=(settings.log_level.upper() if settings else "INFO"),
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-# --- Khởi tạo FastAPI app ---
 app = FastAPI(
     title="Moderntensor Network API",
     description="API endpoints for Moderntensor network communication, including P2P consensus.",
     version="0.1.0"
 )
 
-# --- Biến toàn cục hoặc đối tượng quản lý state ---
-# Giữ instance node validator chính chạy trong tiến trình này
 main_validator_node_instance: Optional[ValidatorNode] = None
+main_loop_task: Optional[asyncio.Task] = None
 
-# --- Sự kiện Startup ---
 @app.on_event("startup")
 async def startup_event():
-    """Khởi tạo các tài nguyên cần thiết khi ứng dụng bắt đầu."""
-    global main_validator_node_instance
+    """Khởi tạo Validator Node và inject vào dependency."""
+    global main_validator_node_instance, main_loop_task
     logger.info("FastAPI application starting up...")
-
-    # --- Khởi tạo Validator Node ---
-    # Cần logic để load thông tin validator (UID, keys,...) và context Cardano
-    # Ví dụ:
-    if ValidatorInfo and ValidatorNode:
+    if ValidatorInfo and ValidatorNode and settings:
         try:
-            # Load thông tin từ file cấu hình hoặc key file
-            validator_uid = "V_THIS_NODE" # Lấy từ config/key
-            validator_address = "addr_this_node..." # Lấy từ config/key
-            api_endpoint = "http://127.0.0.1:8000" # Địa chỉ API của chính node này, lấy từ config
-            # cardano_ctx = await initialize_cardano_context() # Hàm khởi tạo context
-            # node_config = load_app_config() # Hàm load config
+            # --- Load thông tin validator từ settings hoặc nguồn khác ---
+            validator_uid = settings.validator_uid or "V_DEFAULT" # Giả sử có trong settings
+            validator_address = settings.validator_address or "addr_default..."
+            api_endpoint = settings.validator_api_endpoint or f"http://127.0.0.1:{settings.api_port or 8000}"
+            # cardano_ctx = await initialize_cardano_context(settings)
+            # node_config_dict = settings.model_dump() # Có thể truyền cả dict settings
 
             my_validator_info = ValidatorInfo(
-                uid=validator_uid,
-                address=validator_address,
-                api_endpoint=api_endpoint
-                # Load các thông tin khác như stake, trust, weight nếu cần khởi tạo ban đầu
+                uid=validator_uid, address=validator_address, api_endpoint=api_endpoint
             )
 
+            # Khởi tạo Node (truyền settings vào đây nếu node không import global)
             main_validator_node_instance = ValidatorNode(
                 validator_info=my_validator_info,
-                cardano_context=None, # Thay bằng cardano_ctx thực tế
-                config=None # Thay bằng node_config thực tế
+                cardano_context=None # cardano_ctx
+                # config=node_config_dict # Hoặc để node tự import settings
             )
 
-            # Inject instance vào dependency provider cho API endpoints sử dụng
+            # Inject instance
             set_validator_node_instance(main_validator_node_instance)
             logger.info(f"ValidatorNode instance '{validator_uid}' initialized and injected.")
 
-            # --- Khởi chạy vòng lặp chính của Validator Node ---
-            # Chạy trong một background task của asyncio
-            logger.info("Starting main consensus loop...")
-            asyncio.create_task(run_main_node_loop(main_validator_node_instance))
+            # Khởi chạy vòng lặp chính trong background task
+            logger.info("Starting main consensus loop as background task...")
+            main_loop_task = asyncio.create_task(run_main_node_loop(main_validator_node_instance))
 
         except Exception as e:
             logger.exception(f"Failed to initialize ValidatorNode: {e}")
-            # Có thể quyết định dừng ứng dụng nếu node không khởi tạo được
-            # raise SystemExit("ValidatorNode initialization failed.")
     else:
-        logger.error("ValidatorNode or ValidatorInfo not available. Cannot initialize node.")
+        logger.error("SDK components or settings not available. Cannot initialize node.")
 
-
-# --- Sự kiện Shutdown ---
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Dọn dẹp tài nguyên khi ứng dụng tắt."""
+    """Dọn dẹp tài nguyên."""
     logger.info("FastAPI application shutting down...")
+    if main_loop_task and not main_loop_task.done():
+        logger.info("Cancelling main node loop task...")
+        main_loop_task.cancel()
+        try:
+            await main_loop_task # Chờ task kết thúc sau khi cancel
+        except asyncio.CancelledError:
+            logger.info("Main node loop task cancelled successfully.")
     if main_validator_node_instance and hasattr(main_validator_node_instance, 'http_client'):
         await main_validator_node_instance.http_client.aclose()
         logger.info("HTTP client closed.")
-    # Thêm các bước dọn dẹp khác nếu cần
 
-
-# --- Hàm chạy vòng lặp chính của Node ---
 async def run_main_node_loop(node: ValidatorNode):
     """Hàm chạy vòng lặp đồng thuận chính trong background."""
-    if not node: return
+    # ... (Logic vòng lặp while True như trong node.py) ...
+    if not node or not settings: return
     try:
+        # Chờ một chút để FastAPI sẵn sàng nhận request nếu cần
+        await asyncio.sleep(5)
         while True:
             cycle_start_time = time.time()
             await node.run_cycle()
             cycle_duration = time.time() - cycle_start_time
-            # Lấy cycle_interval từ config hoặc node
-            cycle_interval_seconds = METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
-            wait_time = max(10, cycle_interval_seconds - cycle_duration) # Đợi ít nhất 10s
+            cycle_interval_seconds = settings.consensus_metagraph_update_interval_minutes * 60
+            min_wait = settings.consensus_cycle_min_wait_seconds
+            wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
             logger.info(f"Cycle duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle...")
             await asyncio.sleep(wait_time)
     except asyncio.CancelledError:
@@ -111,13 +103,7 @@ async def run_main_node_loop(node: ValidatorNode):
 
 
 # --- Include Routers ---
-# Đảm bảo include router sau khi các dependency có thể đã sẵn sàng (nếu cần)
 app.include_router(api_router)
 
-
-# --- Điểm chạy chính (sử dụng uvicorn) ---
-# if __name__ == "__main__":
-#     import uvicorn
-#     # Port này là port chính của FastAPI app, nơi nhận request từ bên ngoài
-#     # và cũng là nơi các validator khác gửi điểm số đến (/v1/consensus/receive_scores)
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
+# --- Điểm chạy chính (uvicorn) ---
+# ...

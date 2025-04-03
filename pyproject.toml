@@ -70,4 +70,5 @@ cli = ["click>=8.1.0", "rich>=13.0.0"]
 [tool.pytest.ini_options]
 markers = [
     "integration: mark a test as an integration test",
+    "ignore:`network` argument will be deprecated in the future.:UserWarning"
 ]

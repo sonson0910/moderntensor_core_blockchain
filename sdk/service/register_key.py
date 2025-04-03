@@ -9,7 +9,7 @@ from pycardano import (
     Redeemer,
     UTxO,
 )
-from sdk.service.utxos import get_utxo_with_lowest_incentive
+from sdk.service.utxos import get_utxo_with_lowest_performance
 from sdk.metagraph.update_metagraph import update_datum
 from sdk.metagraph.metagraph_datum import MinerDatum
 from sdk.config.settings import settings
@@ -53,7 +53,7 @@ def register_key(
     contract_address = contract_address or settings.TEST_CONTRACT_ADDRESS
 
     # Find the UTxO with the lowest incentive
-    lowest_utxo: UTxO = get_utxo_with_lowest_incentive(
+    lowest_utxo: UTxO = get_utxo_with_lowest_performance(
         contract_address=contract_address,
         datumclass=MinerDatum,  # Assumes MinerDatum is the correct datum class
         context=context,
@@ -65,7 +65,7 @@ def register_key(
     tx_id = update_datum(
         payment_xsk=payment_xsk,
         stake_xsk=stake_xsk,
-        into=script_hash,
+        script_hash=script_hash,
         utxo=lowest_utxo,
         new_datum=new_datum,
         script=script,
