@@ -1,10 +1,12 @@
 # sdk/consensus/scoring.py
 """
 Logic chấm điểm kết quả từ miners.
+Chứa hàm cơ sở cần được kế thừa và triển khai bởi các validator/subnet cụ thể.
 """
 import logging
 from typing import List, Dict, Any
-
+from collections import defaultdict
+# Giả định các kiểu dữ liệu này đã được import hoặc định nghĩa đúng
 try:
     from sdk.core.datatypes import MinerResult, TaskAssignment, ValidatorScore
 except ImportError as e:
@@ -14,42 +16,55 @@ logger = logging.getLogger(__name__)
 
 def _calculate_score_from_result(task_data: Any, result_data: Any) -> float:
     """
-    Tính điểm P_miner,v từ dữ liệu task và kết quả.
-    *** Cần logic chấm điểm thực tế dựa trên loại task AI ***
+    (Cần được Override) Tính điểm P_miner,v từ dữ liệu task và kết quả.
+
+    Đây là phương thức cơ sở/trừu tượng. Các lớp Validator kế thừa hoặc
+    các cấu hình Subnet cụ thể cần triển khai (override) phương thức này
+    với logic chấm điểm phù hợp cho loại nhiệm vụ AI của họ.
+
+    Args:
+        task_data: Dữ liệu của nhiệm vụ đã giao.
+        result_data: Dữ liệu kết quả mà miner trả về.
+
+    Returns:
+        Điểm số (từ 0.0 đến 1.0).
+
+    Raises:
+        NotImplementedError: Nếu phương thức này không được override bởi lớp con.
     """
-    # TODO: Triển khai logic chấm điểm thực tế.
-    # Ví dụ đơn giản dựa trên loss:
-    score = 0.0
-    try:
-        loss = float(result_data.get("loss", 1.0))
-        score = max(0.0, min(1.0, 1.0 - loss * 1.2)) # Điều chỉnh hệ số
-        logger.debug(f"Calculated score based on loss {loss:.4f}: {score:.3f}")
-    except (TypeError, ValueError) as e:
-        score = 0.1 # Phạt nhẹ nếu format sai
-        logger.warning(f"Could not parse loss from result data {str(result_data)[:50]}... : {e}. Assigning low score.")
-    except Exception as e:
-        logger.exception(f"Unexpected error calculating score from result: {e}. Assigning low score.")
-        score = 0.1
-    return score
+    logger.warning(
+        f"'_calculate_score_from_result' is using the base implementation. "
+        f"This should be overridden by specific subnet/validator logic. "
+        f"Task data type: {type(task_data)}, Result data type: {type(result_data)}. "
+        f"Returning default score 0.0"
+    )
+    # Hoặc bạn có thể raise lỗi để bắt buộc phải override:
+    # raise NotImplementedError("Scoring logic must be implemented by validator subclass/subnet.")
+    # Tạm thời trả về 0.0 để khung sườn chạy được
+    return 0.0
 
 def score_results_logic(
     results_received: Dict[str, List[MinerResult]],
     tasks_sent: Dict[str, TaskAssignment],
-    validator_uid: str
+    validator_uid: str,
+    # Thêm tham số để truyền hàm chấm điểm tùy chỉnh nếu không dùng kế thừa
+    # scoring_function: Callable[[Any, Any], float] = _calculate_score_from_result
 ) -> Dict[str, List[ValidatorScore]]:
     """
-    Chấm điểm tất cả các kết quả hợp lệ nhận được từ miners.
+    Chấm điểm tất cả các kết quả hợp lệ nhận được từ miners bằng cách sử dụng
+    hàm chấm điểm _calculate_score_from_result (cần được override).
 
     Args:
         results_received: Dictionary kết quả nhận được {task_id: [MinerResult]}.
         tasks_sent: Dictionary các task đã gửi {task_id: TaskAssignment}.
         validator_uid: UID của validator đang thực hiện chấm điểm.
+        # scoring_function: Hàm sẽ được dùng để tính điểm.
 
     Returns:
         Dictionary điểm số đã chấm {task_id: [ValidatorScore]}.
     """
-    logger.info(f"[V:{validator_uid}] Scoring {len(results_received)} received tasks...")
-    validator_scores: Dict[str, List[ValidatorScore]] = {}
+    logger.info(f"[V:{validator_uid}] Scoring {len(results_received)} received tasks using defined logic...")
+    validator_scores: Dict[str, List[ValidatorScore]] = defaultdict(list) # Dùng defaultdict
 
     for task_id, results in results_received.items():
         assignment = tasks_sent.get(task_id)
@@ -57,16 +72,24 @@ def score_results_logic(
             logger.warning(f"Received result for unknown/unsent task {task_id}. Skipping scoring.")
             continue
 
-        if task_id not in validator_scores:
-            validator_scores[task_id] = []
-
         for result in results:
-            # Kiểm tra xem miner có đúng là miner được giao task không
             if result.miner_uid != assignment.miner_uid:
                  logger.warning(f"Received result for task {task_id} from unexpected miner {result.miner_uid}. Expected {assignment.miner_uid}. Skipping.")
                  continue
 
-            score = _calculate_score_from_result(assignment.task_data, result.result_data)
+            # Gọi hàm chấm điểm (có thể là hàm đã override)
+            try:
+                # score = scoring_function(assignment.task_data, result.result_data)
+                score = _calculate_score_from_result(assignment.task_data, result.result_data)
+                # Đảm bảo điểm nằm trong khoảng [0, 1]
+                score = max(0.0, min(1.0, score))
+            except NotImplementedError:
+                 logger.error(f"Scoring logic for task type in task {task_id} is not implemented! Assigning score 0.")
+                 score = 0.0
+            except Exception as e:
+                 logger.exception(f"Error calculating score for task {task_id}, miner {result.miner_uid}: {e}. Assigning score 0.")
+                 score = 0.0
+
             logger.info(f"  Scored Miner {result.miner_uid} for task {task_id}: {score:.3f}")
 
             val_score = ValidatorScore(
@@ -74,10 +97,9 @@ def score_results_logic(
                 miner_uid=result.miner_uid,
                 validator_uid=validator_uid,
                 score=score # Điểm P_miner,v
-                # timestamp được tự động gán khi tạo ValidatorScore
             )
             validator_scores[task_id].append(val_score)
 
     logger.info(f"Finished scoring. Generated scores for {len(validator_scores)} tasks.")
-    return validator_scores
+    return dict(validator_scores) # Trả về dict thường
 

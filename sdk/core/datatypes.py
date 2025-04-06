@@ -2,6 +2,7 @@
 """
 Định nghĩa các cấu trúc dữ liệu cốt lõi dùng chung trong SDK Moderntensor.
 """
+from pycardano import PaymentVerificationKey # Import ở đây để tránh circular dependency
 from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass, field
 import time # Thêm import time
@@ -24,11 +25,29 @@ class ValidatorInfo:
     """Lưu trữ thông tin trạng thái của một Validator."""
     uid: str
     address: str # Địa chỉ ví Cardano
-    api_endpoint: Optional[str] = None # Địa chỉ API endpoint của validator (ví dụ: "http://<ip>:<port>")
+    api_endpoint: Optional[str] = None
     trust_score: float = 0.0
     weight: float = 0.0 # W_v
     stake: float = 0.0
-    # Thêm các trường khác từ ValidatorDatum nếu cần
+    # --- Thêm trường mới ---
+    payment_vkey_cbor_hex: Optional[str] = None # Lưu trữ PaymentVerificationKey dạng CBOR hex
+    # -----------------------
+    # Thêm các trường khác từ ValidatorDatum nếu cần (status, subnet_uid, etc.)
+    status: int = 1 # Giả định mặc định là Active
+    subnet_uid: int = 0
+    version: int = 1
+    registration_slot: int = 0
+    wallet_addr_hash: Optional[bytes] = None # Giữ bytes hoặc hex tùy chuẩn
+    performance_history_hash: Optional[bytes] = None
+
+    # --- Có thể thêm property để dễ lấy vkey ---
+    @property
+    def payment_verification_key(self) -> Optional['PaymentVerificationKey']:
+        """Trả về đối tượng PaymentVerificationKey nếu CBOR hex tồn tại."""
+        if self.payment_vkey_cbor_hex:
+            import binascii
+            return PaymentVerificationKey.from_cbor(binascii.unhexlify(self.payment_vkey_cbor_hex))
+        return None
 
 @dataclass
 class TaskAssignment:
