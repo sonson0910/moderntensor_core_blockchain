@@ -712,93 +712,204 @@ class ValidatorNode:
             settings=self.settings
         )
 
+
     async def run_cycle(self):
         """Thực hiện một chu kỳ đồng thuận hoàn chỉnh (async)."""
         logger.info(f"\n--- Starting Cycle {self.current_cycle} for Validator {self.info.uid} ---")
         cycle_start_time = time.time()
-        # Lấy các khoảng thời gian từ settings
+
+        # Lấy các khoảng thời gian và offset từ settings
         interval_seconds = self.settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
         send_offset_seconds = self.settings.CONSENSUS_SEND_SCORE_OFFSET_MINUTES * 60
         consensus_offset_seconds = self.settings.CONSENSUS_CONSENSUS_TIMEOUT_OFFSET_MINUTES * 60
         commit_offset_seconds = self.settings.CONSENSUS_COMMIT_OFFSET_SECONDS
 
-        metagraph_update_time = cycle_start_time + interval_seconds
-        send_score_time = metagraph_update_time - send_offset_seconds
-        consensus_timeout_time = metagraph_update_time - consensus_offset_seconds
-        commit_time = metagraph_update_time - commit_offset_seconds
+        # Tính các thời điểm quan trọng trong chu kỳ
+        metagraph_update_time = cycle_start_time + interval_seconds # Thời điểm dự kiến bắt đầu chu kỳ mới / cập nhật metagraph
+        send_score_time = metagraph_update_time - send_offset_seconds # Thời điểm gửi điểm số P2P
+        consensus_timeout_time = metagraph_update_time - consensus_offset_seconds # Thời điểm cuối cùng chờ điểm P2P
+        commit_time = metagraph_update_time - commit_offset_seconds # Thời điểm commit lên blockchain
 
+        # Khởi tạo các biến lưu trữ kết quả của chu kỳ
         miner_updates: Dict[str, MinerDatum] = {}
         validator_updates: Dict[str, ValidatorDatum] = {}
+        penalized_validator_updates: Dict[str, ValidatorDatum] = {} # Lưu datum phạt từ bước 0
 
         try:
-            # Bước 0: Kiểm tra và phạt Validator từ chu kỳ TRƯỚC
-            await self.verify_and_penalize_validators()
+            # === BƯỚC 0: KIỂM TRA & PHẠT VALIDATOR (TỪ CHU KỲ TRƯỚC) ===
+            # Mục đích: Phát hiện validator gian lận (commit sai trạng thái ở chu kỳ trước)
+            # Hành động: Gọi verify_and_penalize_logic từ state.py
+            # Input: current_cycle, previous_calculated_states, validators_info (hiện tại), context, settings
+            # Output: Cập nhật trực tiếp trust/status trong self.validators_info nếu có phạt.
+            #         Trả về penalized_validator_updates (dict datum mới cho validator bị phạt).
+            penalized_validator_updates = await self.verify_and_penalize_validators() # Đã thêm return value
+            logger.info(f"Step 0: Verification/Penalization check completed. Penalized datums prepared: {len(penalized_validator_updates)}")
 
-            # 1. Tải dữ liệu
-            await self.load_metagraph_data()
-            if not self.miners_info: raise Exception("No miners found in metagraph")
+            # === BƯỚC 1: TẢI DỮ LIỆU METAGRAPH ===
+            # Mục đích: Lấy trạng thái mới nhất của miners và validators từ blockchain.
+            # Hành động: Gọi self.load_metagraph_data()
+            # Output: Cập nhật self.miners_info và self.validators_info (bao gồm cả self.info).
+            await self.load_metagraph_data() # Sử dụng await vì hàm này là async
+            if not self.miners_info:
+                logger.warning("No miners found in metagraph for this cycle. Skipping task assignment.")
+                # Có thể raise Exception hoặc kết thúc chu kỳ nhẹ nhàng hơn
+                return # Kết thúc chu kỳ nếu không có miner
 
-            # 2. Chọn miners
-            selected_miners = self.select_miners() # Sync call
-            if not selected_miners: raise Exception("No miners selected for task assignment")
+            logger.info(f"Step 1: Metagraph data loaded. Miners: {len(self.miners_info)}, Validators: {len(self.validators_info)}")
 
-            # 3. Gửi task
+            # === BƯỚC 2: CHỌN MINERS ===
+            # Mục đích: Chọn ra các miners để giao nhiệm vụ dựa trên trust và cơ chế công bằng.
+            # Hành động: Gọi self.select_miners() (đồng bộ - sync) -> gọi logic trong selection.py
+            # Input: self.miners_info, self.current_cycle, các tham số từ settings.
+            # Output: List các MinerInfo được chọn (selected_miners).
+            selected_miners = self.select_miners()
+            if not selected_miners:
+                logger.warning("No miners were selected for task assignment in this cycle.")
+                return # Kết thúc chu kỳ nếu không chọn được miner
+
+            logger.info(f"Step 2: Selected {len(selected_miners)} miners for tasks.")
+
+            # === BƯỚC 3: GỬI TASK & THEO DÕI ===
+            # Mục đích: Tạo và gửi nhiệm vụ đến các miners đã chọn qua mạng, lưu lại thông tin task đã gửi.
+            # Hành động: Gọi self.send_task_and_track() (hiện là async để gửi đồng thời)
+            # Input: selected_miners
+            # Output: Cập nhật self.tasks_sent (dict: task_id -> TaskAssignment) cho các task gửi thành công.
+            #         Cập nhật last_selected_time trong self.miners_info.
+            # Note: Phần tạo task (_create_task_data) và gửi (_send_task_via_network_async) cần hoàn thiện logic thực tế.
             await self.send_task_and_track(selected_miners)
+            logger.info(f"Step 3: Task sending attempted. Tasks tracked: {len(self.tasks_sent)}")
 
-            # 4. Nhận kết quả
-            receive_timeout = self.settings.CONSENSUS_NETWORK_TIMEOUT_SECONDS * 3 # Ví dụ
+            # === BƯỚC 4: NHẬN KẾT QUẢ ===
+            # Mục đích: Chờ đợi và nhận kết quả trả về từ các miners đã giao task.
+            # Hành động: Gọi self.receive_results() (async)
+            # Input: Timeout (lấy từ settings).
+            # Output: Cập nhật self.results_received (dict: task_id -> List[MinerResult]).
+            # Note: Phần lắng nghe (_listen_for_results_async) đang là mock, cần thay bằng logic nhận qua API thực tế.
+            receive_timeout = self.settings.CONSENSUS_NETWORK_TIMEOUT_SECONDS * 3 # Ví dụ timeout
             await self.receive_results(timeout=receive_timeout)
+            logger.info(f"Step 4: Result reception finished. Results received for {len(self.results_received)} tasks.")
 
-            # 5. Chấm điểm cục bộ
-            self.score_miner_results() # Sync call
+            # === BƯỚC 5: CHẤM ĐIỂM CỤC BỘ ===
+            # Mục đích: Validator tự chấm điểm các kết quả nhận được từ miners.
+            # Hành động: Gọi self.score_miner_results() (sync) -> gọi logic trong scoring.py
+            # Input: self.results_received, self.tasks_sent
+            # Output: Cập nhật self.validator_scores (dict: task_id -> List[ValidatorScore] do chính validator này chấm).
+            # Note: Logic chấm điểm cụ thể (_calculate_score_from_result) cần được override.
+            self.score_miner_results()
+            logger.info(f"Step 5: Local scoring completed. Scores generated for {len(self.validator_scores)} tasks.")
 
-            # 6. Chờ và gửi điểm
+            # === BƯỚC 6: CHỜ & BROADCAST ĐIỂM ===
+            # Mục đích: Đợi đến thời điểm thích hợp và gửi điểm số vừa chấm cho các validator khác.
+            # Hành động: Tính thời gian chờ, đợi (asyncio.sleep), gọi self.broadcast_scores() (async) -> gọi logic trong p2p.py
+            # Input: self.validator_scores, self.info, self.signing_key, active_validators, current_cycle, http_client.
+            # Output: Gửi HTTP request chứa điểm số đã ký đến các validator khác.
             wait_before_send = send_score_time - time.time()
-            if wait_before_send > 0: await asyncio.sleep(wait_before_send)
+            if wait_before_send > 0:
+                logger.info(f"Step 6a: Waiting {wait_before_send:.1f}s before broadcasting scores...")
+                await asyncio.sleep(wait_before_send)
+            else:
+                logger.warning(f"Step 6a: Send score time already passed by {-wait_before_send:.1f}s!")
+            logger.info(f"Step 6b: Broadcasting local scores...")
             await self.broadcast_scores()
 
-            # 7. Chờ nhận điểm
+            # === BƯỚC 7: CHỜ NHẬN ĐIỂM P2P ===
+            # Mục đích: Chờ nhận đủ điểm số từ các validator khác để bắt đầu tính toán đồng thuận.
+            # Hành động: Tính thời gian chờ, gọi self.wait_for_consensus_scores() (async)
+            # Input: Timeout (dựa trên consensus_timeout_time).
+            # Output: boolean (consensus_possible) cho biết có đủ điểm hay không.
+            #         self.received_validator_scores được cập nhật ngầm bởi API endpoint nhận điểm.
             wait_for_scores_timeout = consensus_timeout_time - time.time()
             consensus_possible = False
             if wait_for_scores_timeout > 0:
-                 consensus_possible = await self.wait_for_consensus_scores(wait_for_scores_timeout)
-            else: logger.warning("Not enough time left for consensus scores.")
+                logger.info(f"Step 7: Waiting up to {wait_for_scores_timeout:.1f}s for P2P scores...")
+                consensus_possible = await self.wait_for_consensus_scores(wait_for_scores_timeout)
+                logger.info(f"Step 7: Consensus possible based on received scores: {consensus_possible}")
+            else:
+                logger.warning(f"Step 7: Not enough time left ({wait_for_scores_timeout:.1f}s) to wait for consensus scores.")
 
-            # 8. Chạy đồng thuận, tính toán trạng thái mới
-            final_miner_scores, calculated_validator_states = self.run_consensus_and_penalties() # Sync call
-            if not consensus_possible: logger.warning("Consensus calculated with potentially incomplete score set.")
+            # === BƯỚC 8: CHẠY ĐỒNG THUẬN & TÍNH TOÁN TRẠNG THÁI ===
+            # Mục đích: Tính điểm đồng thuận cuối cùng cho miners (P_adj) và trạng thái dự kiến (E_v, trust, reward) cho validators.
+            # Hành động: Gọi self.run_consensus_and_penalties() (sync) -> gọi run_consensus_logic từ state.py
+            # Input: current_cycle, tasks_sent, received_scores (P2P + local), validators_info, settings.
+            # Output: final_miner_scores (dict), calculated_validator_states (dict trạng thái dự kiến).
+            #         Cập nhật self.previous_cycle_results["calculated_validator_states"] cho chu kỳ sau.
+            logger.info(f"Step 8: Running consensus calculations...")
+            final_miner_scores, calculated_validator_states = self.run_consensus_and_penalties()
+            if not consensus_possible:
+                logger.warning("Consensus calculation was performed with potentially incomplete P2P score set!")
+            # Lưu trạng thái dự kiến cho việc kiểm tra ở chu kỳ tiếp theo
+            self.previous_cycle_results["calculated_validator_states"] = calculated_validator_states.copy() # Lưu bản copy
+            self.previous_cycle_results["final_miner_scores"] = final_miner_scores.copy() # Lưu điểm miner nếu cần
+            logger.info(f"Step 8: Consensus calculation finished. Final miner scores: {len(final_miner_scores)}, Validator states calculated: {len(calculated_validator_states)}")
 
-            # Lưu kết quả tính toán cho chu kỳ sau
-            self.previous_cycle_results["calculated_validator_states"] = calculated_validator_states
-            self.previous_cycle_results["final_miner_scores"] = final_miner_scores
+            # === BƯỚC 9: CHUẨN BỊ CẬP NHẬT MINER DATUM ===
+            # Mục đích: Tạo các đối tượng MinerDatum mới dựa trên kết quả đồng thuận.
+            # Hành động: Gọi self.update_miner_state() (sync) -> gọi prepare_miner_updates_logic từ state.py
+            # Input: current_cycle, miners_info (có thể đã bị cập nhật trust ở bước 0), final_scores, settings.
+            # Output: miner_updates (dict: uid_hex -> MinerDatum mới).
+            logger.info(f"Step 9: Preparing miner datum updates...")
+            miner_updates = self.update_miner_state(final_miner_scores)
+            logger.info(f"Step 9: Prepared {len(miner_updates)} miner datums.")
 
-            # 9. Chuẩn bị cập nhật trạng thái miner
-            miner_updates = self.update_miner_state(final_miner_scores) # Sync call
+            # === BƯỚC 10: CHUẨN BỊ CẬP NHẬT VALIDATOR DATUM (CHO CHÍNH MÌNH) ===
+            # Mục đích: Tạo đối tượng ValidatorDatum mới cho chính validator này.
+            # Hành động: Gọi self.prepare_validator_updates() (async) -> gọi prepare_validator_updates_logic từ state.py
+            # Input: current_cycle, self.info, calculated_validator_states, settings, context.
+            # Output: validator_updates (dict: self_uid_hex -> ValidatorDatum mới).
+            logger.info(f"Step 10: Preparing self validator datum update...")
+            validator_updates = await self.prepare_validator_updates(calculated_validator_states)
+            logger.info(f"Step 10: Prepared {len(validator_updates)} self validator datums.")
 
-            # 10. Chuẩn bị cập nhật trạng thái validator (async)
-            validator_updates = await self.prepare_validator_updates(calculated_validator_states) # Async call
-
-            # 11. Chờ commit
+            # === BƯỚC 11: CHỜ COMMIT ===
+            # Mục đích: Đợi đến thời điểm commit đã định sẵn.
+            # Hành động: Tính thời gian chờ, đợi (asyncio.sleep).
             wait_before_commit = commit_time - time.time()
-            if wait_before_commit > 0: await asyncio.sleep(wait_before_commit)
-            else: logger.warning("Commit time already passed!")
+            if wait_before_commit > 0:
+                logger.info(f"Step 11: Waiting {wait_before_commit:.1f}s before committing updates...")
+                await asyncio.sleep(wait_before_commit)
+            else:
+                logger.warning(f"Step 11: Commit time already passed by {-wait_before_commit:.1f}s! Committing immediately.")
 
-            # 12. Commit lên blockchain
-            await self.commit_updates_to_blockchain(miner_updates, validator_updates) # Async call
+            # === BƯỚC 12: COMMIT LÊN BLOCKCHAIN ===
+            # Mục đích: Gửi giao dịch cập nhật các MinerDatum và ValidatorDatum lên blockchain.
+            # Hành động: Gọi self.commit_updates_to_blockchain() (async) -> gọi commit_updates_logic từ state.py
+            # Input: miner_updates, validator_updates (self), penalized_validator_updates (từ Bước 0), context, keys, settings, script_hash/bytes, network.
+            # Output: Gửi giao dịch lên mạng Cardano.
+            # Note: Logic commit thực tế cần được hoàn thiện.
+            logger.info(f"Step 12: Committing updates to blockchain...")
+            await self.commit_updates_to_blockchain(
+                miner_updates=miner_updates,
+                validator_updates=validator_updates,
+                penalized_validator_updates=penalized_validator_updates, # Truyền datum phạt vào đây
+                context=self.context,
+                signing_key=self.signing_key,
+                stake_signing_key=self.stake_signing_key,
+                settings=self.settings,
+                script_hash=self.script_hash,
+                script_bytes=self.script_bytes,
+                network=self.settings.CARDANO_NETWORK # Truyền network từ settings
+            )
+            logger.info(f"Step 12: Commit process initiated.")
 
         except Exception as e:
             logger.exception(f"Error during consensus cycle {self.current_cycle}: {e}")
+            # Cân nhắc có nên dừng hẳn node hay chỉ bỏ qua chu kỳ lỗi
 
         finally:
+            # === DỌN DẸP CUỐI CHU KỲ ===
             cycle_end_time = time.time()
             logger.info(f"--- Cycle {self.current_cycle} Finished (Duration: {cycle_end_time - cycle_start_time:.1f}s) ---")
+            # Tăng số thứ tự chu kỳ
             self.current_cycle += 1
-            # Dọn dẹp dữ liệu chu kỳ cũ
-            cleanup_cycle = self.current_cycle - 3 # Giữ lại dữ liệu 2 chu kỳ trước
+            # Dọn dẹp dữ liệu P2P của các chu kỳ quá cũ để tiết kiệm bộ nhớ
+            cleanup_cycle = self.current_cycle - 3 # Ví dụ: Giữ lại dữ liệu 2 chu kỳ trước đó
             async with self.received_scores_lock:
-                 if cleanup_cycle in self.received_validator_scores:
-                      del self.received_validator_scores[cleanup_cycle]
-                      logger.info(f"Cleaned up received scores for cycle {cleanup_cycle}")
+                if cleanup_cycle in self.received_validator_scores:
+                    try:
+                        del self.received_validator_scores[cleanup_cycle]
+                        logger.info(f"Cleaned up received scores for cycle {cleanup_cycle}")
+                    except KeyError:
+                        pass # Đã bị xóa bởi luồng khác?
 
 
 # --- Hàm chạy chính (Ví dụ Async) ---

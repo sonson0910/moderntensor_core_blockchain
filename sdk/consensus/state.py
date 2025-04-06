@@ -5,7 +5,7 @@ Logic tính toán đồng thuận, kiểm tra phạt, chuẩn bị và commit c�
 import logging
 import math
 import asyncio
-from typing import List, Dict, Any, Tuple, Optional, Set
+from typing import List, Dict, Any, Tuple, Optional, Set, Union
 from collections import defaultdict
 
 from sdk.config.settings import settings
@@ -624,124 +624,115 @@ async def prepare_validator_updates_logic( # <<<--- Chuyển thành async vì c�
 
 
 async def commit_updates_logic(
-    miner_updates: Dict[str, MinerDatum],           # {uid_hex: MinerDatum}
-    validator_updates: Dict[str, ValidatorDatum],   # {uid_hex: ValidatorDatum}
-    penalized_validator_updates: Dict[str, ValidatorDatum], # Datum phạt từ verify_and_penalize
+    miner_updates: Dict[str, MinerDatum],
+    validator_updates: Dict[str, ValidatorDatum],
+    penalized_validator_updates: Dict[str, ValidatorDatum],
+    # --- Thêm utxo_map ---
+    current_utxo_map: Dict[str, UTxO], # Map từ uid_hex -> UTxO object ở đầu chu kỳ
+    # --------------------
     context: BlockFrostChainContext,
     signing_key: PaymentSigningKey,
     stake_signing_key: Optional[StakeSigningKey],
     settings: Any,
-    script_hash: ScriptHash,        # <<<--- Thêm script_hash
-    script_bytes: PlutusV3Script,   # <<<--- Thêm script_bytes
-    network: Network                # <<<--- Thêm network
+    script_hash: ScriptHash,
+    script_bytes: PlutusV3Script,
+    network: Network
 ):
     """
     Commit các cập nhật MinerDatum và ValidatorDatum lên blockchain.
-    Hiện tại thực hiện mỗi update một giao dịch riêng lẻ.
+    Sử dụng current_utxo_map để lấy input UTXO.
+    Thực hiện mỗi update một giao dịch riêng lẻ.
     """
     logger.info(f"Attempting to commit updates: {len(miner_updates)} miners, {len(validator_updates)} self-validators, {len(penalized_validator_updates)} penalized validators.")
 
-    # --- Lấy thông tin cần thiết từ settings ---
-    # network = settings.CARDANO_NETWORK # Đã truyền vào
-    # script_hash = settings.SCRIPT_HASH # Đã truyền vào
-    # script_bytes = settings.SCRIPT_BYTES # Đã truyền vào
-
-    # --- Tạo Redeemer mặc định (cho script always_true) ---
+    # Tạo Redeemer mặc định (cho script always_true)
     default_redeemer = Redeemer(0)
 
-    submitted_tx_ids: Dict[str, str] = {} # {uid_hex: tx_id}
+    submitted_tx_ids: Dict[str, str] = {} # {uid_hex_type: tx_id}
     failed_updates: Dict[str, str] = {}   # {uid_hex: error_message}
+    skipped_updates: Dict[str, str] = {}  # {uid_hex: reason}
 
-    # --- 1. Hợp nhất các cập nhật Validator (cập nhật thường + phạt) ---
-    # Ưu tiên bản cập nhật phạt nếu có xung đột UID
+    # Hợp nhất các cập nhật Validator
     all_validator_updates = validator_updates.copy()
     all_validator_updates.update(penalized_validator_updates)
-    if penalized_validator_updates:
-         logger.info(f"Merged penalty updates. Total validator updates to commit: {len(all_validator_updates)}")
+    logger.info(f"Total validator updates to commit: {len(all_validator_updates)}")
 
-    # --- 2. Commit Miner Updates (từng cái một) ---
-    logger.info("--- Committing Miner Updates ---")
-    for uid_hex, new_datum in miner_updates.items():
-        logger.debug(f"Processing miner update for UID: {uid_hex}")
-        uid_bytes = bytes.fromhex(uid_hex)
+    # --- Gom tất cả updates vào một list để xử lý chung ---
+    # List các tuple: (uid_hex, new_datum, datum_type_str)
+    all_updates: List[Tuple[str, Union[MinerDatum, ValidatorDatum], str]] = []
+    for uid_hex, datum in miner_updates.items():
+        all_updates.append((uid_hex, datum, "Miner"))
+    for uid_hex, datum in all_validator_updates.items():
+        all_updates.append((uid_hex, datum, "Validator"))
+
+    logger.info(f"Total updates to process: {len(all_updates)}")
+
+    # --- Xử lý từng update ---
+    for uid_hex, new_datum, datum_type in all_updates:
+        logger.debug(f"Processing {datum_type} update for UID: {uid_hex}")
+
+        # 1. Lấy Input UTXO từ map đã có
+        input_utxo = current_utxo_map.get(uid_hex)
+
+        if not input_utxo:
+            # Lý do không tìm thấy UTXO:
+            # - Miner/Validator mới đăng ký ở chu kỳ này? (Chưa có UTXO cũ) -> Lỗi logic chuẩn bị datum?
+            # - UTXO đã bị tiêu thụ bởi giao dịch khác?
+            # - Lỗi khi load metagraph ban đầu?
+            logger.error(f"Commit skipped: Input UTxO for {datum_type} {uid_hex} not found in the initial map.")
+            skipped_updates[uid_hex] = f"Input UTxO not found in initial map for {datum_type}"
+            continue
+
+        # 2. Thực hiện cập nhật bằng hàm update_datum
         try:
-            # Tìm UTXO đầu vào chứa datum cũ của miner này
-            input_utxo = await find_utxo_by_uid(context, script_hash, network, uid_bytes, MinerDatum)
-
-            if not input_utxo:
-                logger.error(f"Could not find input UTxO for miner {uid_hex}. Skipping update.")
-                failed_updates[uid_hex] = "Input UTxO not found"
-                continue
-
-            # Thực hiện cập nhật bằng hàm update_datum
-            logger.info(f"Submitting update transaction for miner {uid_hex}...")
-            tx_id = update_datum(
+            logger.info(f"Submitting update transaction for {datum_type} {uid_hex}...")
+            # Hàm update_datum đã bao gồm việc build, sign, submit
+            tx_id: TransactionId = update_datum( # Hàm này trả về TransactionId object
                 payment_xsk=signing_key,
                 stake_xsk=stake_signing_key,
                 script_hash=script_hash,
-                utxo=input_utxo,
-                new_datum=new_datum,
+                utxo=input_utxo, # <<< Input UTXO đã tìm thấy
+                new_datum=new_datum, # <<< Datum mới cần ghi
                 script=script_bytes,
                 context=context,
                 network=network,
                 redeemer=default_redeemer,
             )
-            logger.info(f"Successfully submitted update for miner {uid_hex}. TxID: {tx_id}")
-            submitted_tx_ids[f"miner_{uid_hex}"] = str(tx_id)
-            # Delay nhỏ để tránh rate limiting của Blockfrost nếu submit quá nhanh
-            await asyncio.sleep(1)
+            tx_id_str = str(tx_id)
+            logger.info(f"Successfully submitted update for {datum_type} {uid_hex}. TxID: {tx_id_str}")
+            submitted_tx_ids[f"{datum_type.lower()}_{uid_hex}"] = tx_id_str
+
+            # Cập nhật lại utxo_map để loại bỏ utxo vừa dùng, tránh dùng lại trong cùng batch nếu tối ưu sau này
+            # (Hiện tại không cần vì mỗi update 1 tx)
+            # del current_utxo_map[uid_hex] # Cẩn thận nếu map được dùng ở nơi khác
+
+            # Delay nhỏ giữa các lần submit để tránh rate limit
+            # Có thể cấu hình thời gian delay này
+            await asyncio.sleep(settings.CONSENSUS_COMMIT_DELAY_SECONDS or 1.5)
 
         except InvalidTransaction as e:
-            logger.error(f"Invalid Transaction committing update for miner {uid_hex}: {e} - Details: {e.response}")
-            failed_updates[uid_hex] = f"Invalid Transaction: {e}"
+            # Lỗi cụ thể từ node Cardano (thường do build sai, thiếu phí, script fail,...)
+            logger.error(f"Invalid Transaction committing update for {datum_type} {uid_hex}: {e}", exc_info=True)
+            # Ghi lại cả context lỗi nếu có thể
+            error_detail = str(e)
+            if hasattr(e, 'response') and e.response:
+                 error_detail += f" - Details: {e.response}"[:500] # Giới hạn độ dài log
+            failed_updates[uid_hex] = f"Invalid Transaction: {error_detail}"
+            # Xem xét có nên dừng lại không? Tạm thời tiếp tục với các update khác.
         except Exception as e:
-            logger.exception(f"Failed to commit update for miner {uid_hex}: {e}")
+            # Các lỗi khác (mạng khi submit, lỗi không mong muốn)
+            logger.exception(f"Failed to commit update for {datum_type} {uid_hex}: {e}")
             failed_updates[uid_hex] = str(e)
 
-    # --- 3. Commit Validator Updates (từng cái một) ---
-    logger.info("--- Committing Validator Updates ---")
-    for uid_hex, new_datum in all_validator_updates.items():
-        logger.debug(f"Processing validator update for UID: {uid_hex}")
-        uid_bytes = bytes.fromhex(uid_hex)
-        try:
-            # Tìm UTXO đầu vào chứa datum cũ của validator này
-            input_utxo = await find_utxo_by_uid(context, script_hash, network, uid_bytes, ValidatorDatum)
-
-            if not input_utxo:
-                logger.error(f"Could not find input UTxO for validator {uid_hex}. Skipping update.")
-                failed_updates[uid_hex] = "Input UTxO not found"
-                continue
-
-            # Thực hiện cập nhật
-            logger.info(f"Submitting update transaction for validator {uid_hex}...")
-            tx_id = update_datum(
-                payment_xsk=signing_key,
-                stake_xsk=stake_signing_key,
-                script_hash=script_hash,
-                utxo=input_utxo,
-                new_datum=new_datum,
-                script=script_bytes,
-                context=context,
-                network=network,
-                redeemer=default_redeemer,
-            )
-            logger.info(f"Successfully submitted update for validator {uid_hex}. TxID: {tx_id}")
-            submitted_tx_ids[f"validator_{uid_hex}"] = str(tx_id)
-            await asyncio.sleep(1) # Delay
-
-        except InvalidTransaction as e:
-            logger.error(f"Invalid Transaction committing update for validator {uid_hex}: {e} - Details: {e.response}")
-            failed_updates[uid_hex] = f"Invalid Transaction: {e}"
-        except Exception as e:
-            logger.exception(f"Failed to commit update for validator {uid_hex}: {e}")
-            failed_updates[uid_hex] = str(e)
-
-    # --- 4. Tổng kết ---
+    # --- Tổng kết ---
     total_submitted = len(submitted_tx_ids)
     total_failed = len(failed_updates)
-    logger.info(f"Commit process finished. Submitted: {total_submitted}, Failed: {total_failed}")
+    total_skipped = len(skipped_updates)
+    logger.info(f"Commit process finished. Submitted: {total_submitted}, Failed: {total_failed}, Skipped (No Input UTXO): {total_skipped}")
     if failed_updates:
-        logger.warning(f"Failed updates: {failed_updates}")
+        logger.warning(f"Failed updates details: {failed_updates}")
+    if skipped_updates:
+        logger.warning(f"Skipped updates details: {skipped_updates}")
 
-    # Có thể trả về kết quả chi tiết nếu cần
-    # return {"submitted": submitted_tx_ids, "failed": failed_updates}
+    # Có thể trả về kết quả commit nếu cần
+    # return {"submitted": submitted_tx_ids, "failed": failed_updates, "skipped": skipped_updates}
