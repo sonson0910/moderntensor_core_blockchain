@@ -22,13 +22,11 @@ def canonical_json_serialize(data: Any) -> str:
     """
     # Chuyển đổi các đối tượng dataclass/pydantic thành dict nếu cần
     if isinstance(data, list):
-        data_to_serialize = [item.model_dump(mode='json') if hasattr(item, 'model_dump') else (item.dict() if hasattr(item, 'dict') else item) for item in data]
+        data_to_serialize = [item.model_dump(mode='json') if hasattr(item, 'model_dump') else item for item in data]
     elif isinstance(data, dict):
-         data_to_serialize = {k: (v.model_dump(mode='json') if hasattr(v, 'model_dump') else (v.dict() if hasattr(v, 'dict') else v)) for k, v in data.items()}
+         data_to_serialize = {k: (v.model_dump(mode='json') if hasattr(v, 'model_dump') else v) for k, v in data.items()}
     else:
-        # Giả sử data là một object có thể dump
-        data_to_serialize = data.model_dump(mode='json') if hasattr(data, 'model_dump') else (data.dict() if hasattr(data, 'dict') else data)
-
+        data_to_serialize = data.model_dump(mode='json') if hasattr(data, 'model_dump') else data
     return json.dumps(data_to_serialize, sort_keys=True, separators=(',', ':'))
 # -----------------------------------------------------------------------------------
 
@@ -168,7 +166,7 @@ async def broadcast_scores_logic(
             submitter_vkey_cbor_hex=submitter_vkey_cbor_hex,
             signature=signature_hex # <<<--- Thêm chữ ký vào payload
         )
-        payload_dict = payload.model_dump(mode='json') if hasattr(payload, 'model_dump') else payload.dict()
+        payload_dict = payload.model_dump(mode='json')
     except Exception as pydantic_e:
         logger.exception(f"Failed to create or serialize ScoreSubmissionPayload: {pydantic_e}")
         return

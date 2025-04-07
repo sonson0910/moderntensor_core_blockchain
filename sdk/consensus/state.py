@@ -26,7 +26,7 @@ from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum
 from sdk.metagraph.metagraph_data import get_all_validator_data
 # from sdk.metagraph.hash import hash_data # Cần hàm hash
 def hash_data(data): return f"hashed_{str(data)[:10]}" # Mock hash
-from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, InvalidTransaction, VerificationKeyHash
+from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, InvalidTransaction, VerificationKeyHash, PaymentVerificationKey, TransactionBuilder, Value, TransactionOutput
 from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_JAILED, STATUS_INACTIVE
 from blockfrost import ApiError
 
@@ -648,8 +648,30 @@ async def commit_updates_logic(
     Sử dụng current_utxo_map để lấy input UTXO.
     Thực hiện mỗi update một giao dịch riêng lẻ.
     """
-    logger.info(f"Starting blockchain commit process...")
-    logger.info(f"Updates - Miners: {len(miner_updates)}, SelfValidators: {len(validator_updates)}, PenalizedValidators: {len(penalized_validator_updates)}")
+    logger.info(f"Starting blockchain commit process (1 Tx per Update)...")
+    log_details = f"Updates - Miners: {len(miner_updates)}, SelfValidators: {len(validator_updates)}, PenalizedValidators: {len(penalized_validator_updates)}"
+    logger.info(log_details)
+
+    # --- Lấy thông tin của Owner (Validator đang chạy node) ---
+    try:
+        owner_payment_vkey: PaymentVerificationKey = signing_key.to_verification_key()
+        owner_payment_key_hash: VerificationKeyHash = owner_payment_vkey.hash()
+        owner_stake_key_hash: Optional[VerificationKeyHash] = None
+        if stake_signing_key:
+            owner_stake_key_hash = stake_signing_key.to_verification_key().hash()
+
+        owner_address = Address(
+            payment_part=owner_payment_key_hash,
+            staking_part=owner_stake_key_hash,
+            network=network
+        )
+        logger.info(f"Commit Owner Address: {owner_address}")
+    except Exception as e:
+        logger.exception(f"Failed to derive owner address or keys: {e}. Aborting commit.")
+        return {"status": "failed", "reason": "Owner key/address derivation failed."}
+    
+    contract_address = Address(payment_part=script_hash, network=network)
+    logger.debug(f"Contract Address: {contract_address}")
 
     default_redeemer = Redeemer(0) # Tag 0
 
@@ -676,68 +698,99 @@ async def commit_updates_logic(
     commit_count = 0
     for uid_hex, new_datum, datum_type in all_updates:
         commit_count += 1
-        logger.debug(f"Processing commit #{commit_count}/{len(all_updates)}: {datum_type} UID: {uid_hex}")
+        log_prefix = f"Commit #{commit_count}/{len(all_updates)} ({datum_type} {uid_hex})"
+        logger.debug(f"{log_prefix}: Processing...")
 
-        # 1. Lấy Input UTXO từ map đã có
+        # 1. Lấy Input UTXO từ map
         input_utxo = current_utxo_map.get(uid_hex)
-
         if not input_utxo:
-            # Lý do không tìm thấy UTXO:
-            # - Miner/Validator mới đăng ký ở chu kỳ này? (Chưa có UTXO cũ) -> Lỗi logic chuẩn bị datum?
-            # - UTXO đã bị tiêu thụ bởi giao dịch khác?
-            # - Lỗi khi load metagraph ban đầu?
-            error_msg = f"Input UTxO not found in initial map for {datum_type}"
-            logger.error(f"Commit skipped for {datum_type} {uid_hex}: {error_msg}")
+            error_msg = "Input UTxO not found in initial map"
+            logger.error(f"{log_prefix}: Skipped - {error_msg}")
             skipped_updates[uid_hex] = error_msg
+            continue
+
+        logger.debug(f"{log_prefix}: Found Input UTxO: {input_utxo.input}")
+
+        # 2. Xây dựng Giao dịch
+        try:
+            builder = TransactionBuilder(context=context)
+
+            # a. Thêm Input Script UTXO (UTXO cũ chứa datum)
+            builder.add_script_input(
+                utxo=input_utxo,
+                script=script_bytes,
+                redeemer=default_redeemer
+            )
+            logger.debug(f"{log_prefix}: Added script input: {input_utxo.input}")
+
+            # b. Thêm Output mới (trả về contract với datum mới)
+            #    Giữ nguyên giá trị (coin + multi-asset) của input UTXO
+            output_value: Value = input_utxo.output.amount
+            builder.add_output(
+                TransactionOutput(
+                    address=contract_address,
+                    amount=output_value, # <<<--- Giữ nguyên giá trị đầy đủ
+                    datum=new_datum
+                )
+            )
+            logger.debug(f"{log_prefix}: Added script output with new datum (Amount: {output_value.coin} Lovelace)")
+
+            # c. Thêm Input từ ví Owner để trả phí và làm collateral
+            #    TransactionBuilder sẽ tự động chọn UTXO từ địa chỉ này
+            builder.add_input_address(owner_address)
+            logger.debug(f"{log_prefix}: Added owner address input: {owner_address}")
+
+            # d. Chỉ định người ký cần thiết (là hash của payment key của owner)
+            builder.required_signers = [owner_payment_key_hash]
+            logger.debug(f"{log_prefix}: Set required signer: {owner_payment_key_hash.to_primitive().hex()}")
+
+            # e. Build và Ký Giao dịch
+            #    build_and_sign sẽ tự động tính phí, cân bằng giao dịch,
+            #    tạo output trả về tiền thừa (change) cho owner_address.
+            logger.debug(f"{log_prefix}: Building and signing transaction...")
+            # Chỉ cần payment key để ký vì required_signers chỉ có payment key hash
+            # Nếu script yêu cầu stake key, cần thêm stake_signing_key vào list
+            signing_keys_list = [signing_key]
+            # if stake_signing_key and owner_stake_key_hash in builder.required_signers:
+            #    signing_keys_list.append(stake_signing_key)
+
+            signed_tx = builder.build_and_sign(
+                signing_keys=signing_keys_list,
+                change_address=owner_address,
+            )
+            logger.debug(f"{log_prefix}: Transaction built and signed. Fee: {signed_tx.transaction_body.fee}")
+
+        except Exception as build_e:
+            logger.exception(f"{log_prefix}: Failed during transaction build/sign phase: {build_e}")
+            failed_updates[uid_hex] = f"Build/Sign Error: {str(build_e)}"
             continue # Chuyển sang update tiếp theo
 
-        # 2. Thực hiện cập nhật bằng hàm update_datum
+        # 3. Submit Giao dịch
         try:
-            logger.info(f"Submitting update transaction for {datum_type} {uid_hex}...")
-            # Hàm update_datum đã bao gồm việc build, sign, submit
-            tx_id: TransactionId = update_datum( # Hàm này trả về TransactionId object
-                payment_xsk=signing_key,
-                stake_xsk=stake_signing_key,
-                script_hash=script_hash,
-                utxo=input_utxo, # <<< Input UTXO đã tìm thấy
-                new_datum=new_datum, # <<< Datum mới cần ghi
-                script=script_bytes,
-                context=context,
-                network=network,
-                redeemer=default_redeemer,
-            )
+            logger.info(f"{log_prefix}: Submitting transaction to the blockchain...")
+            tx_id: TransactionId = context.submit_tx(signed_tx) # submit_tx trả về TransactionId
             tx_id_str = str(tx_id)
-            logger.info(f"Successfully submitted update for {datum_type} {uid_hex}. TxID: {tx_id_str}")
+            logger.info(f"{log_prefix}: Successfully submitted update! TxID: {tx_id_str}")
             submitted_tx_ids[f"{datum_type.lower()}_{uid_hex}"] = tx_id_str
 
-            # Cập nhật lại utxo_map để loại bỏ utxo vừa dùng, tránh dùng lại trong cùng batch nếu tối ưu sau này
-            # (Hiện tại không cần vì mỗi update 1 tx)
-            # del current_utxo_map[uid_hex] # Cẩn thận nếu map được dùng ở nơi khác
-
-            # Delay nhỏ giữa các lần submit để tránh rate limit
-            # Có thể cấu hình thời gian delay này
-            # Delay nhỏ để tránh rate limit và cho phép UTXO được xử lý sơ bộ
+            # Delay nhỏ
             commit_delay = getattr(settings, 'CONSENSUS_COMMIT_DELAY_SECONDS', 1.5)
             logger.debug(f"Waiting {commit_delay}s before next commit...")
             await asyncio.sleep(commit_delay)
 
         except InvalidTransaction as e:
-            # Log lỗi chi tiết từ node Cardano
-            error_msg = f"Invalid Transaction: {e}"
-            logger.error(f"Invalid Transaction committing update for {datum_type} {uid_hex}: {e}", exc_info=True)
-            # Cố gắng lấy thêm chi tiết từ lỗi (có thể khác nhau tùy phiên bản pycardano/API)
+            error_msg = f"Invalid Transaction on submit: {e}"
+            logger.error(f"{log_prefix}: {error_msg}", exc_info=False) # Giảm độ chi tiết log
             error_details = getattr(e, 'response', None) or getattr(e, 'message', '')
-            if error_details:
-                error_msg += f" - Details: {str(error_details)[:500]}"
+            if error_details: error_msg += f" - Details: {str(error_details)[:500]}"
             failed_updates[uid_hex] = error_msg
-
-        except ApiError as e: # Bắt lỗi cụ thể từ Blockfrost
-            logger.error(f"Blockfrost API Error committing update for {datum_type} {uid_hex}: Status={e.status_code}, Message={e.message}", exc_info=True)
-            failed_updates[uid_hex] = f"Blockfrost API Error ({e.status_code}): {e.message}"
+        except ApiError as e:
+             logger.error(f"{log_prefix}: Blockfrost API Error on submit: Status={e.status_code}, Message={e.message}", exc_info=False)
+             failed_updates[uid_hex] = f"Blockfrost API Error ({e.status_code}): {e.message}"
         except Exception as e:
-            # Các lỗi không mong muốn khác (ví dụ: lỗi mạng khi submit, lỗi logic nội bộ)
-            logger.exception(f"Generic error committing update for {datum_type} {uid_hex}: {e}")
-            failed_updates[uid_hex] = f"Generic error: {str(e)}"
+            logger.exception(f"{log_prefix}: Generic error during transaction submission: {e}")
+            failed_updates[uid_hex] = f"Submit Error: {str(e)}"
+
 
     # --- 3. Tổng kết ---
     total_submitted = len(submitted_tx_ids)

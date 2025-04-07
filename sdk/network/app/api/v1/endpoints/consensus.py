@@ -2,23 +2,21 @@
 """
 API endpoints cho việc trao đổi thông tin đồng thuận giữa các validator.
 """
-from fastapi import APIRouter, HTTPException, Depends, status
-from typing import List, Annotated, Optional
 import logging
 import asyncio
-import json # Thêm json
-import binascii # Thêm binascii
+import json
+import binascii
+from typing import List, Annotated, Optional
+from fastapi import APIRouter, HTTPException, Depends, status
 
 from pydantic import BaseModel, Field, ValidationError
 from sdk.core.datatypes import ValidatorScore, ValidatorInfo
-# --- Import các thành phần cần thiết ---
-from pycardano import Address, VerificationKey, PaymentVerificationKey, VerificationKeyHash # Cần VerificationKey
-# ------------------------------------
+# Import các kiểu Cardano cần thiết
+from pycardano import Address, VerificationKey, PaymentVerificationKey, VerificationKeyHash
 from sdk.consensus.node import ValidatorNode
 from sdk.network.app.dependencies import get_validator_node
-# --- Import hàm serialize ---
-from sdk.consensus.p2p import canonical_json_serialize # Import helper serialize
-
+# Import hàm serialize từ p2p
+from sdk.consensus.p2p import canonical_json_serialize
 
 
 # --- Định nghĩa Pydantic Model cho Payload ---
@@ -42,67 +40,61 @@ logger = logging.getLogger(__name__)
 
 # --- Hàm xác thực chữ ký (Placeholder - Cần Verification Key) ---
 # --- Hàm xác thực chữ ký (Triển khai thực tế) ---
+# --- Hàm xác thực chữ ký (Triển khai thực tế) ---
 async def verify_payload_signature(
-    submitter_info: ValidatorInfo, # Thông tin của người gửi (chứa address)
-    payload: ScoreSubmissionPayload # Payload đầy đủ đã nhận
+    submitter_info: ValidatorInfo,
+    payload: ScoreSubmissionPayload
 ) -> bool:
-    """
-    Xác thực chữ ký trong payload.
-    1. Kiểm tra xem VKey được cung cấp có khớp với địa chỉ của người gửi không.
-    2. Nếu khớp, dùng VKey đó để xác minh chữ ký trên dữ liệu scores.
-    """
     signature_hex = payload.signature
     submitter_vkey_hex = payload.submitter_vkey_cbor_hex
-    scores_data = payload.scores # Dữ liệu gốc cần xác minh
+    scores_data = payload.scores
 
     if not signature_hex or not submitter_vkey_hex:
-        logger.warning(f"Missing signature or submitter VKey from validator {submitter_info.uid}. Verification failed.")
+        logger.warning(f"SigVerifyFail ({submitter_info.uid}): Missing signature or VKey.")
         return False
 
     logger.debug(f"Verifying signature for validator {submitter_info.uid}...")
 
     try:
-        # 1. Lấy payment hash từ địa chỉ của người gửi (đã có trong submitter_info)
+        # 1. Lấy payment hash mong đợi từ địa chỉ người gửi
         submitter_address = Address.from_primitive(submitter_info.address)
         expected_payment_hash: VerificationKeyHash = submitter_address.payment_part
-        logger.debug(f"Expected payment hash from address: {expected_payment_hash.to_primitive().hex()}")
+        logger.debug(f"Expected payment hash: {expected_payment_hash.to_primitive().hex()}")
 
-        # 2. Load VerificationKey từ CBOR hex trong payload
+        # 2. Load VKey từ payload
         try:
              received_vkey = PaymentVerificationKey.from_cbor_hex(submitter_vkey_hex)
         except Exception as key_load_e:
-             logger.error(f"Failed to load submitter VKey from CBOR hex for {submitter_info.uid}: {key_load_e}")
+             logger.error(f"SigVerifyFail ({submitter_info.uid}): Failed to load VKey from CBOR: {key_load_e}")
              return False
 
-        # 3. Xác minh VKey: Kiểm tra hash của VKey nhận được có khớp với payment_part của địa chỉ không
+        # 3. Xác minh VKey: Hash của VKey nhận được phải khớp với hash từ địa chỉ
         received_vkey_hash: VerificationKeyHash = received_vkey.hash()
-        logger.debug(f"Hash of received VKey: {received_vkey_hash.to_primitive().hex()}")
+        logger.debug(f"Received VKey hash: {received_vkey_hash.to_primitive().hex()}")
 
         if received_vkey_hash != expected_payment_hash:
-            logger.warning(f"Verification Key hash mismatch for {submitter_info.uid}. Expected {expected_payment_hash.to_primitive().hex()}, got {received_vkey_hash.to_primitive().hex()}. Possible impersonation attempt.")
+            logger.warning(f"SigVerifyFail ({submitter_info.uid}): VKey hash mismatch! Expected {expected_payment_hash.to_primitive().hex()}, got {received_vkey_hash.to_primitive().hex()}.")
             return False
-        logger.debug(f"Submitter Verification Key is valid for address {submitter_info.address}.")
+        logger.debug(f"Submitter VKey matches address hash.")
 
-        # 4. Xác minh Chữ ký: Nếu VKey hợp lệ, dùng nó để xác minh chữ ký
-        # a. Serialize lại dữ liệu scores theo đúng cách đã ký
+        # 4. Xác minh Chữ ký
         data_to_verify_str = canonical_json_serialize(scores_data)
         data_to_verify_bytes = data_to_verify_str.encode('utf-8')
-
-        # b. Decode chữ ký hex
         signature_bytes = binascii.unhexlify(signature_hex)
 
-        # c. Thực hiện xác minh bằng VKey đã load
         is_valid = received_vkey.verify(signature_bytes, data_to_verify_bytes)
         logger.debug(f"Signature verification result for {submitter_info.uid}: {is_valid}")
+        if not is_valid:
+            logger.warning(f"SigVerifyFail ({submitter_info.uid}): Invalid signature.")
         return is_valid
 
     except binascii.Error:
-         logger.error(f"Invalid signature hex format received from {submitter_info.uid}.")
+         logger.error(f"SigVerifyFail ({submitter_info.uid}): Invalid signature hex format.")
          return False
     except Exception as e:
-        # Bắt các lỗi khác (ví dụ: lỗi parse address, lỗi verify,...)
-        logger.error(f"Error during signature verification process for {submitter_info.uid}: {e}", exc_info=True)
+        logger.error(f"SigVerifyFail ({submitter_info.uid}): Error during verification: {e}", exc_info=True)
         return False
+# ---
 
 # --- API Endpoint ---
 
@@ -114,60 +106,32 @@ async def receive_scores(
     payload: ScoreSubmissionPayload,
     node: Annotated[ValidatorNode, Depends(get_validator_node)]
 ):
-    """
-    Endpoint để nhận điểm số ValidatorScore từ một validator khác.
-    Thêm logic xác thực người gửi và xác minh chữ ký (placeholder).
-    """
     submitter_uid = payload.submitter_validator_uid
     current_cycle = node.current_cycle
     payload_cycle = payload.cycle
 
     logger.info(f"API: Received scores from {submitter_uid} for cycle {payload_cycle} (Node cycle: {current_cycle})")
 
-    # --- Xác thực người gửi ---
+    # Xác thực người gửi (logic như cũ)
     submitter_info = node.validators_info.get(submitter_uid)
-    if not submitter_info or getattr(submitter_info, 'status', 1) == 0: # Kiểm tra cả status nếu có
-        logger.warning(f"Received scores from unknown or inactive validator UID: {submitter_uid}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown or inactive submitter validator UID: {submitter_uid}"
-        )
+    if not submitter_info or getattr(submitter_info, 'status', 1) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown/inactive submitter: {submitter_uid}")
 
-    # Kiểm tra chu kỳ
-    # Chỉ chấp nhận điểm của chu kỳ hiện tại
+    # Kiểm tra chu kỳ (chỉ chấp nhận chu kỳ hiện tại)
     if payload_cycle != current_cycle:
-        logger.warning(f"Received scores for wrong cycle {payload_cycle} from {submitter_uid} (current: {current_cycle})")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid cycle: {payload_cycle}. Current cycle is {current_cycle}."
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid cycle: {payload_cycle}. Current: {current_cycle}.")
 
-    # --- Xác minh chữ ký ---
-    is_signature_valid = await verify_payload_signature(submitter_info, payload) # Truyền cả payload
-    if not is_signature_valid:
-        logger.warning(f"Invalid signature or VKey from {submitter_uid} for cycle {payload_cycle}.")
+    # Xác minh chữ ký (gọi hàm mới)
+    if not await verify_payload_signature(submitter_info, payload):
+        logger.warning(f"Rejected scores from {submitter_uid} due to invalid signature/VKey.")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature or verification key.")
-    logger.debug(f"Signature verified (placeholder) for scores from {submitter_uid}")
-    # ----------------------
+    logger.debug(f"Signature verified for scores from {submitter_uid}")
 
-    # Gọi phương thức trên node để thêm điểm số nhận được
+    # Thêm điểm số đã xác minh (logic như cũ)
     try:
-        await node.add_received_score(
-            submitter_uid,
-            payload_cycle,
-            payload.scores
-        )
-        logger.info(f"Successfully processed {len(payload.scores)} scores from {submitter_uid} for cycle {payload_cycle}")
+        await node.add_received_score(submitter_uid, payload_cycle, payload.scores)
+        logger.info(f"Successfully processed {len(payload.scores)} scores from {submitter_uid}")
         return {"message": f"Accepted {len(payload.scores)} scores from {submitter_uid}."}
-    except ValidationError as ve: # Bắt lỗi validation của Pydantic nếu add_received_score có validation
-        logger.error(f"API Validation Error processing scores from {submitter_uid}: {ve}")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid score data format: {ve}"
-        )
-    except Exception as e:
-        logger.exception(f"API Error processing received scores from {submitter_uid}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error processing scores: {e}"
-        )
+    except Exception as e: # Bắt lỗi chung khi thêm điểm
+        logger.exception(f"API Error processing scores from {submitter_uid} after verification: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error processing scores: {e}")
