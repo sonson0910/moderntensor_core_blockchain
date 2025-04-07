@@ -10,7 +10,7 @@ import asyncio
 import httpx # Đảm bảo đã import httpx
 import json
 
-from sdk.core.datatypes import MinerResult, TaskAssignment, ValidatorScore, ValidatorInfo
+from sdk.core.datatypes import MinerResult, TaskAssignment, ValidatorScore, ValidatorInfo, PaymentVerificationKey
 from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
 
 logger = logging.getLogger(__name__)
@@ -105,9 +105,7 @@ def score_results_logic(
 async def broadcast_scores_logic(
     local_scores: Dict[str, List[ValidatorScore]],
     self_validator_info: ValidatorInfo,
-    # --- Thêm signing_key vào tham số ---
     signing_key: PaymentSigningKey,
-    # ----------------------------------
     active_validators: List[ValidatorInfo],
     current_cycle: int,
     http_client: httpx.AsyncClient
@@ -134,23 +132,26 @@ async def broadcast_scores_logic(
 
     # --- 2. Ký dữ liệu ---
     signature_hex: Optional[str] = None
+    submitter_vkey_cbor_hex: Optional[str] = None
     try:
-        # Sử dụng hàm serialize ổn định
+        # a. Lấy PaymentVerificationKey từ signing_key
+        vkey: PaymentVerificationKey = signing_key.to_verification_key()
+        submitter_vkey_cbor_hex = vkey.to_cbor_hex() # <<<--- Lấy VKey CBOR hex
+        logger.debug(f"Submitter VKey CBOR Hex: {submitter_vkey_cbor_hex[:15]}...")
+
+        # b. Serialize dữ liệu điểm số
         data_to_sign_str = canonical_json_serialize(local_scores_list)
         data_to_sign_bytes = data_to_sign_str.encode('utf-8')
 
-        # Ký bằng PaymentSigningKey (là ExtendedSigningKey)
-        # Cần lấy Ed25519SigningKey từ ExtendedSigningKey nếu pycardano yêu cầu
-        # Hoặc nếu ExtendedSigningKey có phương thức sign trực tiếp (kiểm tra lại pycardano)
-        # Giả sử ExtendedSigningKey có phương thức sign:
+        # c. Ký dữ liệu
         signature_bytes = signing_key.sign(data_to_sign_bytes)
         signature_hex = binascii.hexlify(signature_bytes).decode('utf-8')
-        logger.debug(f"Generated signature for broadcast payload: {signature_hex[:10]}...")
+        logger.debug(f"Generated signature: {signature_hex[:10]}...")
 
     except Exception as sign_e:
         logger.error(f"Failed to sign broadcast payload: {sign_e}")
         # Quyết định: Có nên gửi mà không có chữ ký không? (Không khuyến khích)
-        # return # Hoặc logger.error và gửi đi signature=None
+        return # Hoặc logger.error và gửi đi signature=None
 
     # -----------------------
 
@@ -164,6 +165,7 @@ async def broadcast_scores_logic(
             scores=local_scores_list,
             submitter_validator_uid=self_uid,
             cycle=current_cycle,
+            submitter_vkey_cbor_hex=submitter_vkey_cbor_hex,
             signature=signature_hex # <<<--- Thêm chữ ký vào payload
         )
         payload_dict = payload.model_dump(mode='json') if hasattr(payload, 'model_dump') else payload.dict()
