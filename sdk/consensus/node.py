@@ -88,7 +88,7 @@ class ValidatorNode:
         self.current_utxo_map: Dict[str, UTxO] = {} # Map: uid_hex -> UTxO object
         self.current_cycle: int = 0 # TODO: Nên load từ trạng thái cuối cùng on-chain/db
         self.tasks_sent: Dict[str, TaskAssignment] = {}
-        self.results_received: Dict[str, List[MinerResult]] = {}
+        self.results_received: Dict[str, List[MinerResult]] = defaultdict(list)
         self.validator_scores: Dict[str, List[ValidatorScore]] = {} # Điểm do mình chấm
 
         # P2P score sharing state
@@ -278,13 +278,20 @@ class ValidatorNode:
         )
 
     # --- Giao Task ---
+    # --- 1. Đánh dấu _create_task_data ---
     def _create_task_data(self, miner_uid: str) -> Any:
-        """Tạo dữ liệu task cụ thể."""
-        # TODO: Triển khai logic tạo task phù hợp với ứng dụng AI của bạn
-        # Ví dụ: Chọn ngẫu nhiên một batch dữ liệu, yêu cầu dự đoán/huấn luyện
-        logger.debug(f"Creating task data for miner {miner_uid}")
-        # Trả về dữ liệu task (ví dụ: dict, object,...)
-        return {"type": "inference", "input_data": f"data_{random.randint(1,1000)}", "model_id": "model_xyz"}
+        """
+        (Trừu tượng/Cần Override) Tạo dữ liệu task cụ thể cho một miner.
+
+        Lớp Validator kế thừa cho từng Subnet PHẢI override phương thức này
+        để định nghĩa nội dung và định dạng task phù hợp với bài toán AI.
+
+        Raises:
+            NotImplementedError: Nếu không được override.
+        """
+        logger.error(f"'_create_task_data' must be implemented by the inheriting Validator class for miner {miner_uid}.")
+        raise NotImplementedError("Subnet Validator must implement task creation logic.")
+
 
     async def _send_task_via_network_async(self, miner_endpoint: str, task: TaskModel) -> bool:
         """
@@ -419,89 +426,44 @@ class ValidatorNode:
 
 
     # --- Nhận và Chấm điểm Kết quả ---
-    async def _listen_for_results_async(self, timeout: float) -> Dict[str, List[MinerResult]]:
-        """
-        (MOCK) Lắng nghe/Chờ kết quả trả về từ miner trong khoảng thời gian timeout.
-        *** Cần thay thế bằng logic nhận kết quả qua mạng thực tế ***
-        """
-        logger.info(f"  (Mock Async) Starting to listen for miner results (timeout: {timeout:.1f}s)...")
-        start_listen_time = time.time()
-        received_results: Dict[str, List[MinerResult]] = defaultdict(list)
-
-        # Danh sách các task ID đang chờ kết quả
-        tasks_awaiting = list(self.tasks_sent.keys())
-        if not tasks_awaiting:
-            logger.info("  (Mock Async) No tasks were sent, nothing to listen for.")
-            return {}
-
-        # Giả lập việc chờ đợi và nhận kết quả ngẫu nhiên
-        # Trong thực tế, bạn sẽ dùng một cơ chế khác (API endpoint, queue, websocket...)
-        wait_step = 1.0 # Kiểm tra mỗi giây
-        while time.time() - start_listen_time < timeout:
-            # Giả lập kiểm tra xem có kết quả mới không
-            if tasks_awaiting and random.random() < 0.3: # 30% cơ hội nhận được 1 kết quả mỗi giây (ví dụ)
-                task_id_to_receive = random.choice(tasks_awaiting)
-                assignment = self.tasks_sent.get(task_id_to_receive)
-
-                if assignment:
-                    # Tạo kết quả giả lập
-                    # TODO: Cấu trúc result_data cần khớp với những gì miner thực sự trả về
-                    mock_loss = random.uniform(0.01, 0.9) # Loss ngẫu nhiên
-                    result_data = {
-                        "output": [random.random() for _ in range(5)], # Output vector ví dụ
-                        "loss": mock_loss,
-                        "processing_time": random.uniform(0.5, 5.0)
-                    }
-                    miner_result = MinerResult(
-                        task_id=task_id_to_receive,
-                        miner_uid=assignment.miner_uid,
-                        result_data=result_data,
-                        timestamp_received=time.time()
-                    )
-                    received_results[task_id_to_receive].append(miner_result)
-                    logger.info(f"  (Mock Async) Received result for task {task_id_to_receive} from Miner {assignment.miner_uid}")
-                    tasks_awaiting.remove(task_id_to_receive) # Xóa task đã nhận kết quả khỏi danh sách chờ
-
-            if not tasks_awaiting: # Nếu đã nhận đủ kết quả cho các task đã gửi
-                logger.info("  (Mock Async) Received results for all sent tasks.")
-                break
-
-            await asyncio.sleep(wait_step) # Chờ bước tiếp theo
-
-        # Ghi log các task không nhận được kết quả sau timeout
-        if tasks_awaiting:
-            for task_id in tasks_awaiting:
-                assignment = self.tasks_sent.get(task_id)
-                if assignment:
-                    logger.warning(f"  (Mock Async) Timeout waiting for result for task {task_id} from Miner {assignment.miner_uid}")
-
-        logger.info(f"  (Mock Async) Finished listening for results. Received for {len(received_results)} tasks.")
-        return dict(received_results) # Trả về dict thường thay vì defaultdict
+    # --- 2. Sửa receive_results và bỏ _listen_for_results_async ---
+    async def _listen_for_results_async(self, timeout: float):
+        # <<<--- Bỏ hoàn toàn logic mock này ---<<<
+        # Thay vào đó, hàm receive_results sẽ chỉ đơn giản là chờ một khoảng thời gian
+        # trong khi kết quả được thêm vào self.results_received thông qua API endpoint.
+        pass
 
 
     async def receive_results(self, timeout: Optional[float] = None):
         """
-        Chờ và nhận kết quả từ các miner đã được giao task.
-
-        Args:
-            timeout: Thời gian tối đa chờ đợi kết quả (giây).
-                     Nếu None, sử dụng giá trị mặc định từ settings.
+        Chờ kết quả từ miner trong một khoảng thời gian.
+        Kết quả thực tế được nhận và thêm vào self.results_received
+        thông qua API endpoint '/v1/miner/submit_result'.
         """
         if timeout is None:
-            # Lấy timeout từ settings hoặc đặt giá trị mặc định hợp lý
-            # Ví dụ: timeout bằng một phần nhỏ của thời gian gửi điểm
-            receive_timeout_default = self.settings.CONSENSUS_SEND_SCORE_OFFSET_MINUTES * 60 * 0.5 # Chờ 1/2 thời gian trước khi gửi điểm
+            receive_timeout_default = self.settings.CONSENSUS_SEND_SCORE_OFFSET_MINUTES * 60 * 0.5 # Ví dụ
             timeout = receive_timeout_default
-            # Hoặc timeout = self.settings.CONSENSUS_RECEIVE_RESULT_TIMEOUT # Thêm tham số này vào settings
 
-        logger.info(f"[V:{self.info.uid}] Waiting for results (timeout: {timeout:.1f}s)...")
-        self.results_received = {} # Xóa kết quả cũ trước khi nhận mới
-        try:
-            self.results_received = await self._listen_for_results_async(timeout)
-            logger.info(f"Finished receiving results. Got results for {len(self.results_received)} tasks.")
-        except Exception as e:
-            logger.exception(f"Error during listening for results: {e}")
-            self.results_received = {} # Đảm bảo results_received là dict rỗng nếu có lỗi
+        logger.info(f"[V:{self.info.uid}] Waiting {timeout:.1f}s for miner results via API endpoint...")
+
+        # Đơn giản là đợi hết timeout. Kết quả sẽ được tích lũy trong self.results_received.
+        await asyncio.sleep(timeout)
+
+        # Không cần xóa self.results_received ở đây, vì nó được tích lũy qua API.
+        # Có thể xóa ở đầu chu kỳ mới hoặc trước khi bắt đầu chờ.
+        # => Nên xóa ở đầu hàm này để chỉ xử lý kết quả của chu kỳ hiện tại
+        # Tuy nhiên, nếu API nhận kết quả chậm, có thể kết quả chu kỳ trước bị xử lý ở chu kỳ sau?
+        # => Cần cơ chế quản lý kết quả theo chu kỳ trong add_miner_result.
+
+        # Tạm thời: Giả định API đủ nhanh và chỉ xử lý kết quả đã nhận trong khoảng timeout
+        async with self.results_received_lock: # Lock khi đọc số lượng
+            received_count = sum(len(res_list) for res_list in self.results_received.values())
+            task_ids_with_results = list(self.results_received.keys())
+
+        logger.info(f"Finished waiting period. Total results accumulated: {received_count} for tasks: {task_ids_with_results}")
+        # Logic xử lý kết quả sẽ diễn ra ở bước score_miner_results
+    # -----------------------------------------------------------
+
 
 
     def score_miner_results(self):
@@ -512,6 +474,68 @@ class ValidatorNode:
             tasks_sent=self.tasks_sent,
             validator_uid=self.info.uid # Truyền UID dạng hex string
         )
+
+    # --- 3. Thêm phương thức add_miner_result ---
+    async def add_miner_result(self, result: MinerResult):
+        """
+        (Thread/Async Safe) Thêm một kết quả nhận được từ miner vào bộ nhớ.
+        Được gọi bởi API endpoint.
+        """
+        # --- Validation cơ bản ---
+        if not result or not result.task_id or not result.miner_uid:
+            logger.warning("Attempted to add invalid miner result (missing fields).")
+            return False
+        # Kiểm tra xem task_id có phải là task mình đã gửi không?
+        if result.task_id not in self.tasks_sent:
+            logger.warning(f"Received result for unknown or unassigned task_id: {result.task_id} from miner {result.miner_uid}.")
+            # Có thể bỏ qua hoặc lưu vào một khu vực riêng để phân tích
+            return False # Tạm thời bỏ qua
+        # Kiểm tra xem miner gửi có đúng là miner được giao task không?
+        if self.tasks_sent[result.task_id].miner_uid != result.miner_uid:
+             logger.warning(f"Received result for task {result.task_id} from wrong miner {result.miner_uid}. Expected {self.tasks_sent[result.task_id].miner_uid}.")
+             return False # Bỏ qua
+        # -----------------------
+
+        # --- Thêm kết quả vào dict (có khóa) ---
+        async with self.results_received_lock:
+            # Kiểm tra xem kết quả cho task này đã nhận chưa (tránh trùng lặp?)
+            # Hoặc cho phép nhiều kết quả nếu miner gửi lại? -> Tạm thời cho phép
+            self.results_received[result.task_id].append(result)
+            logger.info(f"Added result for task {result.task_id} from miner {result.miner_uid}.")
+            return True
+        # ------------------------------------
+    # -----------------------------------------
+
+    def score_miner_results(self):
+        """Chấm điểm kết quả nhận được."""
+        # --- Xóa điểm cũ trước khi chấm ---
+        self.validator_scores = {}
+        # ---------------------------------
+
+        # --- Lock khi đọc self.results_received ---
+        # Tạo bản copy để tránh giữ lock quá lâu nếu scoring chậm
+        results_to_score = {}
+        # Dùng asyncio.run_coroutine_threadsafe nếu gọi từ thread khác?
+        # Hoặc đảm bảo score_miner_results chạy trong cùng event loop
+        # Giả sử chạy trong cùng event loop, chỉ cần lock async
+        # async with self.results_received_lock: # Không cần lock nếu chỉ đọc sau khi wait xong
+        #     results_to_score = self.results_received.copy()
+        # => Không cần lock nếu receive_results đợi xong mới gọi score
+
+        # Lấy bản copy để xử lý
+        results_to_score = self.results_received.copy()
+        # Reset lại dict nhận kết quả cho chu kỳ sau
+        self.results_received = defaultdict(list)
+
+
+        # Gọi hàm logic từ scoring.py (truyền bản copy)
+        self.validator_scores = score_results_logic(
+            results_received=results_to_score, # <<<--- Dùng bản copy
+            tasks_sent=self.tasks_sent,
+            validator_uid=self.info.uid
+        )
+        # Hàm score_results_logic sẽ gọi _calculate_score_from_result (cần override)
+
 
     async def add_received_score(self, submitter_uid: str, cycle: int, scores: List[ValidatorScore]):
         """Thêm điểm số nhận được từ validator khác vào bộ nhớ (async safe)."""
