@@ -1,6 +1,6 @@
 # sdk/metagraph/metagraph_data.py
 import logging
-from typing import List, Dict, Any, Optional, Type
+from typing import List, Dict, Any, Optional, Type, Tuple
 from pycardano import (
     Address, BlockFrostChainContext, UTxO, PlutusData, ScriptHash, Network
 )

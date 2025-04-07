@@ -189,14 +189,31 @@ class ValidatorNode:
             # --- Chuyển đổi Validator dicts sang ValidatorInfo ---
             temp_validators_info = {}
             for val_dict in all_validator_dicts:
-                 try:
+                original_utxo_val = None # Placeholder
+                try:
                     datum = val_dict.get("datum", {})
                     uid_hex = datum.get("uid")
                     if not uid_hex: continue
 
+                    # --- Lấy address bytes từ datum và decode ---
+                    # Lưu ý: get_all_validator_data hiện trả về hex string cho bytes
+                    wallet_addr_hash_hex = datum.get("wallet_addr_hash") # Lấy hex string từ dict trả về
+                    validator_address_str = None
+                    wallet_addr_hash_bytes = None # Biến lưu bytes gốc nếu cần
+                    if wallet_addr_hash_hex:
+                        try:
+                            wallet_addr_hash_bytes = bytes.fromhex(wallet_addr_hash_hex)
+                            validator_address_str = wallet_addr_hash_bytes.decode('utf-8')
+                        except (ValueError, UnicodeDecodeError):
+                            logger.warning(f"Could not decode wallet_addr_hash bytes/hex for UID {uid_hex}.")
+                            validator_address_str = f"addr_undecodable_{uid_hex[:8]}..."
+                    else:
+                        validator_address_str = f"addr_missing_{uid_hex[:8]}..."
+                    # ------------------------------------------
+
                     temp_validators_info[uid_hex] = ValidatorInfo(
                         uid=uid_hex,
-                        address=datum.get("address", f"addr_{uid_hex[:8]}..."),
+                        address=validator_address_str,
                         api_endpoint=datum.get("api_endpoint"),
                         trust_score=float(datum.get("trust_score", 0.0)),
                         weight=float(datum.get("weight", 0.0)),
@@ -205,10 +222,10 @@ class ValidatorNode:
                         version=int(datum.get("version", 0)),
                         status=int(datum.get("status", STATUS_INACTIVE)),
                         registration_slot=int(datum.get("registration_slot", 0)),
-                        wallet_addr_hash=datum.get("wallet_addr_hash"),
+                        wallet_addr_hash=wallet_addr_hash_bytes,
                         performance_history_hash=datum.get("performance_history_hash"),
                     )
-                 except Exception as e:
+                except Exception as e:
                     logger.warning(f"Failed to parse Validator data dict for UID {datum.get('uid', 'N/A')}: {e}", exc_info=False)
                     logger.debug(f"Problematic validator data dict: {val_dict}")
 
@@ -220,7 +237,7 @@ class ValidatorNode:
             self_uid_hex = self.info.uid.hex() if isinstance(self.info.uid, bytes) else self.info.uid
             if self_uid_hex in self.validators_info:
                  loaded_info = self.validators_info[self_uid_hex]
-                 self.info.address = loaded_info.address
+                #  self.info.address = loaded_info.address
                  self.info.api_endpoint = loaded_info.api_endpoint
                  self.info.trust_score = loaded_info.trust_score
                  self.info.weight = loaded_info.weight

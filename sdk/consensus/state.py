@@ -26,7 +26,7 @@ from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum
 from sdk.metagraph.metagraph_data import get_all_validator_data
 # from sdk.metagraph.hash import hash_data # Cần hàm hash
 def hash_data(data): return f"hashed_{str(data)[:10]}" # Mock hash
-from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, InvalidTransaction
+from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, InvalidTransaction, VerificationKeyHash
 from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_JAILED, STATUS_INACTIVE
 
 EPSILON=1e-9
@@ -431,26 +431,32 @@ async def verify_and_penalize_logic(
             # Cần lấy Datum cũ nhất của validator này (có thể không phải là datum từ previous_cycle nếu họ bị trễ)
             # Hoặc đơn giản là tạo datum mới dựa trên trạng thái hiện tại trong validator_info
             try:
+                penalized_address_str = validator_info.address
+                if not penalized_address_str:
+                    logger.error(f"Missing address for penalized validator {uid_hex}. Cannot build penalty datum.")
+                    continue
+                penalized_wallet_addr_hash_bytes = penalized_address_str.encode('utf-8')
+                 
                  # Lấy các thông tin khác từ validator_info (đã load đầu chu kỳ)
-                 datum_to_commit = ValidatorDatum(
-                      uid=bytes.fromhex(uid_hex),
-                      subnet_uid=validator_info.subnet_uid,
-                      stake=int(validator_info.stake),
-                      scaled_last_performance=int(getattr(validator_info, 'last_performance', 0.0) * settings.METAGRAPH_DATUM_INT_DIVISOR), # Giữ performance cũ
-                      scaled_trust_score=int(new_trust_score * settings.METAGRAPH_DATUM_INT_DIVISOR), # <<< Trust mới bị phạt
-                      accumulated_rewards=int(getattr(validator_info, 'accumulated_rewards', 0)), # Giữ rewards cũ
-                      last_update_slot=current_cycle, # <<< Cập nhật slot là chu kỳ hiện tại
-                      performance_history_hash=getattr(validator_info, 'performance_history_hash', None), # Giữ hash cũ
-                      wallet_addr_hash=getattr(validator_info, 'wallet_addr_hash', b'placeholder'), # Giữ hash cũ
-                      status=new_status, # <<< Status mới (có thể là JAILED)
-                      registration_slot=validator_info.registration_slot,
-                      api_endpoint=validator_info.api_endpoint.encode('utf-8') if validator_info.api_endpoint else None,
-                      version=validator_info.version
-                 )
-                 penalized_validator_datums[uid_hex] = datum_to_commit
-                 logger.info(f"Prepared penalty datum update for {uid_hex}.")
+                datum_to_commit = ValidatorDatum(
+                    uid=bytes.fromhex(uid_hex),
+                    subnet_uid=validator_info.subnet_uid,
+                    stake=int(validator_info.stake),
+                    scaled_last_performance=int(getattr(validator_info, 'last_performance', 0.0) * settings.METAGRAPH_DATUM_INT_DIVISOR), # Giữ performance cũ
+                    scaled_trust_score=int(new_trust_score * settings.METAGRAPH_DATUM_INT_DIVISOR), # <<< Trust mới bị phạt
+                    accumulated_rewards=int(getattr(validator_info, 'accumulated_rewards', 0)), # Giữ rewards cũ
+                    last_update_slot=current_cycle, # <<< Cập nhật slot là chu kỳ hiện tại
+                    performance_history_hash=getattr(validator_info, 'performance_history_hash', None), # Giữ hash cũ
+                    wallet_addr_hash=penalized_wallet_addr_hash_bytes, # Giữ hash cũ
+                    status=new_status, # <<< Status mới (có thể là JAILED)
+                    registration_slot=validator_info.registration_slot,
+                    api_endpoint=validator_info.api_endpoint.encode('utf-8') if validator_info.api_endpoint else None,
+                    version=validator_info.version
+                )
+                penalized_validator_datums[uid_hex] = datum_to_commit
+                logger.info(f"Prepared penalty datum update for {uid_hex}.")
             except Exception as build_e:
-                 logger.error(f"Failed to build penalty datum for {uid_hex}: {build_e}")
+                logger.error(f"Failed to build penalty datum for {uid_hex}: {build_e}")
 
 
     except Exception as e:
@@ -572,7 +578,8 @@ async def prepare_validator_updates_logic( # <<<--- Chuyển thành async vì c�
             stake_current = int(self_validator_info.stake)
             subnet_uid_current = self_validator_info.subnet_uid
             registration_slot_current = getattr(self_validator_info, 'registration_slot', registration_slot_old) # Giữ slot gốc
-            wallet_addr_hash_current = wallet_addr_hash_old # Giả sử hash ví không đổi, hoặc lấy từ info nếu có
+            validator_address_str = self_validator_info.address
+            wallet_addr_hash_bytes = validator_address_str.encode('utf-8') # Encode address thành bytes
             api_endpoint_current = self_validator_info.api_endpoint
             status_current = getattr(self_validator_info, 'status', status_old) # Lấy status hiện tại (có thể đã bị phạt)
             version_current = max(1, getattr(self_validator_info, 'version', version_old)) # Lấy version hiện tại
@@ -609,7 +616,7 @@ async def prepare_validator_updates_logic( # <<<--- Chuyển thành async vì c�
                 accumulated_rewards=accumulated_rewards_new,
                 last_update_slot=current_cycle, # Ghi lại chu kỳ hiện tại
                 performance_history_hash=perf_history_hash,
-                wallet_addr_hash=wallet_addr_hash_current,
+                wallet_addr_hash=wallet_addr_hash_bytes,
                 status=status_current,
                 registration_slot=registration_slot_current,
                 api_endpoint=api_endpoint_current.encode('utf-8') if api_endpoint_current else None,
