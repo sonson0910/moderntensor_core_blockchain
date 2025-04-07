@@ -9,7 +9,6 @@ import cbor2 # Vẫn cần cho trường hợp datum không chuẩn
 # Import các lớp Datum đã cập nhật
 from .metagraph_datum import MinerDatum, ValidatorDatum, SubnetDynamicDatum, SubnetStaticDatum
 
-
 logger = logging.getLogger(__name__)
 
 # --- Hàm lấy dữ liệu cho Miners ---
@@ -17,7 +16,7 @@ async def get_all_miner_data(
     context: BlockFrostChainContext,
     script_hash: ScriptHash,
     network: Network
-) -> List[Dict[str, Any]]:
+) -> List[Tuple[UTxO, Dict[str, Any]]]:
     """
     Lấy và decode tất cả dữ liệu MinerDatum từ các UTXO tại địa chỉ script.
 
@@ -31,12 +30,12 @@ async def get_all_miner_data(
         và Datum đã được decode thành các trường dễ đọc. Trả về list rỗng nếu
         không tìm thấy UTXO hợp lệ hoặc có lỗi xảy ra.
     """
-    miner_data_list = []
+    miner_data_list: List[Tuple[UTxO, Dict[str, Any]]] = []
     contract_address = Address(payment_part=script_hash, network=network)
     logger.info(f"Fetching Miner UTxOs from address: {contract_address}")
 
     try:
-        utxos = await context.utxos(str(contract_address)) # Sử dụng await nếu context.utxos là async
+        utxos: List[UTxO] = await context.utxos(str(contract_address))
         logger.info(f"Found {len(utxos)} potential UTxOs at miner contract address.")
     except Exception as e:
         logger.exception(f"Failed to fetch UTxOs for address {contract_address}: {e}")
@@ -65,16 +64,8 @@ async def get_all_miner_data(
                     "api_endpoint": getattr(decoded_datum, 'api_endpoint', b'').decode('utf-8', errors='replace') or None, # decode bytes thành str hoặc None
                 }
 
-                # Lấy thông tin cơ bản của UTXO
-                utxo_info = {
-                    "tx_id": str(utxo.input.transaction_id),
-                    "index": utxo.input.index,
-                    "amount": utxo.output.amount.coin,
-                    "datum": datum_dict,
-                    # Có thể thêm multi_asset nếu cần:
-                    # "multi_asset": utxo.output.amount.multi_asset.to_primitive()
-                }
-                miner_data_list.append(utxo_info)
+                # --- Thêm tuple (UTxO, datum_dict) vào list ---
+                miner_data_list.append((utxo, datum_dict))
 
             except Exception as e:
                 logger.warning(f"Failed to decode or process MinerDatum for UTxO {utxo.input}: {e}", exc_info=True)
@@ -94,7 +85,7 @@ async def get_all_validator_data(
     context: BlockFrostChainContext,
     script_hash: ScriptHash,
     network: Network
-) -> List[Dict[str, Any]]:
+) -> List[Tuple[UTxO, Dict[str, Any]]]:
     """
     Lấy và decode tất cả dữ liệu ValidatorDatum từ các UTXO tại địa chỉ script.
 
@@ -107,12 +98,12 @@ async def get_all_validator_data(
         Một list các dictionary chứa thông tin UTXO và ValidatorDatum đã decode.
         Trả về list rỗng nếu có lỗi hoặc không tìm thấy.
     """
-    validator_data_list = []
+    validator_data_list: List[Tuple[UTxO, Dict[str, Any]]] = []
     contract_address = Address(payment_part=script_hash, network=network)
     logger.info(f"Fetching Validator UTxOs from address: {contract_address}")
 
     try:
-        utxos = await context.utxos(str(contract_address))
+        utxos: List[UTxO] = await context.utxos(str(contract_address))
         logger.info(f"Found {len(utxos)} potential UTxOs at validator contract address.")
     except Exception as e:
         logger.exception(f"Failed to fetch UTxOs for address {contract_address}: {e}")
@@ -138,13 +129,8 @@ async def get_all_validator_data(
                     "api_endpoint": getattr(decoded_datum, 'api_endpoint', b'').decode('utf-8', errors='replace') or None, # decode bytes
                 }
 
-                utxo_info = {
-                    "tx_id": str(utxo.input.transaction_id),
-                    "index": utxo.input.index,
-                    "amount": utxo.output.amount.coin,
-                    "datum": datum_dict,
-                }
-                validator_data_list.append(utxo_info)
+                # --- Thêm tuple (UTxO, datum_dict) vào list ---
+                validator_data_list.append((utxo, datum_dict))
 
             except Exception as e:
                 logger.warning(f"Failed to decode or process ValidatorDatum for UTxO {utxo.input}: {e}", exc_info=True)
