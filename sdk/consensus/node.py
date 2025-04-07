@@ -37,7 +37,7 @@ from sdk.core.datatypes import (
 # Pydantic model for API communication
 from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
 # PyCardano types
-from pycardano import (Network, Address, ScriptHash, BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId)
+from pycardano import (Network, Address, ScriptHash, BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, UTxO)
 
 # --- Import các hàm logic đã tách ra ---
 from .selection import select_miners_logic
@@ -85,6 +85,7 @@ class ValidatorNode:
         # State variables
         self.miners_info: Dict[str, MinerInfo] = {}
         self.validators_info: Dict[str, ValidatorInfo] = {}
+        self.current_utxo_map: Dict[str, UTxO] = {} # Map: uid_hex -> UTxO object
         self.current_cycle: int = 0 # TODO: Nên load từ trạng thái cuối cùng on-chain/db
         self.tasks_sent: Dict[str, TaskAssignment] = {}
         self.results_received: Dict[str, List[MinerResult]] = {}
@@ -133,6 +134,9 @@ class ValidatorNode:
         datum_divisor = self.settings.METAGRAPH_DATUM_INT_DIVISOR
         max_history_len = self.settings.CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN
 
+        self.current_utxo_map = {}
+        temp_miners_info = {}
+        temp_validators_info = {}
         try:
             # Gọi đồng thời để tải dữ liệu
             miner_data_task = get_all_miner_data(self.context, self.script_hash, network)
@@ -154,11 +158,9 @@ class ValidatorNode:
             logger.info(f"Fetched {len(all_miner_dicts)} miner entries and {len(all_validator_dicts)} validator entries.")
 
             # --- Chuyển đổi Miner dicts sang MinerInfo ---
-            temp_miners_info = {}
-            for miner_dict in all_miner_dicts:
+            for utxo_object, datum_dict in all_miner_dicts:
                 try:
-                    datum = miner_dict.get("datum", {})
-                    uid_hex = datum.get("uid")
+                    uid_hex = datum_dict.get("uid")
                     if not uid_hex: continue
 
                     # TODO: Triển khai logic load và giải mã performance_history_hash
@@ -168,36 +170,36 @@ class ValidatorNode:
 
                     temp_miners_info[uid_hex] = MinerInfo(
                         uid=uid_hex,
-                        address=datum.get("address", f"addr_{uid_hex[:8]}..."),
-                        api_endpoint=datum.get("api_endpoint"),
-                        trust_score=float(datum.get("trust_score", 0.0)),
-                        weight=float(datum.get("weight", 0.0)),
-                        stake=int(datum.get("stake", 0)),
-                        last_selected_time=int(datum.get("last_selected_cycle", -1)),
+                        address=datum_dict.get("address", f"addr_{uid_hex[:8]}..."),
+                        api_endpoint=datum_dict.get("api_endpoint"),
+                        trust_score=float(datum_dict.get("trust_score", 0.0)),
+                        weight=float(datum_dict.get("weight", 0.0)),
+                        stake=int(datum_dict.get("stake", 0)),
+                        last_selected_time=int(datum_dict.get("last_selected_cycle", -1)),
                         performance_history=perf_history[-max_history_len:],
-                        subnet_uid=int(datum.get("subnet_uid", -1)),
-                        version=int(datum.get("version", 0)),
-                        status=int(datum.get("status", STATUS_INACTIVE)), # Lấy status
-                        registration_slot=int(datum.get("registration_slot", 0)),
-                        wallet_addr_hash=datum.get("wallet_addr_hash"),
-                        performance_history_hash=datum.get("performance_history_hash"),
+                        subnet_uid=int(datum_dict.get("subnet_uid", -1)),
+                        version=int(datum_dict.get("version", 0)),
+                        status=int(datum_dict.get("status", STATUS_INACTIVE)), # Lấy status
+                        registration_slot=int(datum_dict.get("registration_slot", 0)),
+                        wallet_addr_hash=datum_dict.get("wallet_addr_hash"),
+                        performance_history_hash=datum_dict.get("performance_history_hash"),
                     )
+
+                    # --- Lưu UTXO vào map ---
+                    self.current_utxo_map[uid_hex] = utxo_object
                 except Exception as e:
-                    logger.warning(f"Failed to parse Miner data dict for UID {datum.get('uid', 'N/A')}: {e}", exc_info=False)
-                    logger.debug(f"Problematic miner data dict: {miner_dict}")
+                    logger.warning(f"Failed to parse Miner data dict for UID {datum_dict.get('uid', 'N/A')}: {e}", exc_info=False)
+                    logger.debug(f"Problematic miner data dict: {datum_dict}")
 
             # --- Chuyển đổi Validator dicts sang ValidatorInfo ---
-            temp_validators_info = {}
-            for val_dict in all_validator_dicts:
-                original_utxo_val = None # Placeholder
+            for utxo_object, val_dict in all_validator_dicts:
                 try:
-                    datum = val_dict.get("datum", {})
-                    uid_hex = datum.get("uid")
+                    uid_hex = datum_dict.get("uid")
                     if not uid_hex: continue
 
                     # --- Lấy address bytes từ datum và decode ---
                     # Lưu ý: get_all_validator_data hiện trả về hex string cho bytes
-                    wallet_addr_hash_hex = datum.get("wallet_addr_hash") # Lấy hex string từ dict trả về
+                    wallet_addr_hash_hex = datum_dict.get("wallet_addr_hash") # Lấy hex string từ dict trả về
                     validator_address_str = None
                     wallet_addr_hash_bytes = None # Biến lưu bytes gốc nếu cần
                     if wallet_addr_hash_hex:
@@ -214,19 +216,20 @@ class ValidatorNode:
                     temp_validators_info[uid_hex] = ValidatorInfo(
                         uid=uid_hex,
                         address=validator_address_str,
-                        api_endpoint=datum.get("api_endpoint"),
-                        trust_score=float(datum.get("trust_score", 0.0)),
-                        weight=float(datum.get("weight", 0.0)),
-                        stake=int(datum.get("stake", 0)),
-                        subnet_uid=int(datum.get("subnet_uid", -1)),
-                        version=int(datum.get("version", 0)),
-                        status=int(datum.get("status", STATUS_INACTIVE)),
-                        registration_slot=int(datum.get("registration_slot", 0)),
+                        api_endpoint=datum_dict.get("api_endpoint"),
+                        trust_score=float(datum_dict.get("trust_score", 0.0)),
+                        weight=float(datum_dict.get("weight", 0.0)),
+                        stake=int(datum_dict.get("stake", 0)),
+                        subnet_uid=int(datum_dict.get("subnet_uid", -1)),
+                        version=int(datum_dict.get("version", 0)),
+                        status=int(datum_dict.get("status", STATUS_INACTIVE)),
+                        registration_slot=int(datum_dict.get("registration_slot", 0)),
                         wallet_addr_hash=wallet_addr_hash_bytes,
-                        performance_history_hash=datum.get("performance_history_hash"),
+                        performance_history_hash=datum_dict.get("performance_history_hash"),
                     )
+                    self.current_utxo_map[uid_hex] = utxo_object
                 except Exception as e:
-                    logger.warning(f"Failed to parse Validator data dict for UID {datum.get('uid', 'N/A')}: {e}", exc_info=False)
+                    logger.warning(f"Failed to parse Validator data dict for UID {datum_dict.get('uid', 'N/A')}: {e}", exc_info=False)
                     logger.debug(f"Problematic validator data dict: {val_dict}")
 
             # --- Cập nhật trạng thái node ---
@@ -236,27 +239,31 @@ class ValidatorNode:
             # Cập nhật thông tin của chính mình
             self_uid_hex = self.info.uid.hex() if isinstance(self.info.uid, bytes) else self.info.uid
             if self_uid_hex in self.validators_info:
-                 loaded_info = self.validators_info[self_uid_hex]
+                loaded_info = self.validators_info[self_uid_hex]
                 #  self.info.address = loaded_info.address
-                 self.info.api_endpoint = loaded_info.api_endpoint
-                 self.info.trust_score = loaded_info.trust_score
-                 self.info.weight = loaded_info.weight
-                 self.info.stake = loaded_info.stake
+                self.info.api_endpoint = loaded_info.api_endpoint
+                self.info.trust_score = loaded_info.trust_score
+                self.info.weight = loaded_info.weight
+                self.info.stake = loaded_info.stake
                  # Cập nhật thêm các trường khác nếu cần
-                 logger.info(f"Self validator info ({self_uid_hex}) updated from metagraph.")
+                logger.info(f"Self validator info ({self_uid_hex}) updated from metagraph.")
             elif self.info.uid:
-                 self.validators_info[self_uid_hex] = self.info
-                 logger.warning(f"Self validator ({self_uid_hex}) not found in metagraph, added locally. Ensure initial state is correct.")
+                self.validators_info[self_uid_hex] = self.info
+                logger.warning(f"Self validator ({self_uid_hex}) not found in metagraph, added locally. Ensure initial state is correct.")
             else:
-                 logger.error("Current validator info UID is invalid after loading metagraph.")
+                logger.error("Current validator info UID is invalid after loading metagraph.")
 
             # TODO: Load và xử lý dữ liệu Subnet/Foundation nếu cần
 
             load_duration = time.time() - start_time
             logger.info(f"Processed info for {len(self.miners_info)} miners and {len(self.validators_info)} validators in {load_duration:.2f}s.")
+            logger.info(f"UTXO map populated with {len(self.current_utxo_map)} entries.")
 
         except Exception as e:
             logger.exception(f"Critical error during metagraph data loading/processing: {e}. Cannot proceed this cycle.")
+            self.current_utxo_map = {}
+            self.miners_info = {}
+            self.validators_info = {}
             raise RuntimeError(f"Failed to load and process metagraph data: {e}") from e
 
     # --- Lựa chọn Miner ---

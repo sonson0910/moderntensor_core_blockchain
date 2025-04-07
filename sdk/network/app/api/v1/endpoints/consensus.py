@@ -23,11 +23,14 @@ from sdk.consensus.p2p import canonical_json_serialize # Import helper serialize
 
 # --- Định nghĩa Pydantic Model cho Payload ---
 class ScoreSubmissionPayload(BaseModel):
-    """Dữ liệu điểm số gửi qua API."""
+    """Dữ liệu điểm số gửi qua API, bao gồm VKey và chữ ký."""
     scores: List[ValidatorScore] = Field(..., description="Danh sách điểm số chi tiết ValidatorScore")
     submitter_validator_uid: str = Field(..., description="UID (dạng hex) của validator gửi điểm")
     cycle: int = Field(..., description="Chu kỳ đồng thuận mà điểm số này thuộc về")
-    signature: Optional[str] = Field(None, description="Chữ ký (dạng hex) để xác thực người gửi") # Thêm trường chữ ký
+    # --- Thêm trường VKey của người gửi ---
+    submitter_vkey_cbor_hex: Optional[str] = Field(None, description="Payment Verification Key của người gửi (CBOR hex)")
+    # -------------------------------------
+    signature: Optional[str] = Field(None, description="Chữ ký (dạng hex) của hash(scores) để xác thực người gửi")
 
 # --- Router ---
 router = APIRouter(
