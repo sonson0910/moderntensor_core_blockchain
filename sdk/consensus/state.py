@@ -16,17 +16,16 @@ from sdk.formulas import (
     update_trust_score,
     calculate_fraud_severity_value, # Cần logic cụ thể
     calculate_slash_amount,
-    calculate_miner_weight,
     calculate_miner_incentive,
     calculate_validator_incentive
     # Import các công thức khác nếu cần
 )
-from sdk.metagraph import update_datum
+from sdk.metagraph.update_metagraph import update_datum
 from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum
 from sdk.metagraph.metagraph_data import get_all_validator_data
 # from sdk.metagraph.hash import hash_data # Cần hàm hash
 def hash_data(data): return f"hashed_{str(data)[:10]}" # Mock hash
-from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, InvalidTransaction, VerificationKeyHash, PaymentVerificationKey, TransactionBuilder, Value, TransactionOutput
+from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, VerificationKeyHash, PaymentVerificationKey, TransactionBuilder, Value, TransactionOutput
 from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_JAILED, STATUS_INACTIVE
 from blockfrost import ApiError
 
@@ -72,52 +71,39 @@ async def find_utxo_by_uid(
 # -----------------------------------------
 
 # --- Hàm tính Severity tinh chỉnh hơn ---
-def _calculate_fraud_severity(reason: str, tolerance: float) -> float:
-    """
-    Xác định mức độ nghiêm trọng dựa trên lý do và độ lớn sai lệch.
-    Trả về giá trị từ 0.0 đến 1.0.
-    """
+def _calculate_fraud_severity(reason: str, tolerance: float) -> float: # <<<--- Chỉ 2 tham số
     severity = 0.0
-    max_deviation_found = 0.0
+    max_deviation_factor = 0.0
 
-    if "Did not commit" in reason:
-        return 0.05 # Phạt rất nhẹ cho việc không commit (có thể do lỗi mạng)
+    if "Did not commit" in reason: return 0.05
 
     parts = reason.split(';')
     for part in parts:
         part = part.strip()
-        current_deviation = 0.0
-        # --- Phân tích sai lệch Trust ---
-        if "Trust mismatch" in part:
+        if "mismatch" in part:
             try:
-                # Ví dụ parse: "Trust mismatch (Expected: 0.50000, Actual: 0.45000, Diff: 0.05000)"
                 diff_str = part.split('Diff:')[-1].strip().rstrip(')')
-                current_deviation = float(diff_str)
-                max_deviation_found = max(max_deviation_found, current_deviation)
-            except Exception: pass # Bỏ qua nếu parse lỗi
-        # --- Phân tích sai lệch Performance (nếu thêm vào) ---
-        elif "Performance mismatch" in part:
-             try:
-                 diff_str = part.split('Diff:')[-1].strip().rstrip(')')
-                 current_deviation = float(diff_str)
-                 # Có thể trọng số hóa độ lệch performance khác với trust
-                 max_deviation_found = max(max_deviation_found, current_deviation * 0.5) # Ví dụ: giảm nhẹ ảnh hưởng
-             except Exception: pass
-        # --- Thêm các loại sai lệch khác nếu cần ---
+                diff_float = float(diff_str)
+                if tolerance > 1e-9:
+                     deviation_factor = diff_float / tolerance
+                     max_deviation_factor = max(max_deviation_factor, deviation_factor)
+            except Exception: pass
 
-    # --- Quyết định Severity dựa trên độ lệch lớn nhất ---
-    if max_deviation_found > tolerance * 10: # Sai lệch rất lớn (> 10 lần tolerance)
-        severity = 0.7 # Severe (Gần mức tối đa)
-    elif max_deviation_found > tolerance * 3: # Sai lệch đáng kể (> 3 lần tolerance)
+    # --- Logic quyết định severity dựa trên factor và settings ---
+    severe_threshold_factor = getattr(settings, 'CONSENSUS_SEVERITY_SEVERE_FACTOR', 10.0)
+    moderate_threshold_factor = getattr(settings, 'CONSENSUS_SEVERITY_MODERATE_FACTOR', 3.0)
+
+    if max_deviation_factor >= severe_threshold_factor:
+        severity = 0.7 # Severe
+    elif max_deviation_factor >= moderate_threshold_factor:
         severity = 0.3 # Moderate
-    elif max_deviation_found > tolerance: # Sai lệch nhỏ nhưng vượt ngưỡng
+    elif max_deviation_factor > 1.0: # Chỉ vượt tolerance một chút
         severity = 0.1 # Minor
-    else:
-        severity = 0.0 # Không phạt nếu không có sai lệch nào vượt tolerance (dù reason có thể khác "Did not commit")
+    # else: severity = 0.0 (mặc định)
 
-    # Log lý do và severity tính được
-    # logger.debug(f"Calculated fraud severity: {severity:.2f} based on reason: '{reason}' and max deviation factor: {max_deviation_found / tolerance if tolerance > 0 else 0:.1f}x tolerance")
+    logger.debug(f"Calculated fraud severity: {severity:.2f} (Factor: {max_deviation_factor:.1f}x)")
     return severity
+
 # -----------------------------------------
 
 def run_consensus_logic(
@@ -498,68 +484,165 @@ async def verify_and_penalize_logic(
 
 # --- Logic Chuẩn bị và Commit Cập nhật ---
 
-def prepare_miner_updates_logic(
+async def prepare_miner_updates_logic( # <<<--- async vì cần lấy/decode datum cũ
     current_cycle: int,
-    miners_info: Dict[str, MinerInfo], # Trạng thái miner đã được cập nhật trust/weight local
+    miners_info: Dict[str, MinerInfo], # Trạng thái miner đầu vào (có thể đã bị phạt)
     final_scores: Dict[str, float], # Điểm P_adj
-    settings: Any
+    settings: Any,
+    # --- Vẫn cần context và map UTXO để lấy reward cũ ---
+    # context: BlockFrostChainContext, # Có thể là Optional nếu map UTXO đã chứa datum decode sẵn
+    current_utxo_map: Dict[str, UTxO] # Map uid_hex -> UTxO object
+    # -------------------------------------------------
 ) -> Dict[str, MinerDatum]:
-    """Chuẩn bị dữ liệu MinerDatum mới để commit."""
+    """
+    Chuẩn bị dữ liệu MinerDatum mới để commit.
+    Tính toán trust mới, rewards mới, history hash mới.
+    Ưu tiên lấy thông tin tĩnh từ miners_info, nhưng cần Datum cũ cho reward tích lũy.
+    """
     logger.info(f"Preparing miner state updates for cycle {current_cycle}...")
     miner_updates: Dict[str, MinerDatum] = {}
-    total_system_value_example = 50.0 # TODO: Cần giá trị thực tế
+    divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
+
+    # Ước tính total_system_value cho incentive (tổng W*P_adj của miner active)
+    total_weighted_perf = sum(
+        getattr(minfo, 'weight', 0) * final_scores.get(uid, 0)
+        for uid, minfo in miners_info.items() if getattr(minfo, 'status', STATUS_ACTIVE) == STATUS_ACTIVE
+    )
+    # Đặt giá trị tối thiểu để tránh chia cho 0 và incentive quá lớn khi mạng nhỏ
+    min_total_value = 1.0 # Hoặc một giá trị phù hợp khác
+    total_system_value = max(min_total_value, total_weighted_perf)
+    logger.debug(f"Using total_system_value (Sum W*P_adj, min={min_total_value}): {total_system_value:.4f}")
 
     for miner_uid_hex, miner_info in miners_info.items():
-        score_new = final_scores.get(miner_uid_hex, 0.0)
+        log_prefix = f"Miner {miner_uid_hex}"
+        logger.debug(f"{log_prefix}: Preparing update...")
+        score_new = final_scores.get(miner_uid_hex, 0.0) # P_adj
+        trust_score_old = getattr(miner_info, 'trust_score', 0.0) # Trust score đầu vào (trước update)
 
-        # Tính Incentive (dùng trust/weight đã cập nhật?) -> Cần quyết định rõ ràng
-        incentive = calculate_miner_incentive(
-            trust_score=miner_info.trust_score,
-            miner_weight=miner_info.weight,
-            miner_performance_scores=[score_new],
-            total_system_value=total_system_value_example,
-            incentive_sigmoid_L=settings.CONSENSUS_PARAM_INCENTIVE_SIG_L,
-            incentive_sigmoid_k=settings.CONSENSUS_PARAM_INCENTIVE_SIG_K,
-            incentive_sigmoid_x0=settings.CONSENSUS_PARAM_INCENTIVE_SIG_X0
+        # --- 1. Lấy Thông tin Cần Thiết từ Datum Cũ (Chủ yếu là Reward) ---
+        pending_rewards_old = 0
+        # Các trường này ưu tiên lấy từ Info nếu đã load đúng, nếu không thì lấy từ Datum cũ
+        old_perf_history = list(getattr(miner_info, 'performance_history', []))
+        final_wallet_addr_hash = getattr(miner_info, 'wallet_addr_hash', None)
+        perf_hash_old_bytes = getattr(miner_info, 'performance_history_hash', None)
+        registration_slot_old = getattr(miner_info, 'registration_slot', 0) # Lấy từ info nếu có
+
+        input_utxo = current_utxo_map.get(miner_uid_hex)
+        if input_utxo and input_utxo.output.datum:
+            try:
+                # Decode datum cũ chủ yếu để lấy reward cũ
+                old_datum = MinerDatum.from_cbor(input_utxo.output.datum.cbor)
+                pending_rewards_old = getattr(old_datum, 'accumulated_rewards', 0)
+                logger.debug(f"{log_prefix}: Old accumulated_rewards from datum: {pending_rewards_old}")
+
+                # Chỉ lấy từ datum cũ nếu chưa có trong info
+                if not final_wallet_addr_hash: final_wallet_addr_hash = getattr(old_datum, 'wallet_addr_hash', None)
+                if not perf_hash_old_bytes: perf_hash_old_bytes = getattr(old_datum, 'performance_history_hash', None)
+                if registration_slot_old == 0: registration_slot_old = getattr(old_datum, 'registration_slot', 0)
+                # Logic phức tạp hơn nếu cần decode history từ hash cũ
+                # if not old_perf_history and perf_hash_old_bytes: ...
+
+            except Exception as e:
+                logger.warning(f"{log_prefix}: Could not decode old MinerDatum: {e}. Using defaults (rewards=0).")
+        else:
+             logger.warning(f"{log_prefix}: Old UTXO/Datum not found. Assuming 0 old rewards.")
+        # ----------------------------------------------------------
+
+        # --- 2. Tính Trust Score Mới ---
+        time_since_eval = 1 # Giả định được đánh giá mỗi chu kỳ nếu active
+        # Chỉ cập nhật trust dựa trên điểm mới nếu miner đang active
+        score_for_trust_update = score_new if getattr(miner_info, 'status', STATUS_ACTIVE) == STATUS_ACTIVE else 0.0
+        new_trust_score_float = update_trust_score(
+            trust_score_old=trust_score_old, time_since_last_eval=time_since_eval,
+            score_new=score_for_trust_update, # Dùng P_adj hoặc 0
+            # Lấy các tham số từ settings
+            delta_trust=settings.CONSENSUS_PARAM_DELTA_TRUST, alpha_base=settings.CONSENSUS_PARAM_ALPHA_BASE,
+            k_alpha=settings.CONSENSUS_PARAM_K_ALPHA, update_sigmoid_L=settings.CONSENSUS_PARAM_UPDATE_SIG_L,
+            update_sigmoid_k=settings.CONSENSUS_PARAM_UPDATE_SIG_K, update_sigmoid_x0=settings.CONSENSUS_PARAM_UPDATE_SIG_X0
         )
-        reward_to_add = incentive
-        logger.debug(f"  Miner {miner_uid_hex}: Incentive={incentive:.4f}")
+        logger.debug(f"{log_prefix}: Trust update: {trust_score_old:.4f} -> {new_trust_score_float:.4f}")
+        # -----------------------------
 
-        # TODO: Lấy Datum cũ để cộng dồn thưởng
-        # old_datum = await metagraph_data.get_miner_datum(context, miner_uid_hex)
-        pending_rewards_old = 0 # Giả định
+        # --- 3. Tính Incentive (Dùng trust CŨ) ---
+        incentive_float = 0.0
+        if getattr(miner_info, 'status', STATUS_ACTIVE) == STATUS_ACTIVE: # Chỉ miner active mới nhận thưởng
+            incentive_float = calculate_miner_incentive(
+                trust_score=trust_score_old, # <<<--- Dùng trust cũ
+                miner_weight=getattr(miner_info, 'weight', 0.0),
+                miner_performance_scores=[score_new], # Dùng P_adj
+                total_system_value=total_system_value,
+                # Lấy các tham số từ settings
+                incentive_sigmoid_L=settings.CONSENSUS_PARAM_INCENTIVE_SIG_L,
+                incentive_sigmoid_k=settings.CONSENSUS_PARAM_INCENTIVE_SIG_K,
+                incentive_sigmoid_x0=settings.CONSENSUS_PARAM_INCENTIVE_SIG_X0
+            )
+        logger.debug(f"{log_prefix}: Incentive calculated: {incentive_float:.6f}")
+        # -------------------------------------
 
-        # TODO: Hash lịch sử hiệu suất
-        # perf_history_hash = hash_data(miner_info.performance_history) if miner_info.performance_history else None
-        perf_history_hash = None
+        # --- 4. Cập nhật Accumulated Rewards ---
+        accumulated_rewards_new = pending_rewards_old + int(incentive_float * divisor)
+        logger.debug(f"{log_prefix}: AccumulatedRewards update: {pending_rewards_old} -> {accumulated_rewards_new}")
+        # -------------------------------------
 
-        # TODO: Hash địa chỉ ví
-        # wallet_addr_hash = hash_data(miner_info.address) # Hoặc lấy từ datum cũ
-        wallet_addr_hash = b'wallet_hash_placeholder'
+        # --- 5. Cập nhật Performance History & Hash ---
+        # Giả định miner_info.performance_history chứa list float đã load đúng
+        updated_history = old_perf_history # Bắt đầu từ history cũ
+        updated_history.append(score_new) # Thêm P_adj mới nhất
+        max_len = settings.CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN
+        updated_history = updated_history[-max_len:] # Giữ độ dài tối đa
 
-        # Tạo MinerDatum mới
+        perf_history_hash_new: Optional[bytes] = None
+        if updated_history:
+            try:
+                 perf_history_hash_new = hash_data(updated_history) # hash_data cần xử lý list float
+                 logger.debug(f"{log_prefix}: New performance history hash created.")
+            except Exception as hash_e:
+                 logger.error(f"{log_prefix}: Failed to hash performance history: {hash_e}")
+                 perf_history_hash_new = perf_hash_old_bytes # Giữ hash cũ nếu lỗi
+        # -----------------------------------------
+
+        # --- 6. Lấy các giá trị tĩnh khác từ MinerInfo ---
+        api_endpoint_str = getattr(miner_info, 'api_endpoint', None)
+        api_endpoint_bytes = api_endpoint_str.encode('utf-8') if api_endpoint_str else None
+        current_status = getattr(miner_info, 'status', STATUS_ACTIVE) # Status hiện tại
+        registration_slot = registration_slot_old # Giữ slot đăng ký gốc
+        subnet_uid = getattr(miner_info, 'subnet_uid', 0)
+        stake = int(getattr(miner_info, 'stake', 0))
+        # ---------------------------------------------
+
+        # --- 7. Tạo MinerDatum mới ---
         try:
+            # Đảm bảo uid là bytes
+            uid_bytes = bytes.fromhex(miner_uid_hex)
+
+            # Đảm bảo wallet_addr_hash là bytes hoặc None
+            final_wallet_addr_hash_bytes = final_wallet_addr_hash if isinstance(final_wallet_addr_hash, bytes) else None
+
             new_datum = MinerDatum(
-                uid=bytes.fromhex(miner_uid_hex), # Chuyển hex về bytes
-                subnet_uid=miner_info.subnet_uid,
-                stake=int(miner_info.stake), # Đảm bảo là int
-                scaled_last_performance=int(score_new * settings.METAGRAPH_DATUM_INT_DIVISOR),
-                scaled_trust_score=int(miner_info.trust_score * settings.METAGRAPH_DATUM_INT_DIVISOR),
-                accumulated_rewards = pending_rewards_old + int(reward_to_add * settings.METAGRAPH_DATUM_INT_DIVISOR),
-                last_update_slot=current_cycle, # Hoặc slot thực tế?
-                performance_history_hash=perf_history_hash,
-                wallet_addr_hash=wallet_addr_hash,
-                status=getattr(miner_info, 'status', STATUS_ACTIVE), # Lấy status hiện tại
-                registration_slot=getattr(miner_info, 'registration_slot', 0), # Lấy từ info
-                api_endpoint=miner_info.api_endpoint.encode('utf-8') if miner_info.api_endpoint else None,
-                version=getattr(miner_info, 'version', 1) # Lấy version hiện tại
+                uid=uid_bytes,
+                subnet_uid=subnet_uid,
+                stake=stake,
+                scaled_last_performance=int(score_new * divisor), # Perf mới (P_adj)
+                scaled_trust_score=int(new_trust_score_float * divisor), # <<< Trust MỚI
+                accumulated_rewards=accumulated_rewards_new, # <<< Reward MỚI
+                last_update_slot=current_cycle,
+                performance_history_hash=perf_history_hash_new, # <<< Hash MỚI
+                wallet_addr_hash=final_wallet_addr_hash_bytes, # Hash từ Info/Datum cũ (bytes)
+                status=current_status,
+                registration_slot=registration_slot,
+                api_endpoint=api_endpoint_bytes,
             )
             miner_updates[miner_uid_hex] = new_datum
+            logger.debug(f"{log_prefix}: Successfully prepared new MinerDatum.")
+
+        except ValueError as hex_err:
+             logger.error(f"{log_prefix}: Invalid UID format, cannot convert from hex: {hex_err}")
         except Exception as e:
-            logger.error(f"Failed to create MinerDatum for {miner_uid_hex}: {e}")
+            logger.error(f"{log_prefix}: Failed to create MinerDatum: {e}", exc_info=True)
 
     logger.info(f"Prepared {len(miner_updates)} miner datums for update.")
     return miner_updates
+
 
 async def prepare_validator_updates_logic( # <<<--- Chuyển thành async vì cần lấy datum cũ
     current_cycle: int,
@@ -650,7 +733,6 @@ async def prepare_validator_updates_logic( # <<<--- Chuyển thành async vì c�
                 status=status_current,
                 registration_slot=registration_slot_current,
                 api_endpoint=api_endpoint_current.encode('utf-8') if api_endpoint_current else None,
-                version=version_current # Có thể tăng version nếu cấu trúc thay đổi
             )
             validator_updates[self_uid_hex] = new_datum
             logger.info(f"Prepared update for self ({self_uid_hex})")
@@ -808,12 +890,6 @@ async def commit_updates_logic(
             logger.debug(f"Waiting {commit_delay}s before next commit...")
             await asyncio.sleep(commit_delay)
 
-        except InvalidTransaction as e:
-            error_msg = f"Invalid Transaction on submit: {e}"
-            logger.error(f"{log_prefix}: {error_msg}", exc_info=False) # Giảm độ chi tiết log
-            error_details = getattr(e, 'response', None) or getattr(e, 'message', '')
-            if error_details: error_msg += f" - Details: {str(error_details)[:500]}"
-            failed_updates[uid_hex] = error_msg
         except ApiError as e:
              logger.error(f"{log_prefix}: Blockfrost API Error on submit: Status={e.status_code}, Message={e.message}", exc_info=False)
              failed_updates[uid_hex] = f"Blockfrost API Error ({e.status_code}): {e.message}"
