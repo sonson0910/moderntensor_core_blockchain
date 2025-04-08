@@ -17,6 +17,8 @@ from sdk.consensus.node import ValidatorNode
 from sdk.network.app.dependencies import get_validator_node
 # Import hàm serialize từ p2p
 from sdk.consensus.p2p import canonical_json_serialize
+import nacl.signing # <<< Thêm import
+import nacl.exceptions # <<< Thêm import
 
 
 # --- Định nghĩa Pydantic Model cho Payload ---
@@ -61,15 +63,17 @@ async def verify_payload_signature(
         expected_payment_hash: VerificationKeyHash = submitter_address.payment_part
         logger.debug(f"Expected payment hash: {expected_payment_hash.to_primitive().hex()}")
 
-        # 2. Load VKey từ payload
+        # 2. Load VKey từ payload (SỬA Ở ĐÂY)
         try:
-             received_vkey = PaymentVerificationKey.from_cbor_hex(submitter_vkey_hex)
-        except Exception as key_load_e:
-             logger.error(f"SigVerifyFail ({submitter_info.uid}): Failed to load VKey from CBOR: {key_load_e}")
-             return False
+            vkey_cbor_bytes = binascii.unhexlify(submitter_vkey_hex)
+            received_pycardano_vkey = PaymentVerificationKey.from_cbor(vkey_cbor_bytes)
+            received_vk_bytes = received_pycardano_vkey.to_primitive() # <<< Lấy raw bytes
+        except (binascii.Error, ValueError, Exception) as key_load_e:
+            logger.error(f"SigVerifyFail ({submitter_info.uid}): Failed to load VKey from CBOR hex or get primitive: {key_load_e}")
+            return False
 
         # 3. Xác minh VKey: Hash của VKey nhận được phải khớp với hash từ địa chỉ
-        received_vkey_hash: VerificationKeyHash = received_vkey.hash()
+        received_vkey_hash: VerificationKeyHash = received_pycardano_vkey.hash()
         logger.debug(f"Received VKey hash: {received_vkey_hash.to_primitive().hex()}")
 
         if received_vkey_hash != expected_payment_hash:
@@ -78,14 +82,19 @@ async def verify_payload_signature(
         logger.debug(f"Submitter VKey matches address hash.")
 
         # 4. Xác minh Chữ ký
-        data_to_verify_str = canonical_json_serialize(scores_data)
-        data_to_verify_bytes = data_to_verify_str.encode('utf-8')
+        data_str_from_payload = canonical_json_serialize(payload.scores)
+        data_to_verify_bytes = data_str_from_payload.encode('utf-8')
         signature_bytes = binascii.unhexlify(signature_hex)
 
-        is_valid = received_vkey.verify(signature_bytes, data_to_verify_bytes)
-        logger.debug(f"Signature verification result for {submitter_info.uid}: {is_valid}")
-        if not is_valid:
-            logger.warning(f"SigVerifyFail ({submitter_info.uid}): Invalid signature.")
+        nacl_vk = nacl.signing.VerifyKey(received_vk_bytes) # <<< Tạo VerifyKey của PyNaCl
+        try:
+            nacl_vk.verify(data_to_verify_bytes, signature_bytes) # <<< Gọi verify của PyNaCl
+            is_valid = True
+            logger.debug(f"PyNaCl Signature verification successful for {submitter_info.uid}")
+        except nacl.exceptions.BadSignatureError:
+            is_valid = False
+            logger.warning(f"SigVerifyFail ({submitter_info.uid}): Invalid signature (PyNaCl BadSignatureError).")
+
         return is_valid
 
     except binascii.Error:
