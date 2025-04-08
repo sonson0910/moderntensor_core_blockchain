@@ -8,6 +8,11 @@ from sdk.metagraph.metagraph_datum import STATUS_ACTIVE
 from dataclasses import dataclass, field
 import time # Thêm import time
 
+from pydantic import BaseModel, Field
+# --- Import PyCardano ---
+from pycardano import VerificationKeyHash, PaymentVerificationKey # Thêm PaymentVerificationKey nếu property dùng
+
+
 @dataclass
 class MinerInfo:
     """Lưu trữ thông tin trạng thái của một Miner trong bộ nhớ."""
@@ -80,3 +85,13 @@ class ValidatorScore:
     deviation: Optional[float] = None # Độ lệch so với điểm đồng thuận (tính sau)
     timestamp: float = field(default_factory=time.time) # Thời điểm chấm điểm
 
+# === Dán định nghĩa ScoreSubmissionPayload vào đây ===
+class ScoreSubmissionPayload(BaseModel):
+    """Dữ liệu điểm số gửi qua API, bao gồm VKey và chữ ký."""
+    # Sử dụng ValidatorScore từ định nghĩa ở trên
+    scores: List[ValidatorScore] = Field(..., description="Danh sách điểm số chi tiết ValidatorScore")
+    submitter_validator_uid: str = Field(..., description="UID (dạng hex) của validator gửi điểm")
+    cycle: int = Field(..., description="Chu kỳ đồng thuận mà điểm số này thuộc về")
+    submitter_vkey_cbor_hex: Optional[str] = Field(None, description="Payment Verification Key của người gửi (CBOR hex)")
+    signature: Optional[str] = Field(None, description="Chữ ký (dạng hex) của hash(canonical_json(scores)) để xác thực người gửi")
+# ====================================================

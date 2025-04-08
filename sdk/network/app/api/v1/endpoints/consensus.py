@@ -10,7 +10,7 @@ from typing import List, Annotated, Optional
 from fastapi import APIRouter, HTTPException, Depends, status
 
 from pydantic import BaseModel, Field, ValidationError
-from sdk.core.datatypes import ValidatorScore, ValidatorInfo
+from sdk.core.datatypes import ValidatorScore, ValidatorInfo, ScoreSubmissionPayload
 # Import các kiểu Cardano cần thiết
 from pycardano import Address, VerificationKey, PaymentVerificationKey, VerificationKeyHash
 from sdk.consensus.node import ValidatorNode

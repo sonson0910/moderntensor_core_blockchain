@@ -11,7 +11,7 @@ try:
     from sdk.config.settings import settings
     from sdk.core.datatypes import MinerInfo
     from sdk.metagraph.metagraph_datum import STATUS_ACTIVE
-    from sdk.formulas import calculate_selection_probability
+    from sdk.formulas.trust_score import calculate_selection_probability
 except ImportError as e:
     raise ImportError(f"Error importing dependencies in selection.py: {e}")
 

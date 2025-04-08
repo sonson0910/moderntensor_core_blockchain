@@ -2,6 +2,7 @@
 """
 Logic chấm điểm kết quả từ miners.
 """
+import dataclasses
 import logging
 from typing import List, Dict, Any, Optional
 from pycardano import PaymentSigningKey
@@ -10,25 +11,47 @@ import asyncio
 import httpx # Đảm bảo đã import httpx
 import json
 
-from sdk.core.datatypes import MinerResult, TaskAssignment, ValidatorScore, ValidatorInfo, PaymentVerificationKey
-from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
+from sdk.core.datatypes import MinerResult, TaskAssignment, ValidatorScore, ValidatorInfo, PaymentVerificationKey, ScoreSubmissionPayload
 
 logger = logging.getLogger(__name__)
 
-# --- Helper function for canonical serialization (Cần thiết cho cả ký và xác minh) ---
+# --- Helper function for canonical serialization (Sửa lỗi) ---
 def canonical_json_serialize(data: Any) -> str:
     """
     Serialize dữ liệu thành chuỗi JSON một cách ổn định (sắp xếp key).
+    Handles nested dataclasses and basic types.
     """
-    # Chuyển đổi các đối tượng dataclass/pydantic thành dict nếu cần
-    if isinstance(data, list):
-        data_to_serialize = [item.model_dump(mode='json') if hasattr(item, 'model_dump') else item for item in data]
-    elif isinstance(data, dict):
-         data_to_serialize = {k: (v.model_dump(mode='json') if hasattr(v, 'model_dump') else v) for k, v in data.items()}
-    else:
-        data_to_serialize = data.model_dump(mode='json') if hasattr(data, 'model_dump') else data
+    # Helper function to convert dataclasses to dicts recursively
+    def convert_to_dict(obj):
+        if dataclasses.is_dataclass(obj):
+            # Convert dataclass to dict, recursively converting fields
+            # Chỉ lấy các trường được định nghĩa trong dataclass
+            result = {}
+            for f in dataclasses.fields(obj):
+                value = getattr(obj, f.name)
+                result[f.name] = convert_to_dict(value)
+            return result
+            # Hoặc dùng asdict đơn giản nếu không có nested dataclass phức tạp cần tùy chỉnh
+            # return dataclasses.asdict(obj)
+        elif isinstance(obj, list):
+            # Recursively convert items in a list
+            return [convert_to_dict(item) for item in obj]
+        elif isinstance(obj, dict):
+             # Recursively convert values in a dict
+            return {k: convert_to_dict(v) for k, v in obj.items()}
+        else:
+            # Return basic types as is (int, float, str, bool, None)
+            # Cần cẩn thận nếu có các kiểu dữ liệu khác (ví dụ: bytes, datetime)
+            # Có thể cần xử lý thêm ở đây nếu cần
+            return obj
+
+    # Convert the entire input data structure to dicts
+    data_to_serialize = convert_to_dict(data)
+
+    # Dump the resulting dict structure to JSON, ensuring keys are sorted
     return json.dumps(data_to_serialize, sort_keys=True, separators=(',', ':'))
 # -----------------------------------------------------------------------------------
+
 
 
 def _calculate_score_from_result(task_data: Any, result_data: Any) -> float:
@@ -132,24 +155,39 @@ async def broadcast_scores_logic(
     signature_hex: Optional[str] = None
     submitter_vkey_cbor_hex: Optional[str] = None
     try:
-        # a. Lấy PaymentVerificationKey từ signing_key
-        vkey: PaymentVerificationKey = signing_key.to_verification_key()
-        submitter_vkey_cbor_hex = vkey.to_cbor_hex() # <<<--- Lấy VKey CBOR hex
-        logger.debug(f"Submitter VKey CBOR Hex: {submitter_vkey_cbor_hex[:15]}...")
+        vkey: PaymentVerificationKey = signing_key.to_verification_key() # Đảm bảo đúng loại key
+        submitter_vkey_cbor_hex = vkey.to_cbor_hex()
 
-        # b. Serialize dữ liệu điểm số
-        data_to_sign_str = canonical_json_serialize(local_scores_list)
+        # Sử dụng hàm serialize đã sửa lỗi
+        data_to_sign_str = canonical_json_serialize(local_scores_list) # <<< Sử dụng hàm đã sửa
         data_to_sign_bytes = data_to_sign_str.encode('utf-8')
 
-        # c. Ký dữ liệu
         signature_bytes = signing_key.sign(data_to_sign_bytes)
         signature_hex = binascii.hexlify(signature_bytes).decode('utf-8')
-        logger.debug(f"Generated signature: {signature_hex[:10]}...")
-
     except Exception as sign_e:
         logger.error(f"Failed to sign broadcast payload: {sign_e}")
-        # Quyết định: Có nên gửi mà không có chữ ký không? (Không khuyến khích)
-        return # Hoặc logger.error và gửi đi signature=None
+        return
+
+    # Tạo Payload (cần import ScoreSubmissionPayload)
+    # Giả sử ScoreSubmissionPayload đã được import
+    from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
+    if 'ScoreSubmissionPayload' not in globals() or not callable(ScoreSubmissionPayload):
+         logger.error("ScoreSubmissionPayload model is not available. Cannot broadcast.")
+         return
+
+    try:
+        payload = ScoreSubmissionPayload(
+            scores=local_scores_list,
+            submitter_validator_uid=self_validator_info.uid,
+            cycle=current_cycle,
+            submitter_vkey_cbor_hex=submitter_vkey_cbor_hex,
+            signature=signature_hex
+        )
+        payload_dict = payload.model_dump(mode='json') # payload là Pydantic nên dùng model_dump
+    except Exception as pydantic_e:
+        logger.exception(f"Failed to create or serialize ScoreSubmissionPayload: {pydantic_e}")
+        return
+
 
     # -----------------------
 

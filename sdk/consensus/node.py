@@ -35,7 +35,7 @@ from sdk.core.datatypes import (
     MinerInfo, ValidatorInfo, TaskAssignment, MinerResult, ValidatorScore
 )
 # Pydantic model for API communication
-from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
+# from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
 # PyCardano types
 from pycardano import (Network, Address, ScriptHash, BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, UTxO)
 
