@@ -12,6 +12,7 @@ import httpx # Đảm bảo đã import httpx
 import json
 
 from sdk.core.datatypes import MinerResult, TaskAssignment, ValidatorScore, ValidatorInfo, PaymentVerificationKey, ScoreSubmissionPayload
+from sdk.metagraph.metagraph_datum import STATUS_ACTIVE, STATUS_INACTIVE
 
 logger = logging.getLogger(__name__)
 
@@ -214,23 +215,36 @@ async def broadcast_scores_logic(
 
     # 4. Gửi request đến các validator khác
     # ... (logic gửi request giữ nguyên) ...
+    # 4. Gửi request đến các validator khác
     broadcast_tasks = []
-    sent_to_validators: List[ValidatorInfo] = []
+    sent_to_validators: List[ValidatorInfo] = [] # Giữ list để khớp với results
 
+    # Duyệt qua danh sách active_validators được truyền vào
     for validator in active_validators:
-        if validator.uid == self_uid: continue
+        # Bỏ qua chính mình
+        if validator.uid == self_uid:
+            continue
+        # Bỏ qua nếu không có endpoint hợp lệ
         if not validator.api_endpoint or not validator.api_endpoint.startswith(("http://", "https://")):
             logger.warning(f"Validator {validator.uid} has invalid API endpoint: '{validator.api_endpoint}'. Skipping broadcast.")
             continue
+        # === THÊM KIỂM TRA STATUS ===
+        if getattr(validator, 'status', STATUS_INACTIVE) != STATUS_ACTIVE:
+             logger.debug(f"Validator {validator.uid} is not active (status={getattr(validator, 'status', 'N/A')}). Skipping broadcast.")
+             continue
+        # ============================
 
-        target_url = f"{validator.api_endpoint}/v1/consensus/receive_scores" # Endpoint nhận
+        target_url = f"{validator.api_endpoint}/v1/consensus/receive_scores"
         logger.debug(f"Preparing to send scores to V:{validator.uid} at {target_url}")
 
         try:
+            # Thêm task gửi request vào list
             broadcast_tasks.append(http_client.post(target_url, json=payload_dict))
+            # Thêm validator tương ứng vào list để xử lý kết quả sau này
             sent_to_validators.append(validator)
         except Exception as post_err:
             logger.error(f"Error initiating post request to V:{validator.uid} at {target_url}: {post_err}")
+
 
     if not broadcast_tasks:
         logger.info("No valid target validators found to broadcast scores to.")
