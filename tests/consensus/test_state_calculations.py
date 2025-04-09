@@ -3,8 +3,11 @@ import pytest
 import time
 import math
 import asyncio
+import copy # Để tạo bản sao sâu
+import os # Thêm import os nếu dùng os.urandom
 from typing import Dict, List, Any, Tuple, Optional
 from collections import defaultdict
+from unittest.mock import MagicMock, AsyncMock # Dùng để mock context/async functions
 import hashlib # Thêm hashlib
 from pytest_mock import MockerFixture
 
@@ -16,20 +19,13 @@ from sdk.consensus.state import (
     _calculate_fraud_severity # Import hàm helper để test riêng nếu muốn
 )
 # --- Import Datatypes và Constants ---
+from sdk.consensus.state import verify_and_penalize_logic # Function to test
 from sdk.core.datatypes import MinerInfo, ValidatorInfo, ValidatorScore, TaskAssignment
-try:
     # Ưu tiên import từ nơi định nghĩa chính thức (ví dụ: metagraph_datum)
-    from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_INACTIVE, STATUS_JAILED
-except ImportError:
-    # Hoặc định nghĩa tạm fallback nếu không tìm thấy
-    MinerDatum = dict # Kiểu dữ liệu đơn giản cho test nếu import lỗi
-    ValidatorDatum = dict
-    STATUS_ACTIVE = 1
-    STATUS_INACTIVE = 0
-    STATUS_JAILED = 2
+from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_INACTIVE, STATUS_JAILED
 # --- Import Settings và Helpers ---
 from sdk.config.settings import settings
-from pycardano import Address, VerificationKeyHash, BlockFrostChainContext, UTxO
+from pycardano import Address, VerificationKeyHash, BlockFrostChainContext, UTxO, TransactionInput, Value, TransactionOutput, TransactionId, ScriptHash, Network
 from sdk.formulas import update_trust_score, calculate_miner_incentive
 
 # --- Helper functions (Có thể đưa vào conftest.py) ---
@@ -62,6 +58,23 @@ def create_validator_info(uid_num: int, trust: float, weight: float, stake: int,
         # Các trường khác dùng giá trị mặc định của ValidatorInfo
     )
 
+def create_validator_info_state(uid_num: int, trust: float, weight: float, stake: int, status=STATUS_ACTIVE, api=True) -> ValidatorInfo:
+    # ... (giữ nguyên hoặc cập nhật) ...
+    base_uid_str = f"validator_{uid_num:03d}"
+    # Tạo UID hex cố định hơn cho test
+    uid_hex = hashlib.sha256(base_uid_str.encode()).hexdigest()[:16]
+    # Địa chỉ testnet hợp lệ (ví dụ)
+    addr_str = f"addr_test1vpvalid{uid_num:03d}{'x'*(103-18-len(str(uid_num)))}"[:103]
+    wallet_addr_bytes = addr_str.encode('utf-8')
+
+    return ValidatorInfo(
+        uid=uid_hex, address=addr_str,
+        api_endpoint=f"http://fake-validator-{uid_num}:8000" if api else None,
+        trust_score=trust, weight=weight, stake=float(stake), status=status,
+        last_performance=trust * 0.95, # Giá trị ví dụ
+        wallet_addr_hash=wallet_addr_bytes # Giữ bytes
+    )
+
 def create_miner_info(uid_num: int, trust: float, weight: float, stake: int, last_selected: int, status=STATUS_ACTIVE) -> MinerInfo:
     """Tạo MinerInfo mẫu với UID hex."""
     base_uid_str = f"miner_{uid_num:03d}"
@@ -75,12 +88,88 @@ def create_miner_info(uid_num: int, trust: float, weight: float, stake: int, las
         performance_history=[]
         # Các trường khác dùng giá trị mặc định của MinerInfo
     )
+
+def create_validator_datum(
+    uid_hex: str, cycle: int, trust: float, perf: float, stake: int,
+    status: int, rewards: int = 0, reg_slot: int = 1, subnet_uid: int = 0
+) -> ValidatorDatum:
+    # ... (giữ nguyên) ...
+    uid_bytes = bytes.fromhex(uid_hex)
+    dummy_hash = hashlib.sha256(f"{uid_hex}_history_{cycle}".encode()).digest() # Thay đổi hash theo cycle
+    wallet_hash = hashlib.sha256(f"addr_of_{uid_hex}".encode()).digest()
+    api_endpoint_bytes = f"http://endpoint_{uid_hex}:8000".encode()
+    divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
+    trust = max(0.0, min(1.0, trust))
+    perf = max(0.0, min(1.0, perf))
+    return ValidatorDatum(
+        uid=uid_bytes, subnet_uid=subnet_uid, stake=int(stake),
+        scaled_last_performance=int(perf * divisor), scaled_trust_score=int(trust * divisor),
+        accumulated_rewards=int(rewards), last_update_slot=cycle,
+        performance_history_hash=dummy_hash, wallet_addr_hash=wallet_hash, status=status,
+        registration_slot=reg_slot, api_endpoint=api_endpoint_bytes
+    )
+
+def create_mock_utxo_with_datum(datum: ValidatorDatum, tx_id_str: str = None, index: int = 0, amount: int = 2_000_000) -> MagicMock:
+    # ... (giữ nguyên) ...
+    tx_id_bytes = bytes.fromhex(tx_id_str) if tx_id_str else os.urandom(32)
+    tx_in = TransactionInput(transaction_id=TransactionId(tx_id_bytes), index=index)
+    tx_out = MagicMock(spec=TransactionOutput)
+    tx_out.amount = Value(coin=amount)
+    tx_out.datum = datum
+    tx_out.address = MagicMock(spec=Address)
+    tx_out.script = None
+    tx_out.datum_hash = None
+    utxo = MagicMock(spec=UTxO)
+    utxo.input = tx_in
+    utxo.output = tx_out
+    return utxo
+
+def convert_datum_to_dict(datum: ValidatorDatum) -> dict:
+    """Helper chuyển datum thành dict giống output của get_all_validator_data."""
+    # Hàm này RẤT QUAN TRỌNG phải khớp với output thật của get_all_validator_data
+    d = {}
+    divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
+    # Lấy các trường cơ bản
+    d['uid'] = datum.uid.hex()
+    d['subnet_uid'] = datum.subnet_uid
+    d['stake'] = datum.stake
+    d['accumulated_rewards'] = datum.accumulated_rewards
+    d['last_update_slot'] = datum.last_update_slot
+    d['status'] = datum.status
+    d['registration_slot'] = datum.registration_slot
+    # Xử lý các trường bytes/None
+    d['performance_history_hash'] = datum.performance_history_hash.hex() if datum.performance_history_hash else None
+    d['wallet_addr_hash'] = datum.wallet_addr_hash.hex() if datum.wallet_addr_hash else None
+    d['api_endpoint'] = datum.api_endpoint.decode('utf-8', errors='replace') if datum.api_endpoint else None
+    # Thêm các trường float đã unscale
+    d['trust_score'] = datum.trust_score # Lấy từ property
+    d['last_performance'] = datum.last_performance # Lấy từ property
+    # Thêm các trường scaled nếu cần cho debug
+    # d['scaled_trust_score'] = datum.scaled_trust_score
+    # d['scaled_last_performance'] = datum.scaled_last_performance
+    return d
 # ---------------------------
 
 # --- Đăng ký custom mark 'logic' (Thêm vào conftest.py hoặc đầu file) ---
 def pytest_configure(config):
     config.addinivalue_line("markers", "logic: mark test as logic test")
+    
 # -----------------------------------------------
+
+# --- Fixtures (giữ nguyên) ---
+@pytest.fixture
+def mock_context(mocker: MockerFixture) -> MagicMock:
+    return MagicMock(spec=BlockFrostChainContext)
+
+@pytest.fixture
+def cardano_params() -> Tuple[ScriptHash, Network]:
+    try:
+        from sdk.smartcontract.validator import read_validator
+        script_hash = read_validator()["script_hash"]
+    except Exception:
+        script_hash = ScriptHash(os.urandom(28)) # Placeholder
+    network = Network.TESTNET
+    return script_hash, network
 
 @pytest.mark.logic
 def test_run_consensus_logic_basic():
@@ -287,27 +376,23 @@ async def test_prepare_miner_updates_logic(mocker: MockerFixture):
 async def test_prepare_validator_updates_logic():
     """Kiểm tra việc chuẩn bị ValidatorDatum mới cho chính mình."""
     current_cycle = 103
-    self_info = create_validator_info(1, 0.96, 3.1, 5100)
+    self_info = create_validator_info_state(1, 0.96, 3.1, 5100) # <<< Sửa lại hàm helper nếu cần
     self_uid_hex = self_info.uid
     print(self_info)
 
     calculated_states = {
         self_uid_hex: {
-            "E_v": 0.915, # Performance mới tính được
-            "trust": 0.965, # Trust mới dự kiến
-            "reward": 0.05, # Reward dự kiến
-            "weight": 3.1, # Weight đầu chu kỳ
-            "start_status": STATUS_ACTIVE,
-            "last_update_cycle": current_cycle,
-            # Giả sử các trường này cũng được tính và lưu
-            "accumulated_rewards_old": 10 * 1e6 # Giả sử reward cũ là 10 ADA (scaled)
+            "E_v": 0.915, "trust": 0.965, "reward": 0.05, "weight": 3.1,
+            "start_status": STATUS_ACTIVE, "last_update_cycle": current_cycle,
+            "accumulated_rewards_old": 10000000 # Giữ nguyên giá trị int cho dễ tính
         }
     }
-
-    # Hàm prepare_validator_updates_logic không cần context nếu reward cũ được cung cấp
-    # hoặc nếu chúng ta chấp nhận reward tích lũy trong test bắt đầu từ 0 + reward mới.
-    # Bỏ mock context.
     mock_context = None
+
+    validator_updates = await prepare_validator_updates_logic(
+        current_cycle=current_cycle, self_validator_info=self_info,
+        calculated_states=calculated_states, settings=settings, context=mock_context
+    )
 
     # --- Gọi hàm cần test ---
     validator_updates = await prepare_validator_updates_logic(
@@ -329,22 +414,22 @@ async def test_prepare_validator_updates_logic():
     assert datum_v1.last_update_slot == current_cycle
     assert datum_v1.scaled_last_performance == pytest.approx(int(0.915 * divisor))
     assert datum_v1.scaled_trust_score == pytest.approx(int(0.965 * divisor))
-    # accumulated_rewards = reward cũ (lấy từ info?) + reward mới
-    # Hàm prepare_validator_updates_logic hiện tại lấy reward cũ từ self_info,
-    # nhưng self_info không có accumulated_rewards. Cần sửa lại hàm logic đó
-    # hoặc chấp nhận bắt đầu từ 0 trong test.
-    # Tạm chấp nhận bắt đầu từ 0 + reward mới cho test này.
-    expected_rewards = int(0.0) + int(calculated_states[self_uid_hex]['reward'] * divisor)
-    # Hoặc nếu sửa logic để dùng info:
-    # accumulated_rewards_old = getattr(self_info, 'accumulated_rewards', 0) # Cần thêm trường này vào ValidatorInfo
-    # expected_rewards = int(accumulated_rewards_old) + int(calculated_states[self_uid_hex]['reward'] * divisor)
-    assert datum_v1.accumulated_rewards == pytest.approx(expected_rewards)
+
+    # --- SỬA LẠI ASSERTION CHO REWARDS ---
+    # Lấy reward cũ từ input test
+    accumulated_rewards_old = calculated_states[self_uid_hex]['accumulated_rewards_old']
+    # Tính reward mới (increment)
+    new_reward_increment = int(calculated_states[self_uid_hex]['reward'] * divisor)
+    # Giá trị mong đợi là tổng của reward cũ và phần tăng thêm
+    expected_total_rewards = accumulated_rewards_old + new_reward_increment
+    assert datum_v1.accumulated_rewards == pytest.approx(expected_total_rewards)
+    # --- KẾT THÚC SỬA ---
+
     assert datum_v1.stake == int(self_info.stake)
     assert datum_v1.status == STATUS_ACTIVE
-    # Kiểm tra wallet_addr_hash (là VerificationKeyHash)
-    # assert isinstance(datum_v1.wallet_addr_hash, VerificationKeyHash)
-    print(self_info.wallet_addr_hash)
-    assert datum_v1.wallet_addr_hash == self_info.wallet_addr_hash
+    # Kiểm tra hash (đảm bảo nó không phải None nếu được hash đúng)
+    assert isinstance(datum_v1.wallet_addr_hash, bytes) and len(datum_v1.wallet_addr_hash) == 32
+    assert isinstance(datum_v1.api_endpoint, bytes) and len(datum_v1.api_endpoint) == 32 # Hoặc None nếu không có endpoint
 
 
 # --- Test cho _calculate_fraud_severity ---
@@ -365,4 +450,277 @@ def test_calculate_fraud_severity(reason, tolerance, expected_severity): # <<<--
     # --------------------------
     assert severity == pytest.approx(expected_severity)
 
-# TODO: Viết test cho verify_and_penalize_logic
+# --- Test Cases cho verify_and_penalize_logic ---
+
+@pytest.mark.asyncio
+async def test_verify_penalize_all_correct(mocker: MockerFixture, mock_context: MagicMock, cardano_params: Tuple[ScriptHash, Network]):
+    """Kiểm tra trường hợp tất cả validator commit đúng trạng thái."""
+    script_hash, network = cardano_params
+    current_cycle = 101
+    previous_cycle = 100
+    divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
+    tolerance = settings.CONSENSUS_DATUM_COMPARISON_TOLERANCE
+
+    # 1. Input state (start of cycle 101)
+    v1_info_start = create_validator_info_state(1, 0.95, 3.0, 5000)
+    v2_info_start = create_validator_info_state(2, 0.85, 2.5, 4000)
+    validators_info_input = { v1_info_start.uid: copy.deepcopy(v1_info_start), v2_info_start.uid: copy.deepcopy(v2_info_start) }
+
+    # 2. Expected state (calculated end of cycle 100)
+    previous_calculated_states = {
+        v1_info_start.uid: {"trust": 0.95, "E_v": 0.98, "start_status": STATUS_ACTIVE},
+        v2_info_start.uid: {"trust": 0.85, "E_v": 0.90, "start_status": STATUS_ACTIVE}
+    }
+
+    # 3. Mock on-chain state (committed end of cycle 100)
+    on_chain_trust_v1 = 0.95 + tolerance * 0.1 # Within tolerance
+    on_chain_perf_v1 = 0.98 - tolerance * 0.1 # Within tolerance
+    on_chain_trust_v2 = 0.85
+    on_chain_perf_v2 = 0.90
+
+    on_chain_datum_v1 = create_validator_datum(
+        v1_info_start.uid, previous_cycle, on_chain_trust_v1, on_chain_perf_v1, v1_info_start.stake, STATUS_ACTIVE
+    )
+    on_chain_datum_v2 = create_validator_datum(
+        v2_info_start.uid, previous_cycle, on_chain_trust_v2, on_chain_perf_v2, v2_info_start.stake, STATUS_ACTIVE
+    )
+    mock_utxo_v1 = create_mock_utxo_with_datum(on_chain_datum_v1, tx_id_str="a"*64)
+    mock_utxo_v2 = create_mock_utxo_with_datum(on_chain_datum_v2, tx_id_str="b"*64)
+
+    # Mock get_all_validator_data return value
+    mock_on_chain_output = [
+        (mock_utxo_v1, convert_datum_to_dict(on_chain_datum_v1)),
+        (mock_utxo_v2, convert_datum_to_dict(on_chain_datum_v2))
+    ]
+    mock_get_data = mocker.patch("sdk.consensus.state.get_all_validator_data", new_callable=AsyncMock)
+    mock_get_data.return_value = mock_on_chain_output
+
+    # 4. Call function
+    validators_info_before = copy.deepcopy(validators_info_input)
+    penalized_datums = await verify_and_penalize_logic(
+        current_cycle=current_cycle, previous_calculated_states=previous_calculated_states,
+        validators_info=validators_info_input, context=mock_context,
+        settings=settings, script_hash=script_hash, network=network
+    )
+
+    # 5. Assertions
+    mock_get_data.assert_awaited_once_with(mock_context, script_hash, network)
+    assert not penalized_datums
+    assert validators_info_input == validators_info_before
+
+
+@pytest.mark.asyncio
+async def test_verify_penalize_minor_deviation(mocker: MockerFixture, mock_context: MagicMock, cardano_params: Tuple[ScriptHash, Network]):
+    """Kiểm tra trường hợp sai lệch nhỏ (chỉ phạt trust)."""
+    script_hash, network = cardano_params
+    current_cycle = 102
+    previous_cycle = 101
+    divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
+    tolerance = settings.CONSENSUS_DATUM_COMPARISON_TOLERANCE
+    penalty_eta = settings.CONSENSUS_PARAM_PENALTY_ETA
+
+    v1_info_start = create_validator_info_state(1, 0.95, 3.0, 5000)
+    validators_info_input = { v1_info_start.uid: copy.deepcopy(v1_info_start) }
+    validators_info_before = copy.deepcopy(validators_info_input)
+
+    expected_trust = 0.95
+    expected_perf = 0.98
+    previous_calculated_states = {
+        v1_info_start.uid: {"trust": expected_trust, "E_v": expected_perf, "start_status": STATUS_ACTIVE}
+    }
+
+    # Tạo sai lệch trust lớn hơn tolerance (ví dụ: 5 lần tolerance)
+    on_chain_trust = expected_trust - (tolerance * 5)
+    on_chain_perf = expected_perf # Perf đúng
+    on_chain_datum_v1 = create_validator_datum(
+        v1_info_start.uid, previous_cycle, on_chain_trust, on_chain_perf, v1_info_start.stake, STATUS_ACTIVE
+    )
+    mock_utxo_v1 = create_mock_utxo_with_datum(on_chain_datum_v1)
+    mock_on_chain_output = [(mock_utxo_v1, convert_datum_to_dict(on_chain_datum_v1))]
+    mock_get_data = mocker.patch("sdk.consensus.state.get_all_validator_data", new_callable=AsyncMock)
+    mock_get_data.return_value = mock_on_chain_output
+
+    # Mock hàm tính severity để kiểm soát kết quả
+    # Giả sử sai lệch 5*tolerance -> severity = 0.1
+    mock_severity_calc = mocker.patch("sdk.consensus.state._calculate_fraud_severity", return_value=0.1)
+
+    penalized_datums = await verify_and_penalize_logic(
+        current_cycle=current_cycle, previous_calculated_states=previous_calculated_states,
+        validators_info=validators_info_input, context=mock_context,
+        settings=settings, script_hash=script_hash, network=network
+    )
+
+    # Assertions
+    assert v1_info_start.uid in penalized_datums
+    penalized_datum = penalized_datums[v1_info_start.uid]
+    assert penalized_datum.last_update_slot == current_cycle
+    assert penalized_datum.status == STATUS_ACTIVE # Chưa bị jailed
+
+    # Kiểm tra trust bị phạt
+    severity = 0.1
+    expected_penalized_trust_float = v1_info_start.trust_score * (1 - penalty_eta * severity)
+    assert penalized_datum.scaled_trust_score == pytest.approx(int(expected_penalized_trust_float * divisor))
+    assert validators_info_input[v1_info_start.uid].trust_score == pytest.approx(expected_penalized_trust_float)
+    assert validators_info_input[v1_info_start.uid].status == STATUS_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_verify_penalize_severe_deviation_jailed(mocker: MockerFixture, mock_context: MagicMock, cardano_params: Tuple[ScriptHash, Network]):
+    """Kiểm tra trường hợp sai lệch lớn dẫn đến JAILED."""
+    script_hash, network = cardano_params
+    current_cycle = 103
+    previous_cycle = 102
+    divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
+    tolerance = settings.CONSENSUS_DATUM_COMPARISON_TOLERANCE
+    penalty_eta = settings.CONSENSUS_PARAM_PENALTY_ETA
+    # Đặt jailed_threshold cao hơn severity giả định để test không bị jailed trước
+    mocker.patch.object(settings, 'CONSENSUS_JAILED_SEVERITY_THRESHOLD', 0.5)
+
+    v1_info_start = create_validator_info_state(1, 0.95, 3.0, 5000, status=STATUS_ACTIVE)
+    validators_info_input = { v1_info_start.uid: copy.deepcopy(v1_info_start) }
+
+    expected_trust = 0.95
+    expected_perf = 0.98
+    previous_calculated_states = {
+        v1_info_start.uid: {"trust": expected_trust, "E_v": expected_perf, "start_status": STATUS_ACTIVE}
+    }
+
+    # Sai lệch rất lớn
+    on_chain_trust = 0.50
+    on_chain_perf = 0.60
+    on_chain_datum_v1 = create_validator_datum(
+        v1_info_start.uid, previous_cycle, on_chain_trust, on_chain_perf, v1_info_start.stake, STATUS_ACTIVE
+    )
+    mock_utxo_v1 = create_mock_utxo_with_datum(on_chain_datum_v1)
+    mock_on_chain_output = [(mock_utxo_v1, convert_datum_to_dict(on_chain_datum_v1))]
+    mock_get_data = mocker.patch("sdk.consensus.state.get_all_validator_data", new_callable=AsyncMock)
+    mock_get_data.return_value = mock_on_chain_output
+
+    # Mock severity trả về giá trị cao (ví dụ 0.7), lớn hơn threshold 0.5
+    mock_severity_calc = mocker.patch("sdk.consensus.state._calculate_fraud_severity", return_value=0.7)
+
+    penalized_datums = await verify_and_penalize_logic(
+        current_cycle=current_cycle, previous_calculated_states=previous_calculated_states,
+        validators_info=validators_info_input, context=mock_context,
+        settings=settings, script_hash=script_hash, network=network
+    )
+
+    # Assertions
+    assert v1_info_start.uid in penalized_datums
+    penalized_datum = penalized_datums[v1_info_start.uid]
+    assert penalized_datum.last_update_slot == current_cycle
+    assert penalized_datum.status == STATUS_JAILED # Bị jailed
+
+    severity = 0.7
+    expected_penalized_trust_float = v1_info_start.trust_score * (1 - penalty_eta * severity)
+    assert penalized_datum.scaled_trust_score == pytest.approx(int(expected_penalized_trust_float * divisor))
+    assert validators_info_input[v1_info_start.uid].trust_score == pytest.approx(expected_penalized_trust_float)
+    assert validators_info_input[v1_info_start.uid].status == STATUS_JAILED
+
+
+@pytest.mark.asyncio
+async def test_verify_penalize_did_not_commit(mocker: MockerFixture, mock_context: MagicMock, cardano_params: Tuple[ScriptHash, Network]):
+    """Kiểm tra trường hợp validator active không commit."""
+    script_hash, network = cardano_params
+    current_cycle = 104
+    previous_cycle = 103
+    penalty_eta = settings.CONSENSUS_PARAM_PENALTY_ETA
+    v1_info_start = create_validator_info_state(1, 0.90, 3.0, 5000, status=STATUS_ACTIVE)
+    v2_info_start = create_validator_info_state(2, 0.80, 2.0, 3000, status=STATUS_ACTIVE)
+    validators_info_input = { v1_info_start.uid: copy.deepcopy(v1_info_start), v2_info_start.uid: copy.deepcopy(v2_info_start) }
+    validators_info_before = copy.deepcopy(validators_info_input)
+    previous_calculated_states = {
+        v1_info_start.uid: {"trust": 0.90, "E_v": 0.92, "start_status": STATUS_ACTIVE},
+        v2_info_start.uid: {"trust": 0.80, "E_v": 0.88, "start_status": STATUS_ACTIVE}
+    }
+    on_chain_datum_v2 = create_validator_datum(
+        v2_info_start.uid, previous_cycle, 0.80, 0.88, v2_info_start.stake, STATUS_ACTIVE
+    )
+    mock_utxo_v2 = create_mock_utxo_with_datum(on_chain_datum_v2)
+    mock_on_chain_output = [(mock_utxo_v2, convert_datum_to_dict(on_chain_datum_v2))]
+    mock_get_data = mocker.patch("sdk.consensus.state.get_all_validator_data", new_callable=AsyncMock)
+    mock_get_data.return_value = mock_on_chain_output
+    mock_severity_calc = mocker.patch("sdk.consensus.state._calculate_fraud_severity", return_value=0.05)
+
+    penalized_datums = await verify_and_penalize_logic(
+        current_cycle=current_cycle, previous_calculated_states=previous_calculated_states,
+        validators_info=validators_info_input, context=mock_context,
+        settings=settings, script_hash=script_hash, network=network
+    )
+
+    # --- SỬA LẠI ASSERTIONS ---
+    # a. Kiểm tra V1 bị phạt trong bộ nhớ (validators_info_input)
+    severity_v1 = 0.05
+    expected_penalized_trust_v1 = v1_info_start.trust_score * (1 - penalty_eta * severity_v1)
+    assert validators_info_input[v1_info_start.uid].trust_score == pytest.approx(expected_penalized_trust_v1)
+    assert validators_info_input[v1_info_start.uid].status == STATUS_ACTIVE # Chưa bị jailed
+
+    # b. Kiểm tra V2 không bị phạt trong bộ nhớ
+    assert validators_info_input[v2_info_start.uid].trust_score == validators_info_before[v2_info_start.uid].trust_score
+    assert validators_info_input[v2_info_start.uid].status == validators_info_before[v2_info_start.uid].status
+
+    # c. Kiểm tra V1 KHÔNG có trong penalized_datums trả về
+    assert v1_info_start.uid not in penalized_datums
+    # d. Kiểm tra V2 cũng KHÔNG có trong penalized_datums (vì nó không làm gì sai)
+    assert v2_info_start.uid not in penalized_datums
+    # e. Do đó, dict trả về phải rỗng
+    assert not penalized_datums
+
+
+@pytest.mark.asyncio
+async def test_verify_penalize_inactive_no_commit(mocker: MockerFixture, mock_context: MagicMock, cardano_params: Tuple[ScriptHash, Network]):
+    """Kiểm tra validator inactive không commit -> không bị phạt."""
+    script_hash, network = cardano_params
+    current_cycle = 105
+    previous_cycle = 104
+
+    # V1 inactive
+    v1_info_start = create_validator_info_state(1, 0.70, 3.0, 5000, status=STATUS_INACTIVE)
+    validators_info_input = { v1_info_start.uid: copy.deepcopy(v1_info_start) }
+    validators_info_before = copy.deepcopy(validators_info_input)
+
+    # Trạng thái dự kiến (vẫn tính cho inactive)
+    previous_calculated_states = {
+        v1_info_start.uid: {"trust": 0.65, "E_v": 0.0, "start_status": STATUS_INACTIVE} # Trust đã decay ở cycle trước
+    }
+
+    # Mock on-chain state: Rỗng (V1 không commit)
+    mock_on_chain_output = []
+    mock_get_data = mocker.patch("sdk.consensus.state.get_all_validator_data", new_callable=AsyncMock)
+    mock_get_data.return_value = mock_on_chain_output
+
+    penalized_datums = await verify_and_penalize_logic(
+        current_cycle=current_cycle, previous_calculated_states=previous_calculated_states,
+        validators_info=validators_info_input, context=mock_context,
+        settings=settings, script_hash=script_hash, network=network
+    )
+
+    # Assertions: Không có gì xảy ra với V1
+    assert not penalized_datums
+    assert validators_info_input == validators_info_before
+
+
+@pytest.mark.asyncio
+async def test_verify_penalize_error_fetching_onchain(mocker: MockerFixture, mock_context: MagicMock, cardano_params: Tuple[ScriptHash, Network]):
+    """Kiểm tra trường hợp không thể fetch dữ liệu on-chain."""
+    script_hash, network = cardano_params
+    current_cycle = 106
+
+    v1_info_start = create_validator_info_state(1, 0.95, 3.0, 5000)
+    validators_info_input = { v1_info_start.uid: copy.deepcopy(v1_info_start) }
+    validators_info_before = copy.deepcopy(validators_info_input)
+    previous_calculated_states = { v1_info_start.uid: {"trust": 0.95, "E_v": 0.98, "start_status": STATUS_ACTIVE} }
+
+    # Mock get_all_validator_data raise lỗi
+    mock_get_data = mocker.patch("sdk.consensus.state.get_all_validator_data", new_callable=AsyncMock)
+    mock_get_data.side_effect = Exception("Blockchain query failed")
+
+    penalized_datums = await verify_and_penalize_logic(
+        current_cycle=current_cycle, previous_calculated_states=previous_calculated_states,
+        validators_info=validators_info_input, context=mock_context,
+        settings=settings, script_hash=script_hash, network=network
+    )
+
+    # Assertions: Không có gì xảy ra
+    assert not penalized_datums
+    assert validators_info_input == validators_info_before

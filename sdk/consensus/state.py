@@ -4,6 +4,7 @@ Logic tính toán đồng thuận, kiểm tra phạt, chuẩn bị và commit c�
 """
 import logging
 import math
+import hashlib # Đảm bảo đã import
 import asyncio
 from typing import List, Dict, Any, Tuple, Optional, Set, Union
 from collections import defaultdict
@@ -72,12 +73,10 @@ async def find_utxo_by_uid(
 # -----------------------------------------
 
 # --- Hàm tính Severity tinh chỉnh hơn ---
-def _calculate_fraud_severity(reason: str, tolerance: float) -> float: # <<<--- Chỉ 2 tham số
+def _calculate_fraud_severity(reason: str, tolerance: float) -> float:
     severity = 0.0
     max_deviation_factor = 0.0
-
     if "Did not commit" in reason: return 0.05
-
     parts = reason.split(';')
     for part in parts:
         part = part.strip()
@@ -89,20 +88,11 @@ def _calculate_fraud_severity(reason: str, tolerance: float) -> float: # <<<--- 
                      deviation_factor = diff_float / tolerance
                      max_deviation_factor = max(max_deviation_factor, deviation_factor)
             except Exception: pass
-
-    # --- Logic quyết định severity dựa trên factor và settings ---
     severe_threshold_factor = getattr(settings, 'CONSENSUS_SEVERITY_SEVERE_FACTOR', 10.0)
     moderate_threshold_factor = getattr(settings, 'CONSENSUS_SEVERITY_MODERATE_FACTOR', 3.0)
-
-    if max_deviation_factor >= severe_threshold_factor:
-        severity = 0.7 # Severe
-    elif max_deviation_factor >= moderate_threshold_factor:
-        severity = 0.3 # Moderate
-    elif max_deviation_factor > 1.0: # Chỉ vượt tolerance một chút
-        severity = 0.1 # Minor
-    # else: severity = 0.0 (mặc định)
-
-    logger.debug(f"Calculated fraud severity: {severity:.2f} (Factor: {max_deviation_factor:.1f}x)")
+    if max_deviation_factor >= severe_threshold_factor: severity = 0.7
+    elif max_deviation_factor >= moderate_threshold_factor: severity = 0.3
+    elif max_deviation_factor > 1.0: severity = 0.1
     return severity
 
 # -----------------------------------------
@@ -312,114 +302,91 @@ async def verify_and_penalize_logic(
     if previous_cycle < 0: return {}
 
     penalized_validator_datums: Dict[str, ValidatorDatum] = {}
-    tolerance = settings.CONSENSUS_DATUM_COMPARISON_TOLERANCE # Sai số cho phép (float)
-    # Chuyển tolerance sang dạng int để so sánh với scaled values
-    scaled_tolerance = int(tolerance * settings.METAGRAPH_DATUM_INT_DIVISOR)
-    logger.debug(f"Verification tolerance (float): {tolerance}, Scaled tolerance (int): {scaled_tolerance}")
-
+    tolerance = settings.CONSENSUS_DATUM_COMPARISON_TOLERANCE
+    divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
+    logger.debug(f"Verification tolerance (float): {tolerance}")
 
     try:
-        # 1. Lấy dữ liệu on-chain của chu kỳ TRƯỚC
-        # Giả sử hàm get_all_validator_data trả về List[Tuple[UTxO, Dict]]
-        all_validator_results = await get_all_validator_data(context, script_hash, network)
+        # 1. Get on-chain data from the PREVIOUS cycle
+        all_validator_results: List[Tuple[UTxO, Dict]] = await get_all_validator_data(context, script_hash, network)
 
-        # Xử lý dữ liệu on-chain
-        on_chain_states: Dict[str, Dict] = {} # Lưu state on-chain đã decode (int scaled)
-        datum_map: Dict[str, ValidatorDatum] = {} # Lưu Datum object gốc
+        # Process on-chain data
+        on_chain_states_decoded: Dict[str, Dict] = {} # Store decoded dict
+        utxo_map_on_chain: Dict[str, UTxO] = {} # << CORRECT NAME: Store original UTxO object
 
         for utxo_obj, datum_dict in all_validator_results:
             uid_hex = datum_dict.get("uid")
             last_update = datum_dict.get("last_update_slot")
 
             if uid_hex and last_update == previous_cycle:
-                try:
-                    # Decode lại Datum object từ UTxO để lấy giá trị gốc (scaled int)
-                    # Điều này giả định datum trong utxo_obj là PlutusData có thể decode
-                    if utxo_obj.output.datum:
-                        on_chain_datum = ValidatorDatum.from_cbor(utxo_obj.output.datum.cbor)
-                        on_chain_states[uid_hex] = {
-                            "scaled_trust": getattr(on_chain_datum, 'scaled_trust_score', -1),
-                            "scaled_perf": getattr(on_chain_datum, 'scaled_last_performance', -1),
-                            # Thêm các trường scaled int khác cần kiểm tra
-                        }
-                        datum_map[uid_hex] = on_chain_datum # Lưu lại datum object gốc
-                    else:
-                         logger.warning(f"UTXO {utxo_obj.input} for {uid_hex} has no inline datum for verification.")
-                except Exception as decode_e:
-                     logger.warning(f"Failed to decode on-chain datum for {uid_hex} (UTxO: {utxo_obj.input}): {decode_e}")
+                on_chain_states_decoded[uid_hex] = datum_dict
+                utxo_map_on_chain[uid_hex] = utxo_obj # << CORRECT NAME: Store the UTxO object
 
+        logger.info(f"Found {len(on_chain_states_decoded)} validator datums updated in cycle {previous_cycle} for verification.")
 
-        logger.info(f"Found {len(on_chain_states)} validator datums updated in cycle {previous_cycle} for verification.")
-
-        # 2. So sánh với trạng thái dự kiến đã lưu
-        expected_states = previous_calculated_states # Đây là dict state dự kiến từ cycle N-1
+        # 2. Compare with expected states
+        expected_states = previous_calculated_states
         if not expected_states:
             logger.warning("No expected validator states found from previous cycle.")
             return {}
 
-        suspicious_validators: Dict[str, str] = {} # {uid_hex: reason}
+        suspicious_validators: Dict[str, str] = {}
 
         for uid_hex, expected in expected_states.items():
-            # Lấy state on-chain tương ứng
-            actual_scaled = on_chain_states.get(uid_hex)
-            reason_parts = [] # Thu thập các lý do sai lệch
+            actual_decoded = on_chain_states_decoded.get(uid_hex)
+            reason_parts = []
 
-            if not actual_scaled:
-                # Chỉ coi là "Did not commit" nếu validator được kỳ vọng là active
+            if not actual_decoded:
                 if expected.get("start_status") == STATUS_ACTIVE:
                     reason_parts.append(f"Did not commit updates in cycle {previous_cycle}")
-                # Không cần kiểm tra sâu hơn nếu không có dữ liệu on-chain
                 if reason_parts: suspicious_validators[uid_hex] = "; ".join(reason_parts)
                 continue
 
-            # --- So sánh Scaled Trust Score ---
-            expected_trust_float = expected.get("trust", -1.0) # Trust dự kiến (float)
-            expected_trust_scaled = int(expected_trust_float * settings.METAGRAPH_DATUM_INT_DIVISOR)
-            actual_trust_scaled = actual_scaled.get("scaled_trust", -999)
-            diff_trust_scaled = abs(actual_trust_scaled - expected_trust_scaled)
+            # Compare Trust Score (float)
+            expected_trust_float = expected.get("trust", -1.0)
+            actual_trust_float = actual_decoded.get("trust_score", -999.0)
+            if actual_trust_float == -999.0:
+                logger.error(f"Key 'trust_score' missing in decoded on-chain data for {uid_hex}.")
+                reason_parts.append("Trust score missing in on-chain data") # Add reason if missing
+            else:
+                diff_trust_float = abs(actual_trust_float - expected_trust_float)
+                if diff_trust_float > tolerance:
+                     reason_parts.append(f"Trust mismatch (Expected: {expected_trust_float:.5f}, Actual: {actual_trust_float:.5f}, Diff: {diff_trust_float:.5f})")
 
-            if diff_trust_scaled > scaled_tolerance:
-                 # Tính lại diff float để log cho dễ hiểu
-                 actual_trust_float = actual_trust_scaled / settings.METAGRAPH_DATUM_INT_DIVISOR if actual_trust_scaled != -999 else -2.0
-                 diff_trust_float = abs(actual_trust_float - expected_trust_float)
-                 reason_parts.append(f"Trust mismatch (Expected: {expected_trust_float:.5f}, Actual: {actual_trust_float:.5f}, Diff: {diff_trust_float:.5f})")
+            # Compare Performance Score (float)
+            expected_perf_float = expected.get("E_v", -1.0)
+            actual_perf_float = actual_decoded.get("last_performance", -999.0)
+            if actual_perf_float == -999.0:
+                 logger.error(f"Key 'last_performance' missing in decoded on-chain data for {uid_hex}.")
+                 reason_parts.append("Performance score missing in on-chain data") # Add reason if missing
+            else:
+                diff_perf_float = abs(actual_perf_float - expected_perf_float)
+                if diff_perf_float > tolerance:
+                     reason_parts.append(f"Performance mismatch (Expected: {expected_perf_float:.5f}, Actual: {actual_perf_float:.5f}, Diff: {diff_perf_float:.5f})")
 
-            # --- So sánh Scaled Performance Score ---
-            expected_perf_float = expected.get("E_v", -1.0) # E_v dự kiến (float)
-            expected_perf_scaled = int(expected_perf_float * settings.METAGRAPH_DATUM_INT_DIVISOR)
-            actual_perf_scaled = actual_scaled.get("scaled_perf", -999)
-            diff_perf_scaled = abs(actual_perf_scaled - expected_perf_scaled)
+            # --- REMOVED Redundant/Incorrect Scaled Performance Comparison ---
 
-            if diff_perf_scaled > scaled_tolerance:
-                 actual_perf_float = actual_perf_scaled / settings.METAGRAPH_DATUM_INT_DIVISOR if actual_perf_scaled != -999 else -2.0
-                 diff_perf_float = abs(actual_perf_float - expected_perf_float)
-                 reason_parts.append(f"Performance mismatch (Expected: {expected_perf_float:.5f}, Actual: {actual_perf_float:.5f}, Diff: {diff_perf_float:.5f})")
-
-            # --- Thêm so sánh các trường khác nếu cần ---
-
-            # Lưu lý do nếu có sai lệch
             if reason_parts:
                 suspicious_validators[uid_hex] = "; ".join(reason_parts)
                 logger.warning(f"Deviation detected for Validator {uid_hex}: {suspicious_validators[uid_hex]}")
 
-        # 3. Đồng thuận về Gian lận (Placeholder)
+        # 3. Consensus on Fraud (Mocked)
         confirmed_deviators: Dict[str, str] = {}
         if suspicious_validators:
             logger.info(f"Consensus on {len(suspicious_validators)} suspicious validators needed (currently mocked).")
-            # TODO: Implement P2P fraud consensus logic
-            confirmed_deviators = suspicious_validators # <<<--- Tạm thời xác nhận tất cả
+            confirmed_deviators = suspicious_validators # Mock: confirm all
             logger.warning(f"Deviation confirmed (mock): {list(confirmed_deviators.keys())}")
 
-        # 4. Áp dụng Phạt Trust/Status và Chuẩn bị Datum Phạt
+        # 4. Apply Penalties and Prepare Penalty Datums
         for uid_hex, reason in confirmed_deviators.items():
-            validator_info = validators_info.get(uid_hex) # Lấy info hiện tại (đầu cycle N)
+            validator_info = validators_info.get(uid_hex)
             if not validator_info:
                 logger.warning(f"Info for penalized validator {uid_hex} not found in current state.")
                 continue
 
             logger.warning(f"Applying penalty to Validator {uid_hex} for: {reason}")
 
-            # a. Xác định mức độ nghiêm trọng
+            # a. Determine Severity
             fraud_severity = _calculate_fraud_severity(reason, tolerance)
 
             # b. Tính lượng slash tiềm năng
@@ -428,54 +395,62 @@ async def verify_and_penalize_logic(
                  logger.warning(f"Potential slash amount for {uid_hex}: {slash_amount / 1e6:.6f} ADA (Severity: {fraud_severity:.2f}). Needs trigger mechanism.")
                  # TODO: Trigger Slashing Mechanism (Future/DAO)
 
-            # c. Phạt Trust Score (cập nhật vào validators_info)
+            # c. Penalize Trust Score
             penalty_eta = settings.CONSENSUS_PARAM_PENALTY_ETA
             original_trust = validator_info.trust_score
             new_trust_score = max(0.0, original_trust * (1 - penalty_eta * fraud_severity))
-            if abs(new_trust_score - original_trust) > EPSILON: # Chỉ log nếu có thay đổi
+            if abs(new_trust_score - original_trust) > EPSILON:
                 logger.warning(f"Penalizing Trust Score for {uid_hex}: {original_trust:.4f} -> {new_trust_score:.4f} (Eta: {penalty_eta}, Severity: {fraud_severity:.2f})")
-                validator_info.trust_score = new_trust_score # *** Cập nhật trust trong bộ nhớ ***
+                validator_info.trust_score = new_trust_score
             else:
                 logger.info(f"Trust score for {uid_hex} remains {original_trust:.4f} (penalty negligible).")
 
-
-            # d. Phạt Status (cập nhật vào validators_info)
+            # d. Penalize Status
             new_status = validator_info.status
-            # --- Logic Jailed linh hoạt hơn ---
-            jailed_threshold = getattr(settings, 'CONSENSUS_JAILED_SEVERITY_THRESHOLD', 0.2) # Lấy ngưỡng từ settings (ví dụ 0.2)
+            jailed_threshold = getattr(settings, 'CONSENSUS_JAILED_SEVERITY_THRESHOLD', 0.2)
             if fraud_severity >= jailed_threshold and validator_info.status == STATUS_ACTIVE:
                 new_status = STATUS_JAILED
                 logger.warning(f"Setting Validator {uid_hex} status to JAILED (Severity {fraud_severity:.2f} >= Threshold {jailed_threshold}).")
-                validator_info.status = new_status # *** Cập nhật status trong bộ nhớ ***
-            # ----------------------------------
+                validator_info.status = new_status
 
-            # e. Chuẩn bị ValidatorDatum mới để Commit Hình Phạt
-            # Lấy Datum gốc on-chain đã đọc được ở bước 1 (nếu có)
-            original_datum = datum_map.get(uid_hex)
+            # e. Prepare new ValidatorDatum for penalty commit
+            original_datum = None
+            original_utxo = utxo_map_on_chain.get(uid_hex) # << USE CORRECT MAP NAME
+
+            if original_utxo and hasattr(original_utxo, 'output') and hasattr(original_utxo.output, 'datum'):
+                potential_datum = original_utxo.output.datum
+                if isinstance(potential_datum, ValidatorDatum):
+                    original_datum = potential_datum
+                else: logger.warning(f"Object in utxo.output.datum for {uid_hex} not ValidatorDatum: {type(potential_datum)}")
+            else: logger.warning(f"Could not find original UTxO/output/datum in map for {uid_hex}")
+
+            # --- ADD CHECK FOR original_datum BEFORE try block ---
             if not original_datum:
-                 logger.error(f"Cannot prepare penalty datum for {uid_hex}: Original on-chain datum not found/decoded.")
-                 continue # Không thể tạo datum phạt nếu không có datum gốc
+                 logger.error(f"Cannot prepare penalty datum for {uid_hex}: Original on-chain ValidatorDatum object not found/retrieved.")
+                 continue # Skip to next deviator if datum object not found
+            # ---
 
             try:
-                # Tạo datum mới dựa trên datum gốc, chỉ cập nhật trust, status, slot
+                # Now original_datum is guaranteed to be a ValidatorDatum object
                 datum_to_commit = ValidatorDatum(
                     uid=original_datum.uid,
                     subnet_uid=original_datum.subnet_uid,
-                    stake=original_datum.stake, # Giữ stake cũ
-                    scaled_last_performance=original_datum.scaled_last_performance, # Giữ perf cũ
-                    scaled_trust_score=int(new_trust_score * settings.METAGRAPH_DATUM_INT_DIVISOR), # <<< Trust mới bị phạt
-                    accumulated_rewards=original_datum.accumulated_rewards, # Giữ rewards cũ
-                    last_update_slot=current_cycle, # <<< Cập nhật slot là chu kỳ HIỆN TẠI
+                    stake=original_datum.stake,
+                    scaled_last_performance=original_datum.scaled_last_performance,
+                    scaled_trust_score=int(new_trust_score * divisor),
+                    accumulated_rewards=original_datum.accumulated_rewards,
+                    last_update_slot=current_cycle, # Update slot
                     performance_history_hash=original_datum.performance_history_hash,
-                    wallet_addr_hash=original_datum.wallet_addr_hash, # Giữ hash address cũ
-                    status=new_status, # <<< Status mới
+                    wallet_addr_hash=original_datum.wallet_addr_hash,
+                    status=new_status, # Update status
                     registration_slot=original_datum.registration_slot,
                     api_endpoint=original_datum.api_endpoint,
                 )
                 penalized_validator_datums[uid_hex] = datum_to_commit
                 logger.info(f"Prepared penalty datum update for {uid_hex}.")
             except Exception as build_e:
-                logger.error(f"Failed to build penalty datum for {uid_hex}: {build_e}")
+                # This catch block might now catch errors if ValidatorDatum init fails for other reasons
+                logger.exception(f"Failed to build penalty datum for {uid_hex}: {build_e}") # Use logger.exception
 
     except Exception as e:
         logger.exception(f"Error during validator verification/penalization: {e}")
@@ -645,100 +620,71 @@ async def prepare_miner_updates_logic( # <<<--- async vì cần lấy/decode dat
     return miner_updates
 
 
-async def prepare_validator_updates_logic( # <<<--- Chuyển thành async vì cần lấy datum cũ
+async def prepare_validator_updates_logic(
     current_cycle: int,
-    self_validator_info: ValidatorInfo, # <<<--- Nhận thông tin validator hiện tại
-    calculated_states: Dict[str, Any], # Trạng thái validator dự kiến đã tính (bao gồm cả reward)
+    self_validator_info: ValidatorInfo,
+    calculated_states: Dict[str, Any],
     settings: Any,
-    context: BlockFrostChainContext # <<<--- Thêm context
+    context: Optional[BlockFrostChainContext] # Context có thể là Optional hoặc mock
 ) -> Dict[str, ValidatorDatum]:
-    """Chuẩn bị dữ liệu ValidatorDatum mới cho chính validator này."""
     logger.info(f"Preparing self validator state update for cycle {current_cycle}...")
     validator_updates: Dict[str, ValidatorDatum] = {}
-    self_uid_hex = self_validator_info.uid # Lấy UID hex từ info object
+    self_uid_hex = self_validator_info.uid
+    divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
 
-    if self_uid_hex in calculated_states:
-        state = calculated_states[self_uid_hex]
-        old_datum: Optional[ValidatorDatum] = None
-        pending_rewards_old = 0
-        wallet_addr_hash_old = b'default_wallet_hash_placeholder' # Giá trị mặc định
-        perf_history_hash_old = None
-        registration_slot_old = 0
-        subnet_uid_old = 0
-        stake_old = 0
-        status_old = STATUS_ACTIVE
-        version_old = 0
-        api_endpoint_old = None
+    if self_uid_hex not in calculated_states:
+        logger.warning(f"Calculated state for self validator {self_uid_hex} not found.")
+        return {}
 
+    state = calculated_states[self_uid_hex]
+    # Lấy thông tin tĩnh/ít thay đổi từ self_validator_info
+    stake_current = int(self_validator_info.stake)
+    subnet_uid_current = getattr(self_validator_info, 'subnet_uid', 0)
+    registration_slot_current = getattr(self_validator_info, 'registration_slot', 0)
+    validator_address_str = self_validator_info.address
+    api_endpoint_current = self_validator_info.api_endpoint
+    status_current = getattr(self_validator_info, 'status', STATUS_ACTIVE)
 
-        # TODO: Triển khai logic lấy Datum cũ của chính mình bằng context và self_uid_hex
-        try:
-            # Giả sử có hàm get_validator_datum hoặc cách tìm UTXO + decode datum
-            # validator_utxo = await metagraph_data.find_validator_utxo(context, self_uid_hex)
-            # if validator_utxo and validator_utxo.output.datum:
-            #     old_datum = ValidatorDatum.from_cbor(validator_utxo.output.datum.cbor)
-            #     pending_rewards_old = getattr(old_datum, 'accumulated_rewards', 0)
-            #     wallet_addr_hash_old = getattr(old_datum, 'wallet_addr_hash', wallet_addr_hash_old)
-            #     perf_history_hash_old = getattr(old_datum, 'performance_history_hash', None)
-            #     registration_slot_old = getattr(old_datum, 'registration_slot', 0)
-            #     subnet_uid_old = getattr(old_datum, 'subnet_uid', 0)
-            #     stake_old = getattr(old_datum, 'stake', 0) # Lấy stake từ datum cũ hay từ info mới nhất? -> Nên từ info
-            #     status_old = getattr(old_datum, 'status', STATUS_ACTIVE)
-            #     version_old = getattr(old_datum, 'version', 0)
-            #     api_endpoint_old = getattr(old_datum, 'api_endpoint', None)
+    # ===>>> SỬA LỖI SIZE BẰNG HASH <<<===
+    # Hash địa chỉ và endpoint thay vì dùng bytes gốc
+    wallet_addr_hash_bytes = hashlib.sha256(validator_address_str.encode('utf-8')).digest()
+    api_endpoint_bytes = hashlib.sha256(api_endpoint_current.encode('utf-8')).digest() if api_endpoint_current else None
+    # ===>>> KẾT THÚC SỬA LỖI SIZE <<<===
 
-            logger.debug(f"Successfully fetched old datum for self ({self_uid_hex}). Old rewards: {pending_rewards_old}")
-            # Lấy các giá trị không đổi từ self_validator_info (đã được load mới nhất)
-            stake_current = int(self_validator_info.stake)
-            subnet_uid_current = self_validator_info.subnet_uid
-            registration_slot_current = getattr(self_validator_info, 'registration_slot', registration_slot_old) # Giữ slot gốc
-            validator_address_str = self_validator_info.address
-            wallet_addr_hash_bytes = validator_address_str.encode('utf-8') # Encode address thành bytes
-            api_endpoint_current = self_validator_info.api_endpoint
-            status_current = getattr(self_validator_info, 'status', status_old) # Lấy status hiện tại (có thể đã bị phạt)
-            version_current = max(1, getattr(self_validator_info, 'version', version_old)) # Lấy version hiện tại
+    # Lấy performance history hash
+    perf_history_hash = getattr(self_validator_info, 'performance_history_hash', None)
 
-        except Exception as e:
-            logger.warning(f"Could not fetch or parse old datum for self ({self_uid_hex}): {e}. Using defaults/current info.")
-            # Sử dụng giá trị từ self_validator_info nếu không lấy được datum cũ
-            stake_current = int(self_validator_info.stake)
-            subnet_uid_current = self_validator_info.subnet_uid
-            registration_slot_current = getattr(self_validator_info, 'registration_slot', 0)
-            wallet_addr_hash_current = hash_data(self_validator_info.address) # Hash lại nếu ko có datum cũ
-            api_endpoint_current = self_validator_info.api_endpoint
-            status_current = getattr(self_validator_info, 'status', STATUS_ACTIVE)
-            version_current = getattr(self_validator_info, 'version', 1)
+    # Lấy accumulated_rewards cũ
+    pending_rewards_old = int(state.get("accumulated_rewards_old", 0))
+    # logger.debug(f"Using old accumulated rewards: {pending_rewards_old} for self ({self_uid_hex})")
 
+    # Tính phần thưởng mới tích lũy
+    calculated_reward = state.get("reward", 0.0)
+    accumulated_rewards_new = pending_rewards_old + int(calculated_reward * divisor)
 
-        # TODO: Hash lịch sử hiệu suất mới nếu cần lưu
-        # new_perf_history = ...
-        # perf_history_hash = hash_data(new_perf_history) if new_perf_history else perf_history_hash_old
-        perf_history_hash = perf_history_hash_old # Tạm thời giữ hash cũ
+    # Tạo ValidatorDatum mới
+    try:
+        new_perf_float = state.get("E_v", 0.0)
+        new_trust_float = state.get("trust", 0.0)
 
-        # Tính phần thưởng mới tích lũy
-        calculated_reward = state.get("reward", 0.0)
-        accumulated_rewards_new = pending_rewards_old + int(calculated_reward * settings.METAGRAPH_DATUM_INT_DIVISOR)
-
-        # Tạo ValidatorDatum mới
-        try:
-            new_datum = ValidatorDatum(
-                uid=bytes.fromhex(self_uid_hex),
-                subnet_uid=subnet_uid_current,
-                stake=stake_current,
-                scaled_last_performance=int(state.get("E_v", 0.0) * settings.METAGRAPH_DATUM_INT_DIVISOR),
-                scaled_trust_score=int(state.get("trust", 0.0) * settings.METAGRAPH_DATUM_INT_DIVISOR),
-                accumulated_rewards=accumulated_rewards_new,
-                last_update_slot=current_cycle, # Ghi lại chu kỳ hiện tại
-                performance_history_hash=perf_history_hash,
-                wallet_addr_hash=wallet_addr_hash_bytes,
-                status=status_current,
-                registration_slot=registration_slot_current,
-                api_endpoint=api_endpoint_current.encode('utf-8') if api_endpoint_current else None,
-            )
-            validator_updates[self_uid_hex] = new_datum
-            logger.info(f"Prepared update for self ({self_uid_hex})")
-        except Exception as e:
-            logger.exception(f"Failed to create ValidatorDatum for self ({self_uid_hex}): {e}")
+        new_datum = ValidatorDatum(
+            uid=bytes.fromhex(self_uid_hex),
+            subnet_uid=subnet_uid_current,
+            stake=stake_current,
+            scaled_last_performance=int(new_perf_float * divisor),
+            scaled_trust_score=int(new_trust_float * divisor),
+            accumulated_rewards=accumulated_rewards_new,
+            last_update_slot=current_cycle,
+            performance_history_hash=perf_history_hash,
+            wallet_addr_hash=wallet_addr_hash_bytes, # <<< Dùng hash
+            status=status_current,
+            registration_slot=registration_slot_current,
+            api_endpoint=api_endpoint_bytes, # <<< Dùng hash hoặc None
+        )
+        validator_updates[self_uid_hex] = new_datum
+        logger.info(f"Prepared update for self ({self_uid_hex})")
+    except Exception as e:
+        logger.exception(f"Failed to create ValidatorDatum for self ({self_uid_hex}): {e}")
 
     return validator_updates
 
