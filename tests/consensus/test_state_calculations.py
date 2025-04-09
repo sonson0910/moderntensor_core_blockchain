@@ -856,7 +856,6 @@ async def test_commit_updates_logic_success(
     assert found_penalized_datum, "New penalized datum was not added as output"
 
 # --- Thêm test case cho các trường hợp lỗi ---
-# --- Thêm test case cho các trường hợp lỗi ---
 
 @pytest.mark.asyncio
 async def test_commit_updates_logic_missing_input_utxo(
