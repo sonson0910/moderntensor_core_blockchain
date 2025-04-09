@@ -4,8 +4,8 @@ from typing import List, Optional
 from fastapi import File, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
-from app.schema.base_schema import FindBase, ModelBaseInfo, SearchOptions
-from app.util.schema import AllOptional
+from sdk.network.app.schema.base_schema import FindBase, ModelBaseInfo, SearchOptions
+from sdk.network.app.util.schema import AllOptional
 
 class UserRole(Enum):
     SUBNET = 0

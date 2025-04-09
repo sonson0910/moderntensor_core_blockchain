@@ -1,6 +1,6 @@
 from typing import Any, Protocol
 
-from app.schema.base_schema import APIResponseModel, Blank
+from sdk.network.app.schema.base_schema import APIResponseModel, Blank
 
 
 class RepositoryProtocol(Protocol):

@@ -26,7 +26,7 @@ from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum
 from sdk.metagraph.metagraph_data import get_all_validator_data
 # from sdk.metagraph.hash import hash_data # Cần hàm hash
 def hash_data(data): return f"hashed_{str(data)[:10]}" # Mock hash
-from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, VerificationKeyHash, PaymentVerificationKey, TransactionBuilder, Value, TransactionOutput
+from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, VerificationKeyHash, PaymentVerificationKey, TransactionBuilder, Value, TransactionOutput, ExtendedSigningKey, ExtendedVerificationKey
 from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_JAILED, STATUS_INACTIVE
 from blockfrost import ApiError
 
@@ -749,8 +749,8 @@ async def commit_updates_logic(
     penalized_validator_updates: Dict[str, ValidatorDatum], # {uid_hex: ValidatorDatum mới (phạt)}
     current_utxo_map: Dict[str, UTxO], # Map từ uid_hex -> UTxO object ở đầu chu kỳ
     context: BlockFrostChainContext,
-    signing_key: PaymentSigningKey, # Đây là ExtendedSigningKey
-    stake_signing_key: Optional[StakeSigningKey], # Đây cũng là ExtendedSigningKey
+    signing_key: ExtendedSigningKey, # Đây là ExtendedSigningKey
+    stake_signing_key: Optional[ExtendedSigningKey], # Đây cũng là ExtendedSigningKey
     settings: Any, # Đối tượng settings đầy đủ
     script_hash: ScriptHash,
     script_bytes: PlutusV3Script,
@@ -767,11 +767,13 @@ async def commit_updates_logic(
 
     # --- Lấy thông tin của Owner (Validator đang chạy node) ---
     try:
-        owner_payment_vkey: PaymentVerificationKey = signing_key.to_verification_key()
-        owner_payment_key_hash: VerificationKeyHash = owner_payment_vkey.hash()
+        # Lấy VKey mở rộng nếu cần hash cụ thể từ nó
+        owner_payment_vkey = signing_key.to_verification_key() # Trả về ExtendedVerificationKey
+        owner_payment_key_hash: VerificationKeyHash = owner_payment_vkey.hash() # Lấy hash như cũ
         owner_stake_key_hash: Optional[VerificationKeyHash] = None
         if stake_signing_key:
-            owner_stake_key_hash = stake_signing_key.to_verification_key().hash()
+            owner_stake_vkey = stake_signing_key.to_verification_key() # Trả về ExtendedVerificationKey
+            owner_stake_key_hash = owner_stake_vkey.hash() # Lấy hash như cũ
 
         owner_address = Address(
             payment_part=owner_payment_key_hash,

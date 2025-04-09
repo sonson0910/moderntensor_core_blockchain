@@ -1,5 +1,5 @@
-from app.model.user import User
-from app.repository.base_repository import BaseRepository
+from sdk.network.app.model.user import User
+from sdk.network.app.repository.base_repository import BaseRepository
 
 
 class UserRepository(BaseRepository):

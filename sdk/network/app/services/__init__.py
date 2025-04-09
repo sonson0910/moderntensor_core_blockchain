@@ -1,1 +1,1 @@
-from app.services.user_service import UserService
+from sdk.network.app.services.user_service import UserService

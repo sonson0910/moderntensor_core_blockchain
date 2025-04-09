@@ -2,11 +2,11 @@ from typing import List
 from dependency_injector.wiring import Provide
 from fastapi import APIRouter, Depends, File, UploadFile
 
-from app.core.container import Container
-from app.core.middleware import inject
-from app.schema.base_schema import APIResponseModel, Blank
-from app.schema.user_schema import FindUser, FindUserResult, UploadUserFile, UpsertUser, User
-from app.services.user_service import UserService
+from sdk.network.app.core.container import Container
+from sdk.network.app.core.middleware import inject
+from sdk.network.app.schema.base_schema import APIResponseModel, Blank
+from sdk.network.app.schema.user_schema import FindUser, FindUserResult, UploadUserFile, UpsertUser, User
+from sdk.network.app.services.user_service import UserService
 
 router = APIRouter(prefix="/user", tags=["user"])
 

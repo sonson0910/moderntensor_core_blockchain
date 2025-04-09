@@ -1,8 +1,8 @@
 from typing import Any,  Type, TypeVar
 
-from app.core.config import configs
-from app.core.exceptions import DuplicatedError, NotFoundError
-from app.model.base_model import BaseModel
+from sdk.network.app.core.config import configs
+from sdk.network.app.core.exceptions import DuplicatedError, NotFoundError
+from sdk.network.app.model.base_model import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
 

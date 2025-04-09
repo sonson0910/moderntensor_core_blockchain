@@ -37,7 +37,7 @@ from sdk.core.datatypes import (
 # Pydantic model for API communication
 # from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
 # PyCardano types
-from pycardano import (Network, Address, ScriptHash, BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, UTxO)
+from pycardano import (Network, Address, ScriptHash, BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, UTxO, ExtendedSigningKey)
 
 # --- Import các hàm logic đã tách ra ---
 from .selection import select_miners_logic
@@ -59,7 +59,7 @@ class ValidatorNode:
     Lớp điều phối chính cho Validator Node.
     Quản lý trạng thái và gọi các hàm logic từ các module con.
     """
-    def __init__(self, validator_info: ValidatorInfo, cardano_context: BlockFrostChainContext, signing_key: PaymentSigningKey, stake_signing_key: Optional[StakeSigningKey] = None):
+    def __init__(self, validator_info: ValidatorInfo, cardano_context: BlockFrostChainContext, signing_key: ExtendedSigningKey, stake_signing_key: Optional[ExtendedSigningKey] = None):
         """
         Khởi tạo Node Validator.
 

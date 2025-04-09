@@ -1,7 +1,7 @@
 from dependency_injector import containers, providers
 
-from app.repository import *
-from app.services import *
+from sdk.network.app.repository import *
+from sdk.network.app.services import *
 
 
 class Container(containers.DeclarativeContainer):

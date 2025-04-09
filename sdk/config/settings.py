@@ -40,7 +40,8 @@ class Settings(BaseSettings):
     VALIDATOR_ADDRESS: Optional[str] = Field(None, alias="VALIDATOR_ADDRESS", description="Địa chỉ Cardano của validator này")
     VALIDATOR_API_ENDPOINT: Optional[str] = Field(None, alias="VALIDATOR_API_ENDPOINT", description="Địa chỉ API đầy đủ mà các node khác có thể gọi đến validator này")
 
-    # --- Cấu hình Đồng thuận (Consensus) - Tham số & Hằng số ---
+    # ======== THÊM TRƯỜNG LOG_LEVEL ========
+    LOG_LEVEL: str = Field(default="INFO", alias="LOG_LEVEL", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
 
     # --- Cấu hình Đồng thuận (Consensus) - Tham số & Hằng số ---
 
@@ -102,13 +103,14 @@ class Settings(BaseSettings):
     CONSENSUS_PARAM_DAO_KG: float = Field(1.0, ge=0.0, description="Hệ số bonus thời gian (sqrt) cho voting power DAO (k_g >= 0).")
     CONSENSUS_PARAM_DAO_TOTAL_TIME: float = Field(365.0 * 24 * 60 * 60, gt=0.0, description="Khoảng thời gian tham chiếu (giây) cho bonus thời gian DAO (ví dụ: 1 năm).") # Đổi sang giây
 
+    CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES: int = Field(60)
+
     # Giữ nguyên validator của bạn
     @field_validator("CARDANO_NETWORK", mode="before")
-    def validate_network(cls, value: Optional[str]): # Cho phép Optional để xử lý default tốt hơn
-        if value is None: value = "TESTNET" # Gán default nếu là None
+    def validate_network(cls, value: Optional[str]):
+        if value is None: value = "TESTNET"
         normalized = str(value).upper().strip()
         if normalized == "MAINNET": return Network.MAINNET
-        # Mặc định là TESTNET cho các giá trị khác hoặc không hợp lệ
         return Network.TESTNET
 
 # --- Tạo một instance để sử dụng trong toàn bộ ứng dụng ---
@@ -126,19 +128,30 @@ except Exception as e:
 
 # --- LOGGING CONFIGURATION ---
 # Giữ nguyên cấu hình logging của bạn, đảm bảo nó dùng settings.LOG_LEVEL
+# --- CẤU HÌNH LOGGING (CHỈ MỘT LẦN TẠI ĐÂY) ---
+# Sử dụng trường LOG_LEVEL vừa định nghĩa trong settings
 try:
-    log_level_str = settings.log_level.upper()
+    log_level_str = settings.LOG_LEVEL.upper()
     if log_level_str not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
         log_level_str = "INFO"
-    LOG_LEVEL = getattr(logging, log_level_str)
-except Exception:
-    LOG_LEVEL = logging.INFO
+    # Lấy hằng số logging tương ứng
+    LOG_LEVEL_CONFIG = getattr(logging, log_level_str)
+except AttributeError:
+    print("Warning: Could not read LOG_LEVEL from settings. Defaulting to INFO.")
+    LOG_LEVEL_CONFIG = logging.INFO
+except Exception as log_e:
+    print(f"Warning: Error processing LOG_LEVEL setting: {log_e}. Defaulting to INFO.")
+    LOG_LEVEL_CONFIG = logging.INFO
 
+
+# Cấu hình basicConfig ngay tại đây
 logging.basicConfig(
-    level=LOG_LEVEL,
+    level=LOG_LEVEL_CONFIG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[ logging.StreamHandler() ] # Giữ nguyên handlers của bạn
+    handlers=[ logging.StreamHandler() ],
+    force=True # Đảm bảo ghi đè cấu hình mặc định nếu có
 )
+# Lấy logger và ghi log ban đầu
 logger = logging.getLogger(__name__)
-logger.info(f"Settings loaded. Log level set to {logging.getLevelName(LOG_LEVEL)}.")
+logger.info(f"Settings loaded. Log level set to {logging.getLevelName(LOG_LEVEL_CONFIG)}.")
 

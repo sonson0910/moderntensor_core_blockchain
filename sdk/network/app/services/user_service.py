@@ -1,8 +1,8 @@
 from typing import List
 from fastapi import UploadFile
-from app.repository.user_repository import UserRepository
-from app.schema.base_schema import APIResponseModel
-from app.services.base_service import BaseService
+from sdk.network.app.repository.user_repository import UserRepository
+from sdk.network.app.schema.base_schema import APIResponseModel
+from sdk.network.app.services.base_service import BaseService
 
 
 class UserService(BaseService):

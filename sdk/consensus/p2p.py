@@ -5,7 +5,7 @@ Logic chấm điểm kết quả từ miners.
 import dataclasses
 import logging
 from typing import List, Dict, Any, Optional
-from pycardano import PaymentSigningKey
+from pycardano import PaymentSigningKey, ExtendedSigningKey
 import binascii
 import asyncio
 import httpx # Đảm bảo đã import httpx
@@ -126,7 +126,7 @@ def score_results_logic(
 async def broadcast_scores_logic(
     local_scores: Dict[str, List[ValidatorScore]],
     self_validator_info: ValidatorInfo,
-    signing_key: PaymentSigningKey,
+    signing_key: ExtendedSigningKey,
     active_validators: List[ValidatorInfo],
     current_cycle: int,
     http_client: httpx.AsyncClient
@@ -155,7 +155,10 @@ async def broadcast_scores_logic(
     signature_hex: Optional[str] = None
     submitter_vkey_cbor_hex: Optional[str] = None
     try:
-        vkey: PaymentVerificationKey = signing_key.to_verification_key() # Đảm bảo đúng loại key
+        # a. Lấy PaymentVerificationKey hoặc ExtendedVerificationKey
+        #    to_verification_key() trên ExtendedSigningKey trả về ExtendedVerificationKey
+        vkey = signing_key.to_verification_key()
+        # Lấy CBOR hex (ExtendedVerificationKey cũng có phương thức này)
         submitter_vkey_cbor_hex = vkey.to_cbor_hex()
 
         # Sử dụng hàm serialize đã sửa lỗi
