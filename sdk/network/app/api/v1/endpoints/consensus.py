@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 
 # --- Hàm xác thực chữ ký (Placeholder - Cần Verification Key) ---
 # --- Hàm xác thực chữ ký (Triển khai thực tế) ---
-# --- Hàm xác thực chữ ký (Triển khai thực tế) ---
 async def verify_payload_signature(
     submitter_info: ValidatorInfo,
     payload: ScoreSubmissionPayload
