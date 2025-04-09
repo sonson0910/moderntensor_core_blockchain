@@ -23,7 +23,6 @@ from sdk.formulas import (
 )
 
 from sdk.metagraph.update_metagraph import update_datum
-from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum
 from sdk.metagraph.metagraph_data import get_all_validator_data
 # from sdk.metagraph.hash import hash_data # Cần hàm hash
 def hash_data(data): return f"hashed_{str(data)[:10]}" # Mock hash
@@ -829,7 +828,7 @@ async def commit_updates_logic(
         # 3. Submit Giao dịch
         try:
             logger.info(f"{log_prefix}: Submitting transaction to the blockchain...")
-            tx_id: TransactionId = context.submit_tx(signed_tx) # submit_tx trả về TransactionId
+            tx_id: TransactionId = await context.submit_tx(signed_tx) # submit_tx trả về TransactionId
             tx_id_str = str(tx_id)
             logger.info(f"{log_prefix}: Successfully submitted update! TxID: {tx_id_str}")
             submitted_tx_ids[f"{datum_type.lower()}_{uid_hex}"] = tx_id_str

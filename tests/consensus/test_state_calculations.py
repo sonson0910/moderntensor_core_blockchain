@@ -10,6 +10,7 @@ from collections import defaultdict
 from unittest.mock import MagicMock, AsyncMock # Dùng để mock context/async functions
 import hashlib # Thêm hashlib
 from pytest_mock import MockerFixture
+from sdk.smartcontract.validator import read_validator
 
 # --- Import các thành phần cần test ---
 from sdk.consensus.state import (
@@ -19,13 +20,13 @@ from sdk.consensus.state import (
     _calculate_fraud_severity # Import hàm helper để test riêng nếu muốn
 )
 # --- Import Datatypes và Constants ---
-from sdk.consensus.state import verify_and_penalize_logic # Function to test
+from sdk.consensus.state import verify_and_penalize_logic, commit_updates_logic # Function to test
 from sdk.core.datatypes import MinerInfo, ValidatorInfo, ValidatorScore, TaskAssignment
     # Ưu tiên import từ nơi định nghĩa chính thức (ví dụ: metagraph_datum)
 from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_INACTIVE, STATUS_JAILED
 # --- Import Settings và Helpers ---
 from sdk.config.settings import settings
-from pycardano import Address, VerificationKeyHash, BlockFrostChainContext, UTxO, TransactionInput, Value, TransactionOutput, TransactionId, ScriptHash, Network
+from pycardano import Address, VerificationKeyHash, BlockFrostChainContext, UTxO, TransactionInput, Value, TransactionOutput, TransactionId, ScriptHash, Network, PlutusV3Script, Redeemer, ExtendedSigningKey, TransactionBuilder # Import thêm
 from sdk.formulas import update_trust_score, calculate_miner_incentive
 
 # --- Helper functions (Có thể đưa vào conftest.py) ---
@@ -724,3 +725,254 @@ async def test_verify_penalize_error_fetching_onchain(mocker: MockerFixture, moc
     # Assertions: Không có gì xảy ra
     assert not penalized_datums
     assert validators_info_input == validators_info_before
+
+
+# --- Test Case for commit_updates_logic ---
+
+@pytest.mark.asyncio
+async def test_commit_updates_logic_success(
+    mocker: MockerFixture,
+    mock_context: MagicMock, # Mock context
+    cardano_params: Tuple[ScriptHash, Network],
+    hotkey_skey_fixture: Tuple[ExtendedSigningKey, Optional[ExtendedSigningKey]] # Dùng key thật (mocked)
+):
+    """Kiểm tra commit thành công cho miner và validator updates."""
+    # Đọc script bytes và hash ở đây nếu cần thiết cho setup
+    try:
+        from sdk.smartcontract.validator import read_validator
+        validator_details = read_validator()
+        script_bytes = validator_details["script_bytes"] # Dùng script bytes từ đây
+        # script_hash = validator_details["script_hash"] # Lấy script hash từ đây nếu muốn
+        # Hoặc vẫn lấy từ cardano_params nếu fixture đó đáng tin cậy hơn
+        script_hash_from_params, network = cardano_params
+        script_hash = script_hash_from_params # Quyết định dùng hash nào
+    except Exception as e:
+         pytest.skip(f"Skipping test, could not load validator script: {e}")
+    payment_esk, stake_esk = hotkey_skey_fixture
+    current_cycle = 105
+
+    # 1. Tạo dữ liệu Datum mới cần commit
+    miner1_uid_hex = hashlib.sha256(b"minercommit01_test").hexdigest()[:16] # Tạo hex UID hợp lệ (16 ký tự = 8 bytes)
+    validator1_uid_hex = hashlib.sha256(b"validatorcommit01_test").hexdigest()[:16]
+    penalized_val_uid_hex = hashlib.sha256(b"penalizedval01_test").hexdigest()[:16]
+
+    new_miner_datum = MinerDatum( # Tạo bằng dữ liệu hợp lệ
+        uid=bytes.fromhex(miner1_uid_hex * 4), # Ví dụ UID bytes
+        subnet_uid=1, stake=100e6, scaled_last_performance=950000, scaled_trust_score=900000,
+        accumulated_rewards=5e6, last_update_slot=current_cycle, status=STATUS_ACTIVE,
+        performance_history_hash=hashlib.sha256(b"m1hist").digest(),
+        wallet_addr_hash=hashlib.sha256(b"m1addr").digest(), registration_slot=100,
+        api_endpoint=hashlib.sha256(b"m1api").digest()
+    )
+    new_validator_datum = create_validator_datum(validator1_uid_hex, current_cycle, 0.98, 0.99, 5000e6, STATUS_ACTIVE, rewards=10e6)
+    new_penalized_datum = create_validator_datum(penalized_val_uid_hex, current_cycle, 0.70, 0.80, 3000e6, STATUS_JAILED, rewards=1e6) # Bị jailed
+
+    miner_updates = {miner1_uid_hex: new_miner_datum}
+    validator_updates = {validator1_uid_hex: new_validator_datum}
+    penalized_validator_updates = {penalized_val_uid_hex: new_penalized_datum}
+
+    # 2. Tạo UTXO map đầu vào (mock UTXO cũ)
+    # Cần tạo mock UTxO với Datum cũ (hoặc ít nhất là có amount) cho mỗi UID cần update
+    mock_utxo_miner1 = MagicMock(spec=UTxO)
+    mock_utxo_miner1.input = TransactionInput(TransactionId(os.urandom(32)), 0) # Thêm .input giả
+    mock_utxo_miner1.output = MagicMock(spec=TransactionOutput, amount=Value(2_000_000))
+    mock_utxo_val1 = MagicMock(spec=UTxO)
+    mock_utxo_val1.input = TransactionInput(TransactionId(os.urandom(32)), 1) # Thêm .input giả
+    mock_utxo_val1.output = MagicMock(spec=TransactionOutput, amount=Value(2_100_000))
+    mock_utxo_penalized = MagicMock(spec=UTxO)
+    mock_utxo_penalized.input = TransactionInput(TransactionId(os.urandom(32)), 2) # Thêm .input giả
+    mock_utxo_penalized.output = MagicMock(spec=TransactionOutput, amount=Value(2_200_000))
+
+    current_utxo_map = {
+        miner1_uid_hex: mock_utxo_miner1,
+        validator1_uid_hex: mock_utxo_val1,
+        penalized_val_uid_hex: mock_utxo_penalized
+    }
+
+    # 3. Mock context.submit_tx và TransactionBuilder (nếu cần)
+    # Mock submit_tx để trả về ID giả lập và kiểm tra lời gọi
+    mock_submit_tx = AsyncMock(return_value=TransactionId(os.urandom(32))) # Trả về ID giả
+    mock_context.submit_tx = mock_submit_tx
+
+    # Mock TransactionBuilder để tránh lỗi nếu không có UTXO thật từ owner address
+    # Chúng ta cần mock add_input_address và build_and_sign
+    mock_builder_instance = MagicMock(spec=TransactionBuilder)
+    mock_signed_tx = MagicMock() # Mock transaction đã ký
+    mock_builder_instance.build_and_sign.return_value = mock_signed_tx
+    # Mock hàm khởi tạo của TransactionBuilder để trả về instance đã mock
+    mock_tx_builder_class = mocker.patch("sdk.consensus.state.TransactionBuilder", return_value=mock_builder_instance)
+
+    # 4. Gọi hàm commit_updates_logic
+    result = await commit_updates_logic(
+        miner_updates=miner_updates,
+        validator_updates=validator_updates,
+        penalized_validator_updates=penalized_validator_updates,
+        current_utxo_map=current_utxo_map,
+        context=mock_context,
+        signing_key=payment_esk, # Dùng key từ fixture
+        stake_signing_key=stake_esk, # Dùng key từ fixture
+        settings=settings,
+        script_hash=script_hash,
+        script_bytes=script_bytes,
+        network=network
+    )
+
+    # 5. Assertions
+    assert result["status"] == "completed"
+    # Kiểm tra số lần submit_tx được gọi (bằng tổng số updates)
+    expected_calls = len(miner_updates) + len(validator_updates) + len(penalized_validator_updates)
+    assert mock_submit_tx.await_count == expected_calls
+    assert result["submitted_count"] == expected_calls
+    assert result["failed_count"] == 0
+    assert result["skipped_count"] == 0
+    assert len(result["submitted_txs"]) == expected_calls
+
+    # (Optional) Kiểm tra các tham số của builder (phức tạp hơn)
+    # Ví dụ: Kiểm tra xem add_script_input, add_output có được gọi đúng không
+    assert mock_builder_instance.add_script_input.call_count == expected_calls
+    assert mock_builder_instance.add_output.call_count == expected_calls
+    # Kiểm tra add_input_address được gọi cho mỗi lần build
+    assert mock_builder_instance.add_input_address.call_count == expected_calls
+    # Kiểm tra build_and_sign được gọi
+    assert mock_builder_instance.build_and_sign.call_count == expected_calls
+
+    # Kiểm tra nội dung output datum được thêm vào builder (ví dụ cho miner)
+    # Lấy tất cả các lần gọi add_output
+    add_output_calls = mock_builder_instance.add_output.call_args_list
+    found_miner_datum = False
+    found_validator_datum = False
+    found_penalized_datum = False
+    for call in add_output_calls:
+        args, kwargs = call
+        output_arg = args[0] if args else kwargs.get('output') # TransactionOutput là tham số đầu tiên
+        if isinstance(output_arg, TransactionOutput):
+             datum_in_call = output_arg.datum
+             if datum_in_call == new_miner_datum: found_miner_datum = True
+             if datum_in_call == new_validator_datum: found_validator_datum = True
+             if datum_in_call == new_penalized_datum: found_penalized_datum = True
+
+    assert found_miner_datum, "New miner datum was not added as output"
+    assert found_validator_datum, "New validator datum was not added as output"
+    assert found_penalized_datum, "New penalized datum was not added as output"
+
+# --- Thêm test case cho các trường hợp lỗi ---
+# --- Thêm test case cho các trường hợp lỗi ---
+
+@pytest.mark.asyncio
+async def test_commit_updates_logic_missing_input_utxo(
+    mocker: MockerFixture,
+    mock_context: MagicMock,
+    cardano_params: Tuple[ScriptHash, Network],
+    hotkey_skey_fixture: Tuple[ExtendedSigningKey, Optional[ExtendedSigningKey]]
+):
+    """Kiểm tra trường hợp thiếu UTXO đầu vào trong map."""
+    try:
+        from sdk.smartcontract.validator import read_validator
+        validator_details = read_validator()
+        script_bytes = validator_details["script_bytes"] # Dùng script bytes từ đây
+        # script_hash = validator_details["script_hash"] # Lấy script hash từ đây nếu muốn
+        # Hoặc vẫn lấy từ cardano_params nếu fixture đó đáng tin cậy hơn
+        script_hash_from_params, network = cardano_params
+        script_hash = script_hash_from_params # Quyết định dùng hash nào
+    except Exception as e:
+         pytest.skip(f"Skipping test, could not load validator script: {e}")
+    payment_esk, stake_esk = hotkey_skey_fixture
+    current_cycle = 106
+
+    miner1_uid_hex = hashlib.sha256(b"minermissingutxo").hexdigest()[:16]
+    new_miner_datum = MinerDatum(
+            uid=bytes.fromhex(miner1_uid_hex),
+            subnet_uid=1, stake=int(50e6), scaled_last_performance=800000, scaled_trust_score=850000,
+            accumulated_rewards=int(1e6), last_update_slot=current_cycle, status=STATUS_ACTIVE,
+            performance_history_hash=hashlib.sha256(b"m_missing_hist").digest(),
+            wallet_addr_hash=hashlib.sha256(b"m_missing_addr").digest(), registration_slot=101,
+            api_endpoint=hashlib.sha256(b"m_missing_api").digest()
+        )
+
+    miner_updates = {miner1_uid_hex: new_miner_datum}
+    current_utxo_map = {} # Map rỗng -> thiếu UTXO đầu vào
+
+    mock_submit_tx = AsyncMock()
+    mock_context.submit_tx = mock_submit_tx
+    mock_tx_builder_class = mocker.patch("sdk.consensus.state.TransactionBuilder") # Mock class
+
+    result = await commit_updates_logic(
+        miner_updates=miner_updates, validator_updates={}, penalized_validator_updates={},
+        current_utxo_map=current_utxo_map, context=mock_context, signing_key=payment_esk,
+        stake_signing_key=stake_esk, settings=settings, script_hash=script_hash,
+        script_bytes=script_bytes, network=network
+    )
+
+    assert result["status"] == "completed" # Hoặc completed tùy logic xử lý lỗi
+    assert result["submitted_count"] == 0
+    assert result["failed_count"] == 0 # Không fail ở submit
+    assert result["skipped_count"] == 1 # Bị skip do thiếu UTXO
+    assert miner1_uid_hex in result["skips"]
+    assert "Input UTxO not found" in result["skips"][miner1_uid_hex]
+    mock_submit_tx.assert_not_awaited() # Không có giao dịch nào được gửi
+
+@pytest.mark.asyncio
+async def test_commit_updates_logic_submit_error(
+    mocker: MockerFixture,
+    mock_context: MagicMock,
+    cardano_params: Tuple[ScriptHash, Network],
+    hotkey_skey_fixture: Tuple[ExtendedSigningKey, Optional[ExtendedSigningKey]]
+):
+    """Kiểm tra trường hợp context.submit_tx báo lỗi."""
+    try:
+        from sdk.smartcontract.validator import read_validator
+        validator_details = read_validator()
+        script_bytes = validator_details["script_bytes"] # Dùng script bytes từ đây
+        # script_hash = validator_details["script_hash"] # Lấy script hash từ đây nếu muốn
+        # Hoặc vẫn lấy từ cardano_params nếu fixture đó đáng tin cậy hơn
+        script_hash_from_params, network = cardano_params
+        script_hash = script_hash_from_params # Quyết định dùng hash nào
+    except Exception as e:
+         pytest.skip(f"Skipping test, could not load validator script: {e}")
+    payment_esk, stake_esk = hotkey_skey_fixture
+    current_cycle = 107
+
+    miner1_uid_hex = hashlib.sha256(b"minersubmitfail").hexdigest()[:16]
+    new_miner_datum = MinerDatum(
+            uid=bytes.fromhex(miner1_uid_hex),
+            subnet_uid=1, stake=int(50e6), scaled_last_performance=800000, scaled_trust_score=850000,
+            accumulated_rewards=int(1e6), last_update_slot=current_cycle, status=STATUS_ACTIVE,
+            performance_history_hash=hashlib.sha256(b"m_missing_hist").digest(),
+            wallet_addr_hash=hashlib.sha256(b"m_missing_addr").digest(), registration_slot=101,
+            api_endpoint=hashlib.sha256(b"m_missing_api").digest()
+        )
+
+    mock_utxo_miner1 = MagicMock(spec=UTxO)
+    mock_utxo_miner1.input = TransactionInput(TransactionId(os.urandom(32)), 0) # Thêm .input giả
+    mock_utxo_miner1.output = MagicMock(spec=TransactionOutput, amount=Value(2_000_000))
+    current_utxo_map = {miner1_uid_hex: mock_utxo_miner1}
+
+    # Mock submit_tx để raise lỗi ApiError (ví dụ lỗi 400 từ Blockfrost)
+    # Cần import ApiError từ blockfrost nếu dùng
+    # from blockfrost import ApiError
+    # mock_submit_tx = AsyncMock(side_effect=ApiError(status_code=400, message="Bad request"))
+    # Hoặc raise Exception chung
+    mock_submit_tx = AsyncMock(side_effect=Exception("Submission Error"))
+    mock_context.submit_tx = mock_submit_tx
+
+    # Mock TransactionBuilder như test success
+    mock_builder_instance = MagicMock(spec=TransactionBuilder)
+    mock_signed_tx = MagicMock()
+    mock_signed_tx.to_cbor.return_value = b"mock_cbor_fail"
+    mock_builder_instance.build_and_sign.return_value = mock_signed_tx
+    mocker.patch("sdk.consensus.state.TransactionBuilder", return_value=mock_builder_instance)
+
+    result = await commit_updates_logic(
+        miner_updates={miner1_uid_hex: new_miner_datum}, validator_updates={}, penalized_validator_updates={},
+        current_utxo_map=current_utxo_map, context=mock_context, signing_key=payment_esk,
+        stake_signing_key=stake_esk, settings=settings, script_hash=script_hash,
+        script_bytes=script_bytes, network=network
+    )
+
+    assert result["status"] == "completed_with_errors"
+    assert result["submitted_count"] == 0
+    assert result["failed_count"] == 1 # 1 lỗi submit
+    assert result["skipped_count"] == 0
+    assert miner1_uid_hex in result["failures"]
+    assert "Submission Error" in result["failures"][miner1_uid_hex] # Kiểm tra nội dung lỗi
+    mock_submit_tx.assert_awaited_once() # Đã cố gắng gọi submit 1 lần
