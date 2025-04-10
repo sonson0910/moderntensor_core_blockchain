@@ -115,7 +115,7 @@ class Settings(BaseSettings):
 
 # --- Tạo một instance để sử dụng trong toàn bộ ứng dụng ---
 try:
-    settings = Settings()
+    settings = Settings() # type: ignore
     # --- Kiểm tra tổng Theta ---
     if not math.isclose(settings.CONSENSUS_PARAM_THETA1 + settings.CONSENSUS_PARAM_THETA2 + settings.CONSENSUS_PARAM_THETA3, 1.0, abs_tol=1e-9):
          logging.warning(f"Sum of Theta parameters (theta1+theta2+theta3 = {settings.CONSENSUS_PARAM_THETA1 + settings.CONSENSUS_PARAM_THETA2 + settings.CONSENSUS_PARAM_THETA3}) is not equal to 1.0!")
@@ -124,7 +124,7 @@ except Exception as e:
     print(f"CRITICAL: Error loading settings: {e}. Using default values where possible.")
     # Trong trường hợp lỗi nghiêm trọng, có thể nên thoát thay vì dùng default
     # raise SystemExit(f"Failed to load critical settings: {e}")
-    settings = Settings() # Cố gắng tạo với default
+    settings = Settings() # type: ignore # Cố gắng tạo với default
 
 # --- LOGGING CONFIGURATION ---
 # Giữ nguyên cấu hình logging của bạn, đảm bảo nó dùng settings.LOG_LEVEL

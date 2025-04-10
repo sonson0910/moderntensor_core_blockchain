@@ -42,8 +42,6 @@ def create_validator_info(uid_num: int, trust: float, weight: float, stake: int,
     wallet_addr_bytes : Optional[bytes] = None
     
     try:
-        addr_obj = Address.from_primitive(addr_str)
-        pkh = addr_obj.payment_part # Lấy VerificationKeyHash object
         wallet_addr_bytes = addr_str.encode('utf-8') # Chuyển addr_str sang bytes
     except Exception as e:
         pass # Bỏ qua lỗi parse address trong test
@@ -110,7 +108,7 @@ def create_validator_datum(
         registration_slot=reg_slot, api_endpoint=api_endpoint_bytes
     )
 
-def create_mock_utxo_with_datum(datum: ValidatorDatum, tx_id_str: str = None, index: int = 0, amount: int = 2_000_000) -> MagicMock:
+def create_mock_utxo_with_datum(datum: ValidatorDatum, tx_id_str: str = None, index: int = 0, amount: int = 2_000_000) -> MagicMock: # type: ignore
     # ... (giữ nguyên) ...
     tx_id_bytes = bytes.fromhex(tx_id_str) if tx_id_str else os.urandom(32)
     tx_in = TransactionInput(transaction_id=TransactionId(tx_id_bytes), index=index)
@@ -287,11 +285,11 @@ async def test_prepare_miner_updates_logic(mocker: MockerFixture):
     reward_old_m3 = 500000
     try:
         # Mock M1 Datum
-        mock_datum_m1_old = MinerDatum(uid=bytes.fromhex(m1_info.uid), accumulated_rewards=reward_old_m1, subnet_uid=0, stake=1050, scaled_last_performance=int(0.9*settings.METAGRAPH_DATUM_INT_DIVISOR), scaled_trust_score=int(0.91*settings.METAGRAPH_DATUM_INT_DIVISOR), last_update_slot=101, performance_history_hash=None, wallet_addr_hash=m1_info.wallet_addr_hash, status=1, registration_slot=1, api_endpoint=None)
+        mock_datum_m1_old = MinerDatum(uid=bytes.fromhex(m1_info.uid), accumulated_rewards=reward_old_m1, subnet_uid=0, stake=1050, scaled_last_performance=int(0.9*settings.METAGRAPH_DATUM_INT_DIVISOR), scaled_trust_score=int(0.91*settings.METAGRAPH_DATUM_INT_DIVISOR), last_update_slot=101, performance_history_hash=None, wallet_addr_hash=m1_info.wallet_addr_hash, status=1, registration_slot=1, api_endpoint=None) # type: ignore
         mock_utxo_m1 = mocker.MagicMock(spec=UTxO); mock_utxo_m1.output.datum = mocker.MagicMock(); mock_utxo_m1.output.datum.cbor = mock_datum_m1_old.to_cbor()
         mock_utxo_map[m1_info.uid] = mock_utxo_m1
         # Mock M3 Datum
-        mock_datum_m3_old = MinerDatum(uid=bytes.fromhex(m3_info.uid), accumulated_rewards=reward_old_m3, subnet_uid=0, stake=780, scaled_last_performance=int(0.6*settings.METAGRAPH_DATUM_INT_DIVISOR), scaled_trust_score=int(0.68*settings.METAGRAPH_DATUM_INT_DIVISOR), last_update_slot=100, performance_history_hash=None, wallet_addr_hash=m3_info.wallet_addr_hash, status=1, registration_slot=1, api_endpoint=None)
+        mock_datum_m3_old = MinerDatum(uid=bytes.fromhex(m3_info.uid), accumulated_rewards=reward_old_m3, subnet_uid=0, stake=780, scaled_last_performance=int(0.6*settings.METAGRAPH_DATUM_INT_DIVISOR), scaled_trust_score=int(0.68*settings.METAGRAPH_DATUM_INT_DIVISOR), last_update_slot=100, performance_history_hash=None, wallet_addr_hash=m3_info.wallet_addr_hash, status=1, registration_slot=1, api_endpoint=None) # type: ignore
         mock_utxo_m3 = mocker.MagicMock(spec=UTxO); mock_utxo_m3.output.datum = mocker.MagicMock(); mock_utxo_m3.output.datum.cbor = mock_datum_m3_old.to_cbor()
         mock_utxo_map[m3_info.uid] = mock_utxo_m3
     except Exception as e: print(f"Warning: Mock datum creation failed: {e}"); reward_old_m1 = 0; reward_old_m3 = 0
@@ -480,10 +478,10 @@ async def test_verify_penalize_all_correct(mocker: MockerFixture, mock_context: 
     on_chain_perf_v2 = 0.90
 
     on_chain_datum_v1 = create_validator_datum(
-        v1_info_start.uid, previous_cycle, on_chain_trust_v1, on_chain_perf_v1, v1_info_start.stake, STATUS_ACTIVE
+        v1_info_start.uid, previous_cycle, on_chain_trust_v1, on_chain_perf_v1, v1_info_start.stake, STATUS_ACTIVE # type: ignore
     )
     on_chain_datum_v2 = create_validator_datum(
-        v2_info_start.uid, previous_cycle, on_chain_trust_v2, on_chain_perf_v2, v2_info_start.stake, STATUS_ACTIVE
+        v2_info_start.uid, previous_cycle, on_chain_trust_v2, on_chain_perf_v2, v2_info_start.stake, STATUS_ACTIVE # type: ignore
     )
     mock_utxo_v1 = create_mock_utxo_with_datum(on_chain_datum_v1, tx_id_str="a"*64)
     mock_utxo_v2 = create_mock_utxo_with_datum(on_chain_datum_v2, tx_id_str="b"*64)
@@ -534,7 +532,7 @@ async def test_verify_penalize_minor_deviation(mocker: MockerFixture, mock_conte
     on_chain_trust = expected_trust - (tolerance * 5)
     on_chain_perf = expected_perf # Perf đúng
     on_chain_datum_v1 = create_validator_datum(
-        v1_info_start.uid, previous_cycle, on_chain_trust, on_chain_perf, v1_info_start.stake, STATUS_ACTIVE
+        v1_info_start.uid, previous_cycle, on_chain_trust, on_chain_perf, v1_info_start.stake, STATUS_ACTIVE # type: ignore
     )
     mock_utxo_v1 = create_mock_utxo_with_datum(on_chain_datum_v1)
     mock_on_chain_output = [(mock_utxo_v1, convert_datum_to_dict(on_chain_datum_v1))]
@@ -590,7 +588,7 @@ async def test_verify_penalize_severe_deviation_jailed(mocker: MockerFixture, mo
     on_chain_trust = 0.50
     on_chain_perf = 0.60
     on_chain_datum_v1 = create_validator_datum(
-        v1_info_start.uid, previous_cycle, on_chain_trust, on_chain_perf, v1_info_start.stake, STATUS_ACTIVE
+        v1_info_start.uid, previous_cycle, on_chain_trust, on_chain_perf, v1_info_start.stake, STATUS_ACTIVE # type: ignore
     )
     mock_utxo_v1 = create_mock_utxo_with_datum(on_chain_datum_v1)
     mock_on_chain_output = [(mock_utxo_v1, convert_datum_to_dict(on_chain_datum_v1))]
@@ -635,7 +633,7 @@ async def test_verify_penalize_did_not_commit(mocker: MockerFixture, mock_contex
         v2_info_start.uid: {"trust": 0.80, "E_v": 0.88, "start_status": STATUS_ACTIVE}
     }
     on_chain_datum_v2 = create_validator_datum(
-        v2_info_start.uid, previous_cycle, 0.80, 0.88, v2_info_start.stake, STATUS_ACTIVE
+        v2_info_start.uid, previous_cycle, 0.80, 0.88, v2_info_start.stake, STATUS_ACTIVE # type: ignore
     )
     mock_utxo_v2 = create_mock_utxo_with_datum(on_chain_datum_v2)
     mock_on_chain_output = [(mock_utxo_v2, convert_datum_to_dict(on_chain_datum_v2))]
@@ -758,14 +756,14 @@ async def test_commit_updates_logic_success(
 
     new_miner_datum = MinerDatum( # Tạo bằng dữ liệu hợp lệ
         uid=bytes.fromhex(miner1_uid_hex * 4), # Ví dụ UID bytes
-        subnet_uid=1, stake=100e6, scaled_last_performance=950000, scaled_trust_score=900000,
-        accumulated_rewards=5e6, last_update_slot=current_cycle, status=STATUS_ACTIVE,
+        subnet_uid=1, stake=100e6, scaled_last_performance=950000, scaled_trust_score=900000, # type: ignore
+        accumulated_rewards=5e6, last_update_slot=current_cycle, status=STATUS_ACTIVE, # type: ignore
         performance_history_hash=hashlib.sha256(b"m1hist").digest(),
         wallet_addr_hash=hashlib.sha256(b"m1addr").digest(), registration_slot=100,
         api_endpoint=hashlib.sha256(b"m1api").digest()
     )
-    new_validator_datum = create_validator_datum(validator1_uid_hex, current_cycle, 0.98, 0.99, 5000e6, STATUS_ACTIVE, rewards=10e6)
-    new_penalized_datum = create_validator_datum(penalized_val_uid_hex, current_cycle, 0.70, 0.80, 3000e6, STATUS_JAILED, rewards=1e6) # Bị jailed
+    new_validator_datum = create_validator_datum(validator1_uid_hex, current_cycle, 0.98, 0.99, 5000e6, STATUS_ACTIVE, rewards=10e6) # type: ignore
+    new_penalized_datum = create_validator_datum(penalized_val_uid_hex, current_cycle, 0.70, 0.80, 3000e6, STATUS_JAILED, rewards=1e6) # type: ignore # Bị jailed
 
     miner_updates = {miner1_uid_hex: new_miner_datum}
     validator_updates = {validator1_uid_hex: new_validator_datum}
@@ -807,7 +805,7 @@ async def test_commit_updates_logic_success(
         miner_updates=miner_updates,
         validator_updates=validator_updates,
         penalized_validator_updates=penalized_validator_updates,
-        current_utxo_map=current_utxo_map,
+        current_utxo_map=current_utxo_map, # type: ignore
         context=mock_context,
         signing_key=payment_esk, # Dùng key từ fixture
         stake_signing_key=stake_esk, # Dùng key từ fixture
@@ -907,7 +905,7 @@ async def test_commit_updates_logic_missing_input_utxo(
     assert result["failed_count"] == 0 # Không fail ở submit
     assert result["skipped_count"] == 1 # Bị skip do thiếu UTXO
     assert miner1_uid_hex in result["skips"]
-    assert "Input UTxO not found" in result["skips"][miner1_uid_hex]
+    assert "Input UTxO not found" in result["skips"][miner1_uid_hex] # type: ignore
     mock_submit_tx.assert_not_awaited() # Không có giao dịch nào được gửi
 
 @pytest.mark.asyncio
@@ -963,7 +961,7 @@ async def test_commit_updates_logic_submit_error(
 
     result = await commit_updates_logic(
         miner_updates={miner1_uid_hex: new_miner_datum}, validator_updates={}, penalized_validator_updates={},
-        current_utxo_map=current_utxo_map, context=mock_context, signing_key=payment_esk,
+        current_utxo_map=current_utxo_map, context=mock_context, signing_key=payment_esk, # type: ignore
         stake_signing_key=stake_esk, settings=settings, script_hash=script_hash,
         script_bytes=script_bytes, network=network
     )
@@ -973,5 +971,5 @@ async def test_commit_updates_logic_submit_error(
     assert result["failed_count"] == 1 # 1 lỗi submit
     assert result["skipped_count"] == 0
     assert miner1_uid_hex in result["failures"]
-    assert "Submission Error" in result["failures"][miner1_uid_hex] # Kiểm tra nội dung lỗi
+    assert "Submission Error" in result["failures"][miner1_uid_hex] # type: ignore # Kiểm tra nội dung lỗi
     mock_submit_tx.assert_awaited_once() # Đã cố gắng gọi submit 1 lần

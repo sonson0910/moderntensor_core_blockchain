@@ -46,15 +46,16 @@ class ValidatorInfo:
     subnet_uid: int = 0
     registration_slot: int = 0
     wallet_addr_hash: Optional[bytes] = None # Giữ bytes hoặc hex tùy chuẩn
+    performance_history: List[float] = field(default_factory=list)
     performance_history_hash: Optional[bytes] = None
 
     # --- Có thể thêm property để dễ lấy vkey ---
     @property
     def payment_verification_key(self) -> Optional['PaymentVerificationKey']:
         """Trả về đối tượng PaymentVerificationKey nếu CBOR hex tồn tại."""
-        if self.payment_vkey_cbor_hex:
+        if self.payment_vkey_cbor_hex: # type: ignore
             import binascii
-            return PaymentVerificationKey.from_cbor(binascii.unhexlify(self.payment_vkey_cbor_hex))
+            return PaymentVerificationKey.from_cbor(binascii.unhexlify(self.payment_vkey_cbor_hex)) # type: ignore
         return None
 
 @dataclass

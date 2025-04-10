@@ -21,17 +21,6 @@ import nacl.signing # <<< Thêm import
 import nacl.exceptions # <<< Thêm import
 
 
-# --- Định nghĩa Pydantic Model cho Payload ---
-class ScoreSubmissionPayload(BaseModel):
-    """Dữ liệu điểm số gửi qua API, bao gồm VKey và chữ ký."""
-    scores: List[ValidatorScore] = Field(..., description="Danh sách điểm số chi tiết ValidatorScore")
-    submitter_validator_uid: str = Field(..., description="UID (dạng hex) của validator gửi điểm")
-    cycle: int = Field(..., description="Chu kỳ đồng thuận mà điểm số này thuộc về")
-    # --- Thêm trường VKey của người gửi ---
-    submitter_vkey_cbor_hex: Optional[str] = Field(None, description="Payment Verification Key của người gửi (CBOR hex)")
-    # -------------------------------------
-    signature: Optional[str] = Field(None, description="Chữ ký (dạng hex) của hash(scores) để xác thực người gửi")
-
 # --- Router ---
 router = APIRouter(
     prefix="/consensus",
@@ -59,7 +48,7 @@ async def verify_payload_signature(
     try:
         # 1. Lấy payment hash mong đợi từ địa chỉ người gửi
         submitter_address = Address.from_primitive(submitter_info.address)
-        expected_payment_hash: VerificationKeyHash = submitter_address.payment_part
+        expected_payment_hash: VerificationKeyHash = submitter_address.payment_part # type: ignore
         logger.debug(f"Expected payment hash: {expected_payment_hash.to_primitive().hex()}")
 
         # 2. Load VKey từ payload (SỬA Ở ĐÂY)
@@ -72,7 +61,7 @@ async def verify_payload_signature(
             return False
 
         # 3. Xác minh VKey: Hash của VKey nhận được phải khớp với hash từ địa chỉ
-        received_vkey_hash: VerificationKeyHash = received_pycardano_vkey.hash()
+        received_vkey_hash: VerificationKeyHash = received_pycardano_vkey.hash() # type: ignore
         logger.debug(f"Received VKey hash: {received_vkey_hash.to_primitive().hex()}")
 
         if received_vkey_hash != expected_payment_hash:
@@ -85,7 +74,7 @@ async def verify_payload_signature(
         data_to_verify_bytes = data_str_from_payload.encode('utf-8')
         signature_bytes = binascii.unhexlify(signature_hex)
 
-        nacl_vk = nacl.signing.VerifyKey(received_vk_bytes) # <<< Tạo VerifyKey của PyNaCl
+        nacl_vk = nacl.signing.VerifyKey(received_vk_bytes) # type: ignore # <<< Tạo VerifyKey của PyNaCl
         try:
             nacl_vk.verify(data_to_verify_bytes, signature_bytes) # <<< Gọi verify của PyNaCl
             is_valid = True

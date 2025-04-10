@@ -91,7 +91,7 @@ def miner_datum(miner_data):
         wallet_addr_hash=wallet_addr_hash,
         status=miner_data["status"],
         registration_slot=miner_data["registration_slot"],
-        api_endpoint=api_endpoint_bytes,
+        api_endpoint=api_endpoint_bytes, # type: ignore
     )
 
 # --- Fixtures cho Validator Datum ---
@@ -135,7 +135,7 @@ def validator_datum(validator_data):
         wallet_addr_hash=wallet_addr_hash,
         status=validator_data["status"],
         registration_slot=validator_data["registration_slot"],
-        api_endpoint=api_endpoint_bytes,
+        api_endpoint=api_endpoint_bytes, # type: ignore
     )
 
 
@@ -160,7 +160,7 @@ def test_create_miner_utxo(chain_context_fixture: BlockFrostChainContext, miner_
 
     try:
         tx_id_obj = create_utxo(
-            payment_xsk=payment_xsk, stake_xsk=stake_xsk, amount=amount,
+            payment_xsk=payment_xsk, stake_xsk=stake_xsk, amount=amount, # type: ignore
             script_hash=script_hash, datum=miner_datum,
             context=chain_context_fixture, network=network,
         )
@@ -187,7 +187,7 @@ def test_create_validator_utxo(chain_context_fixture: BlockFrostChainContext, va
 
     try:
         tx_id_obj = create_utxo(
-            payment_xsk=payment_xsk, stake_xsk=stake_xsk, amount=amount,
+            payment_xsk=payment_xsk, stake_xsk=stake_xsk, amount=amount, # type: ignore
             script_hash=script_hash, datum=validator_datum, # <<<--- Sử dụng validator_datum
             context=chain_context_fixture, network=network,
         )

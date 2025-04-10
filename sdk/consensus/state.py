@@ -24,8 +24,7 @@ from sdk.formulas import (
 
 from sdk.metagraph.update_metagraph import update_datum
 from sdk.metagraph.metagraph_data import get_all_validator_data
-# from sdk.metagraph.hash import hash_data # Cần hàm hash
-def hash_data(data): return f"hashed_{str(data)[:10]}" # Mock hash
+from sdk.metagraph.hash.hash_datum import hash_data # Cần hàm hash
 from pycardano import BlockFrostChainContext, PaymentSigningKey, StakeSigningKey, TransactionId, Network, ScriptHash, UTxO, Address, PlutusV3Script, Redeemer, VerificationKeyHash, PaymentVerificationKey, TransactionBuilder, Value, TransactionOutput, ExtendedSigningKey, ExtendedVerificationKey
 from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_JAILED, STATUS_INACTIVE
 from blockfrost import ApiError
@@ -53,11 +52,11 @@ async def find_utxo_by_uid(
     try:
         # TODO: Tối ưu hóa: chỉ fetch UTXO liên quan nếu có thể
         # Tạm thời fetch hết và lọc
-        utxos = await context.utxos(str(contract_address))
+        utxos = context.utxos(str(contract_address))
         for utxo in utxos:
             if utxo.output.datum:
                 try:
-                    decoded_datum = datum_class.from_cbor(utxo.output.datum.cbor)
+                    decoded_datum = datum_class.from_cbor(utxo.output.datum.cbor) # type: ignore
                     if hasattr(decoded_datum, 'uid') and getattr(decoded_datum, 'uid') == uid_bytes:
                         logger.debug(f"Found matching UTxO: {utxo.input}")
                         return utxo
@@ -506,7 +505,7 @@ async def prepare_miner_updates_logic( # <<<--- async vì cần lấy/decode dat
         if input_utxo and input_utxo.output.datum:
             try:
                 # Decode datum cũ chủ yếu để lấy reward cũ
-                old_datum = MinerDatum.from_cbor(input_utxo.output.datum.cbor)
+                old_datum = MinerDatum.from_cbor(input_utxo.output.datum.cbor) # type: ignore
                 pending_rewards_old = getattr(old_datum, 'accumulated_rewards', 0)
                 logger.debug(f"{log_prefix}: Old accumulated_rewards from datum: {pending_rewards_old}")
 
@@ -601,11 +600,11 @@ async def prepare_miner_updates_logic( # <<<--- async vì cần lấy/decode dat
                 scaled_trust_score=int(new_trust_score_float * divisor), # <<< Trust MỚI
                 accumulated_rewards=accumulated_rewards_new, # <<< Reward MỚI
                 last_update_slot=current_cycle,
-                performance_history_hash=perf_history_hash_new, # <<< Hash MỚI
-                wallet_addr_hash=final_wallet_addr_hash_bytes, # Hash từ Info/Datum cũ (bytes)
+                performance_history_hash=perf_history_hash_new, # <<< Hash MỚI # type: ignore
+                wallet_addr_hash=final_wallet_addr_hash_bytes, # Hash từ Info/Datum cũ (bytes) # type: ignore
                 status=current_status,
                 registration_slot=registration_slot,
-                api_endpoint=api_endpoint_bytes,
+                api_endpoint=api_endpoint_bytes, # type: ignore
             )
             miner_updates[miner_uid_hex] = new_datum
             logger.debug(f"{log_prefix}: Successfully prepared new MinerDatum.")
@@ -674,11 +673,11 @@ async def prepare_validator_updates_logic(
             scaled_trust_score=int(new_trust_float * divisor),
             accumulated_rewards=accumulated_rewards_new,
             last_update_slot=current_cycle,
-            performance_history_hash=perf_history_hash,
+            performance_history_hash=perf_history_hash, # type: ignore
             wallet_addr_hash=wallet_addr_hash_bytes, # <<< Dùng hash
             status=status_current,
             registration_slot=registration_slot_current,
-            api_endpoint=api_endpoint_bytes, # <<< Dùng hash hoặc None
+            api_endpoint=api_endpoint_bytes, # <<< Dùng hash hoặc None # type: ignore
         )
         validator_updates[self_uid_hex] = new_datum
         logger.info(f"Prepared update for self ({self_uid_hex})")
@@ -810,7 +809,7 @@ async def commit_updates_logic(
             logger.debug(f"{log_prefix}: Building and signing transaction...")
             # Chỉ cần payment key để ký vì required_signers chỉ có payment key hash
             # Nếu script yêu cầu stake key, cần thêm stake_signing_key vào list
-            signing_keys_list = [signing_key]
+            signing_keys_list: List = [signing_key]
             # if stake_signing_key and owner_stake_key_hash in builder.required_signers:
             #    signing_keys_list.append(stake_signing_key)
 

@@ -71,8 +71,8 @@ async def startup_event():
                 )
 
                 # Gán trực tiếp kết quả vì ValidatorNode.__init__ đã nhận ExtendedSigningKey
-                signing_key = payment_esk
-                stake_signing_key = stake_esk
+                signing_key = payment_esk # type: ignore
+                stake_signing_key = stake_esk # type: ignore
 
                 if not signing_key:
                     # decode_hotkey_skey nên raise lỗi nếu thất bại, nhưng kiểm tra lại cho chắc
@@ -117,7 +117,6 @@ async def startup_event():
         logger.error("SDK components (ValidatorNode/Info) or settings not available. Cannot initialize node.")
 
 
-
 @app.on_event("shutdown")
 async def shutdown_event():
     """Dọn dẹp tài nguyên."""
@@ -144,8 +143,10 @@ async def run_main_node_loop(node: ValidatorNode):
             cycle_start_time = time.time()
             await node.run_cycle()
             cycle_duration = time.time() - cycle_start_time
-            cycle_interval_seconds = settings.consensus_metagraph_update_interval_minutes * 60
-            min_wait = settings.consensus_cycle_min_wait_seconds
+            cycle_interval_seconds = (
+                settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
+            )
+            min_wait = settings.CONSENSUS_CYCLE_MIN_WAIT_SECONDS
             wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
             logger.info(f"Cycle duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle...")
             await asyncio.sleep(wait_time)

@@ -109,7 +109,7 @@ def self_key_pair() -> PaymentKeyPair:
     return PaymentKeyPair.generate()
 
 @pytest.fixture(scope="module")
-def self_signing_key(self_key_pair: PaymentKeyPair) -> ExtendedSigningKey:
+def self_signing_key(self_key_pair: PaymentKeyPair):
     # Tạo ExtendedSigningKey giả lập từ non-extended để test
     # Trong thực tế sẽ dùng key từ hotkey_skey_fixture
     # Lưu ý: Cách tạo này chỉ để test, không đúng chuẩn HD
