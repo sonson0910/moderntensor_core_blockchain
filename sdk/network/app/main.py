@@ -50,7 +50,7 @@ async def startup_event():
             # --- KHỞI TẠO CONTEXT CARDANO ---
             cardano_ctx = get_chain_context('blockfrost') # Giả sử hàm này hoạt động đúng
             if not cardano_ctx:
-                 raise RuntimeError("Node initialization failed: Could not initialize Cardano context.")
+                raise RuntimeError("Node initialization failed: Could not initialize Cardano context.")
 
             # --- LOAD SIGNING KEYS (SỬ DỤNG decode_hotkey_skey) ---
             signing_key: Optional[ExtendedSigningKey] = None
@@ -81,8 +81,8 @@ async def startup_event():
                 logger.info(f"Successfully loaded keys for hotkey '{hotkey_name}' under coldkey '{coldkey_name}'.")
 
             except FileNotFoundError as fnf_err:
-                 logger.exception(f"Failed to load signing keys: Hotkey file or directory not found. Details: {fnf_err}")
-                 raise RuntimeError(f"Node initialization failed: Hotkey file not found ({fnf_err}). Check HOTKEY_BASE_DIR, COLDKEY_NAME, HOTKEY_NAME settings.") from fnf_err
+                logger.exception(f"Failed to load signing keys: Hotkey file or directory not found. Details: {fnf_err}")
+                raise RuntimeError(f"Node initialization failed: Hotkey file not found ({fnf_err}). Check HOTKEY_BASE_DIR, COLDKEY_NAME, HOTKEY_NAME settings.") from fnf_err
             except Exception as key_err:
                 logger.exception(f"Failed to load/decode signing keys: {key_err}")
                 raise RuntimeError(f"Node initialization failed: Could not load/decode keys ({key_err}). Check password or key files.") from key_err
@@ -105,8 +105,8 @@ async def startup_event():
             # Inject và chạy loop (giữ nguyên)
             set_validator_node_instance(main_validator_node_instance)
             logger.info(f"ValidatorNode instance '{validator_uid}' initialized and injected.")
-            logger.info("Starting main consensus loop as background task...")
-            main_loop_task = asyncio.create_task(run_main_node_loop(main_validator_node_instance))
+            # logger.info("Starting main consensus loop as background task...")
+            # main_loop_task = asyncio.create_task(run_main_node_loop(main_validator_node_instance))
 
         except Exception as e:
             # Bắt các lỗi khác trong quá trình khởi tạo

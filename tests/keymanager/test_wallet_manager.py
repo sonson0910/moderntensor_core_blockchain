@@ -5,6 +5,7 @@ import json
 import pytest
 import logging
 from unittest.mock import patch
+from pycardano import Network
 
 from sdk.config.settings import settings, logger  # Global logger & settings
 from sdk.keymanager.encryption_utils import (
@@ -46,7 +47,7 @@ def hotkey_manager(coldkey_manager):
     return HotKeyManager(
         coldkeys_dict=coldkey_manager.coldkeys,
         base_dir=coldkey_manager.base_dir,
-        network=None,  # Can also specify Network.TESTNET
+        network=Network.TESTNET,  # Can also specify Network.TESTNET # type: ignore
     )
 
 @pytest.fixture

@@ -402,12 +402,17 @@ class ValidatorNode:
     def select_miners(self) -> List[MinerInfo]:
         """Chọn miners để giao việc."""
         logger.info(f"[V:{self.info.uid}] Selecting miners for cycle {self.current_cycle}...")
+        num_to_select = self.settings.CONSENSUS_NUM_MINERS_TO_SELECT
+        beta = self.settings.CONSENSUS_PARAM_BETA
+        max_time_bonus = self.settings.CONSENSUS_PARAM_MAX_TIME_BONUS
         # Gọi hàm logic từ selection.py
         return select_miners_logic(
             miners_info=self.miners_info,
             current_cycle=self.current_cycle,
-            # Các tham số khác được lấy từ self.settings bên trong hàm logic
-        ) # type: ignore
+            num_to_select=num_to_select,  # Truyền số lượng cần chọn
+            beta=beta,  # Truyền hệ số beta
+            max_time_bonus=max_time_bonus,  # Truyền giới hạn bonus thời gian
+        )
 
     # --- Giao Task ---
     # --- 1. Đánh dấu _create_task_data ---
@@ -441,7 +446,7 @@ class ValidatorNode:
 
         # TODO: Xác định đường dẫn endpoint chính xác trên miner node để nhận task
         # Endpoint này cần được thống nhất giữa validator và miner.
-        target_url = f"{miner_endpoint}/execute_task" # <<<--- GIẢ ĐỊNH ENDPOINT
+        target_url = f"{miner_endpoint}/receive-task"  # <<<--- GIẢ ĐỊNH ENDPOINT
 
         try:
             # Serialize task data thành JSON
@@ -456,10 +461,10 @@ class ValidatorNode:
             response.raise_for_status() # Ném exception nếu là 4xx hoặc 5xx
 
             try:
-                 response_data = response.json()
-                 logger.info(f"Successfully sent task {task.task_id} to {miner_endpoint}. Miner Response: {response_data}")
+                response_data = response.json()
+                logger.info(f"Successfully sent task {task.task_id} to {miner_endpoint}. Miner Response: {response_data}")
             except json.JSONDecodeError:
-                 logger.info(f"Successfully sent task {task.task_id} to {miner_endpoint}. Status: {response.status_code} (Non-JSON response)")
+                logger.info(f"Successfully sent task {task.task_id} to {miner_endpoint}. Status: {response.status_code} (Non-JSON response)")
 
             # TODO: Có thể cần xử lý nội dung response nếu miner trả về thông tin xác nhận
             # Ví dụ: data = response.json()
@@ -500,6 +505,10 @@ class ValidatorNode:
                 logger.warning(f"Miner {miner.uid} has invalid or missing API endpoint ('{miner.api_endpoint}'). Skipping task assignment.")
                 continue
 
+            if miner.uid == self.info.uid:
+                logger.debug(f"Skipping sending task to self (UID: {miner.uid}).")
+                continue
+
             task_id = f"task_{self.current_cycle}_{self.info.uid}_{miner.uid}_{random.randint(1000,9999)}"
             try:
                 task_data = self._create_task_data(miner.uid)
@@ -530,7 +539,7 @@ class ValidatorNode:
 
         logger.info(f"Sending {len(tasks_to_send)} tasks concurrently...")
         # Gửi đồng thời tất cả các task
-        results = asyncio.gather(*tasks_to_send, return_exceptions=True)
+        results = await asyncio.gather(*tasks_to_send, return_exceptions=True)
 
         successful_sends = 0
         # Xử lý kết quả gửi task
@@ -678,7 +687,7 @@ class ValidatorNode:
                     score.validator_uid == submitter_uid): # Đảm bảo validator_uid khớp người gửi
                     logger.warning(f"Ignoring invalid score object received from {submitter_uid}: {score}")
                     continue
-                
+
                 if score.task_id not in self.received_validator_scores[cycle]:
                     self.received_validator_scores[cycle][score.task_id] = {}
                 # Ghi đè điểm nếu validator gửi lại?

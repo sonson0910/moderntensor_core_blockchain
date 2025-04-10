@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     CARDANO_NETWORK: str = Field(default="TESTNET", alias="CARDANO_NETWORK")
 
     # --- Thêm các trường cấu hình Node (Ví dụ) ---
-    API_PORT: int = Field(8000, alias="API_PORT", description="Port cho FastAPI server")
+    API_PORT: int = Field(8001, alias="API_PORT", description="Port cho FastAPI server")
     VALIDATOR_UID: Optional[str] = Field(None, alias="VALIDATOR_UID", description="UID của validator này (nếu chạy node)")
     VALIDATOR_ADDRESS: Optional[str] = Field(None, alias="VALIDATOR_ADDRESS", description="Địa chỉ Cardano của validator này")
     VALIDATOR_API_ENDPOINT: Optional[str] = Field(None, alias="VALIDATOR_API_ENDPOINT", description="Địa chỉ API đầy đủ mà các node khác có thể gọi đến validator này")

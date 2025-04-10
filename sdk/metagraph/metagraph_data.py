@@ -35,7 +35,7 @@ async def get_all_miner_data(
     logger.info(f"Fetching Miner UTxOs from address: {contract_address}")
 
     try:
-        utxos: List[UTxO] = await context.utxos(str(contract_address))
+        utxos: List[UTxO] = context.utxos(str(contract_address))
         logger.info(f"Found {len(utxos)} potential UTxOs at miner contract address.")
     except Exception as e:
         logger.exception(f"Failed to fetch UTxOs for address {contract_address}: {e}")
@@ -103,7 +103,7 @@ async def get_all_validator_data(
     logger.info(f"Fetching Validator UTxOs from address: {contract_address}")
 
     try:
-        utxos: List[UTxO] = await context.utxos(str(contract_address))
+        utxos: List[UTxO] = context.utxos(str(contract_address))
         logger.info(f"Found {len(utxos)} potential UTxOs at validator contract address.")
     except Exception as e:
         logger.exception(f"Failed to fetch UTxOs for address {contract_address}: {e}")
