@@ -1,4 +1,4 @@
-# ModernTensor CLI
+# ModernTensor SDK
 
 ModernTensor is a project focused on building a command-line interface (CLI) tool to support programming and deploying tensor models in modern applications. The project is currently in its early development stage and there are still many areas that need to be completed.
 
