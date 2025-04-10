@@ -5,8 +5,10 @@ Sử dụng asyncio cho các tác vụ mạng và chờ đợi.
 Sử dụng đối tượng settings tập trung từ sdk.config.settings.
 *** Đây là khung sườn chi tiết, cần hoàn thiện logic cụ thể ***
 """
+import os
 import random
 import time
+import json
 import math
 import asyncio
 import httpx
@@ -26,6 +28,8 @@ from sdk.metagraph import metagraph_data, update_metagraph
 from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE, STATUS_JAILED, STATUS_INACTIVE
 from sdk.smartcontract.validator import read_validator
 from sdk.metagraph.hash.hash_datum import hash_data  # Import hàm hash thật sự
+from sdk.keymanager.decryption_utils import decode_hotkey_skey
+
 # from sdk.metagraph.hash import hash_data, decode_history_from_hash # Cần hàm hash/decode
 async def decode_history_from_hash(hash_str): await asyncio.sleep(0); return [] # Mock decode
 # Network Models (for task/result data structure)
@@ -34,6 +38,8 @@ from sdk.network.server import TaskModel, ResultModel
 from sdk.core.datatypes import (
     MinerInfo, ValidatorInfo, TaskAssignment, MinerResult, ValidatorScore
 )
+from sdk.service.context import get_chain_context
+
 # Pydantic model for API communication
 # from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
 # PyCardano types
@@ -59,7 +65,14 @@ class ValidatorNode:
     Lớp điều phối chính cho Validator Node.
     Quản lý trạng thái và gọi các hàm logic từ các module con.
     """
-    def __init__(self, validator_info: ValidatorInfo, cardano_context: BlockFrostChainContext, signing_key: ExtendedSigningKey, stake_signing_key: Optional[ExtendedSigningKey] = None):
+    def __init__(
+        self,
+        validator_info: ValidatorInfo,
+        cardano_context: BlockFrostChainContext,
+        signing_key: ExtendedSigningKey,
+        stake_signing_key: Optional[ExtendedSigningKey] = None,
+        state_file="validator_state.json",
+    ):
         """
         Khởi tạo Node Validator.
 
@@ -81,6 +94,8 @@ class ValidatorNode:
         self.signing_key = signing_key
         self.stake_signing_key = stake_signing_key
         self.settings = settings # Sử dụng instance settings đã import
+        self.state_file = state_file # Lưu đường dẫn file
+        self.current_cycle: int = self._load_last_cycle()
 
         self.network = Network.TESTNET
 
@@ -88,7 +103,6 @@ class ValidatorNode:
         self.miners_info: Dict[str, MinerInfo] = {}
         self.validators_info: Dict[str, ValidatorInfo] = {}
         self.current_utxo_map: Dict[str, UTxO] = {} # Map: uid_hex -> UTxO object
-        self.current_cycle: int = 0 # TODO: Nên load từ trạng thái cuối cùng on-chain/db
         self.tasks_sent: Dict[str, TaskAssignment] = {}
         self.results_received: Dict[str, List[MinerResult]] = defaultdict(list)
         self.results_received_lock = asyncio.Lock()
@@ -124,6 +138,40 @@ class ValidatorNode:
         logger.info(f"Initialized ValidatorNode {self.info.uid} using centralized settings.")
         logger.info(f"Contract Script Hash: {self.script_hash}")
         logger.info(f"Cardano Network: {self.settings.CARDANO_NETWORK}")
+
+    def _load_last_cycle(self) -> int:
+        """Tải chu kỳ cuối cùng từ file trạng thái."""
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file, 'r') as f:
+                    state_data = json.load(f)
+                    last_cycle = state_data.get("last_completed_cycle", -1)
+                    logger.info(f"Loaded last completed cycle {last_cycle} from {self.state_file}")
+                    # Chu kỳ hiện tại sẽ là chu kỳ tiếp theo
+                    return last_cycle + 1
+            else:
+                logger.warning(f"State file {self.state_file} not found. Starting from cycle 0.")
+                return 0
+        except Exception as e:
+            logger.error(f"Error loading state file {self.state_file}: {e}. Starting from cycle 0.")
+            return 0
+
+    def _save_current_cycle(self):
+        """Lưu chu kỳ *vừa hoàn thành* vào file trạng thái."""
+        # Chu kỳ vừa hoàn thành là self.current_cycle - 1 (sau khi run_cycle tăng lên)
+        cycle_to_save = self.current_cycle - 1
+        if cycle_to_save < 0:
+            return  # Chưa hoàn thành chu kỳ nào
+
+        state_data = {"last_completed_cycle": cycle_to_save}
+        try:
+            with open(self.state_file, "w") as f:
+                json.dump(state_data, f)
+            logger.debug(
+                f"Saved last completed cycle {cycle_to_save} to {self.state_file}"
+            )
+        except Exception as e:
+            logger.error(f"Error saving state file {self.state_file}: {e}")
 
     # --- Tương tác Metagraph ---
     async def load_metagraph_data(self):
@@ -169,7 +217,6 @@ class ValidatorNode:
                     uid_hex = datum_dict.get("uid")
                     if not uid_hex: continue
 
-                    # TODO: Triển khai logic load và giải mã performance_history_hash
                     on_chain_history_hash_hex = datum_dict.get(
                         "performance_history_hash"
                     )
@@ -408,7 +455,12 @@ class ValidatorNode:
             # Kiểm tra HTTP status code
             response.raise_for_status() # Ném exception nếu là 4xx hoặc 5xx
 
-            logger.info(f"Successfully sent task {task.task_id} to {miner_endpoint} (Status: {response.status_code})")
+            try:
+                 response_data = response.json()
+                 logger.info(f"Successfully sent task {task.task_id} to {miner_endpoint}. Miner Response: {response_data}")
+            except json.JSONDecodeError:
+                 logger.info(f"Successfully sent task {task.task_id} to {miner_endpoint}. Status: {response.status_code} (Non-JSON response)")
+
             # TODO: Có thể cần xử lý nội dung response nếu miner trả về thông tin xác nhận
             # Ví dụ: data = response.json()
             return True
@@ -619,9 +671,14 @@ class ValidatorNode:
 
             valid_scores_added = 0
             for score in scores:
-                # Chỉ lưu điểm cho task mà node này cũng quan tâm (đã gửi đi)? Hay lưu tất cả?
-                # Tạm thời lưu tất cả điểm nhận được cho chu kỳ đó.
-                # if score.task_id in self.tasks_sent: # Chỉ lưu nếu task liên quan?
+                if not (isinstance(score, ValidatorScore) and
+                    isinstance(score.score, (int, float)) and 0.0 <= score.score <= 1.0 and
+                    isinstance(score.task_id, str) and score.task_id and
+                    isinstance(score.miner_uid, str) and score.miner_uid and
+                    score.validator_uid == submitter_uid): # Đảm bảo validator_uid khớp người gửi
+                    logger.warning(f"Ignoring invalid score object received from {submitter_uid}: {score}")
+                    continue
+                
                 if score.task_id not in self.received_validator_scores[cycle]:
                     self.received_validator_scores[cycle][score.task_id] = {}
                 # Ghi đè điểm nếu validator gửi lại?
@@ -1023,6 +1080,7 @@ class ValidatorNode:
             logger.info(f"--- Cycle {self.current_cycle} Finished (Duration: {cycle_end_time - cycle_start_time:.1f}s) ---")
             # Tăng số thứ tự chu kỳ
             self.current_cycle += 1
+            self._save_current_cycle()
             # Dọn dẹp dữ liệu P2P của các chu kỳ quá cũ để tiết kiệm bộ nhớ
             cleanup_cycle = self.current_cycle - 3 # Ví dụ: Giữ lại dữ liệu 2 chu kỳ trước đó
             async with self.received_scores_lock:
@@ -1034,81 +1092,156 @@ class ValidatorNode:
                         pass # Đã bị xóa bởi luồng khác?
 
 
-# --- Hàm chạy chính (Ví dụ Async) ---
+# --- Hàm chạy chính (Đã cập nhật) ---
 async def main_validator_loop():
     logger.info("Starting validator node loop...")
-    if not settings: logger.error("Settings not loaded. Exiting."); return
+    if not settings:
+        logger.error("Settings not loaded. Exiting.")
+        return
 
     # --- Khởi tạo context Cardano ---
-    # cardano_ctx = await cardano_service.get_context_async(settings)
+    cardano_ctx: Optional[BlockFrostChainContext] = None
+    try:
+        # Lấy context từ hàm get_chain_context (sử dụng cấu hình trong settings)
+        cardano_ctx = get_chain_context(method="blockfrost")
+        if not cardano_ctx:
+            raise ValueError("Failed to get Cardano chain context.")
+        logger.info(
+            f"Cardano context initialized successfully for network: {settings.CARDANO_NETWORK}"
+        )
+    except Exception as e:
+        logger.exception(f"Failed to initialize Cardano context: {e}")
+        return  # Thoát nếu không có context
 
     # --- Load thông tin validator từ settings ---
     validator_uid = settings.VALIDATOR_UID
     validator_address = settings.VALIDATOR_ADDRESS
     api_endpoint = settings.VALIDATOR_API_ENDPOINT
     if not validator_uid or not validator_address or not api_endpoint:
-        logger.error("Validator UID, Address, or API Endpoint not configured. Exiting.")
+        logger.error(
+            "Validator UID, Address, or API Endpoint not configured in settings. Exiting."
+        )
         return
 
-    if not ValidatorInfo or not ValidatorNode: logger.error("Node classes not available. Exiting."); return
+    if not ValidatorInfo or not ValidatorNode:
+        logger.error(
+            "Node classes (ValidatorInfo/ValidatorNode) not available. Exiting."
+        )
+        return
 
-    # TODO: Load signing key thực tế từ file/env được bảo vệ
-    signing_key: Optional[PaymentSigningKey] = None
-    stake_signing_key: Optional[StakeSigningKey] = None
-    # Ví dụ load từ file (cần triển khai hàm load_skey)
-    # try:
-    #     signing_key = load_skey(settings.PAYMENT_SKEY_PATH)
-    #     if settings.STAKE_SKEY_PATH:
-    #          stake_signing_key = load_skey(settings.STAKE_SKEY_PATH)
-    # except Exception as e:
-    #     logger.exception(f"Failed to load signing keys: {e}")
-    #     return
-    if signing_key is None:
-         logger.error("Payment signing key could not be loaded. Exiting.")
-         return
+    # --- Load signing key thực tế ---
+    signing_key: Optional[ExtendedSigningKey] = None
+    stake_signing_key: Optional[ExtendedSigningKey] = None
+    try:
+        logger.info("Attempting to load signing keys using decode_hotkey_skey...")
+        base_dir = settings.HOTKEY_BASE_DIR
+        coldkey_name = settings.COLDKEY_NAME
+        hotkey_name = settings.HOTKEY_NAME
+        password = settings.HOTKEY_PASSWORD  # Lưu ý bảo mật khi lấy password
 
+        # Gọi hàm decode để lấy ExtendedSigningKeys
+        payment_esk, stake_esk = decode_hotkey_skey(
+            base_dir=base_dir,
+            coldkey_name=coldkey_name,
+            hotkey_name=hotkey_name,
+            password=password,
+        )
+        signing_key = payment_esk # type: ignore
+        stake_signing_key = stake_esk # type: ignore
 
-    my_validator_info = ValidatorInfo(uid=validator_uid, address=validator_address, api_endpoint=api_endpoint)
-    # cardano_ctx = ... # Context thực tế
+        if not signing_key:
+            raise ValueError("Failed to load required payment signing key.")
 
-    # Tạo node validator
-    validator_node = ValidatorNode(
-        validator_info=my_validator_info,
-        cardano_context=None, # cardano_ctx
-        signing_key=signing_key,
-        stake_signing_key=stake_signing_key
+        logger.info(
+            f"Successfully loaded keys for hotkey '{hotkey_name}' under coldkey '{coldkey_name}'."
+        )
+
+    except FileNotFoundError as fnf_err:
+        logger.exception(
+            f"Failed to load signing keys: Hotkey file or directory not found. Details: {fnf_err}"
+        )
+        logger.error(
+            f"Please check settings: HOTKEY_BASE_DIR='{settings.HOTKEY_BASE_DIR}', COLDKEY_NAME='{settings.COLDKEY_NAME}', HOTKEY_NAME='{settings.HOTKEY_NAME}'. Exiting."
+        )
+        return
+    except Exception as key_err:
+        logger.exception(f"Failed to load/decode signing keys: {key_err}")
+        logger.error(
+            f"Could not load/decode keys. Check password or key files. Exiting."
+        )
+        return
+    # ---------------------------------
+
+    # Tạo ValidatorInfo từ settings
+    # Đảm bảo các giá trị mặc định hợp lý nếu cần
+    my_validator_info = ValidatorInfo(
+        uid=validator_uid,
+        address=validator_address,
+        api_endpoint=api_endpoint,
+        # Các trường khác như trust, weight, stake sẽ được cập nhật từ metagraph
     )
 
-    # --- Inject instance vào dependency của FastAPI ---
+    # Tạo node validator với context và khóa thực tế
     try:
+        validator_node = ValidatorNode(
+            validator_info=my_validator_info,
+            cardano_context=cardano_ctx,  # <<< Truyền context thực tế
+            signing_key=signing_key,  # <<< Truyền ExtendedSigningKey
+            stake_signing_key=stake_signing_key,  # <<< Truyền ExtendedSigningKey (hoặc None)
+        )
+    except Exception as node_init_err:
+        logger.exception(f"Failed to initialize ValidatorNode: {node_init_err}")
+        return
+
+    # --- Inject instance vào dependency của FastAPI ---
+    # Phần này quan trọng nếu bạn chạy vòng lặp này cùng với FastAPI server
+    try:
+        # Giả sử hàm này nằm trong module dependencies của app FastAPI
         from sdk.network.app.dependencies import set_validator_node_instance
+
         set_validator_node_instance(validator_node)
         logger.info("Validator node instance injected into API dependency.")
+    except ImportError:
+        logger.warning(
+            "Could not import set_validator_node_instance. API dependencies might not work."
+        )
     except Exception as e:
         logger.error(f"Could not inject validator node into API dependency: {e}")
 
     # --- Chạy vòng lặp chính ---
     try:
+        # Chờ một chút để các dịch vụ khác (như FastAPI) có thể khởi động nếu cần
+        await asyncio.sleep(5)
         while True:
             cycle_start_time = time.time()
             await validator_node.run_cycle()
             cycle_duration = time.time() - cycle_start_time
-            cycle_interval_seconds = settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
+            cycle_interval_seconds = (
+                settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
+            )
             min_wait = settings.CONSENSUS_CYCLE_MIN_WAIT_SECONDS
             wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
-            logger.info(f"Cycle duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle...")
+            logger.info(
+                f"Cycle duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle..."
+            )
             await asyncio.sleep(wait_time)
     except asyncio.CancelledError:
         logger.info("Main node loop cancelled.")
     except Exception as e:
         logger.exception(f"Exception in main node loop: {e}")
     finally:
-        await validator_node.http_client.aclose()
-        logger.info("Main node loop finished.")
+        # Dọn dẹp tài nguyên khi vòng lặp kết thúc (ví dụ: đóng http client)
+        if hasattr(validator_node, "http_client") and validator_node.http_client:
+            await validator_node.http_client.aclose()
+        logger.info("Main node loop finished and resources cleaned up.")
 
+
+# Phần if __name__ == "__main__": giữ nguyên để có thể chạy file này trực tiếp
 if __name__ == "__main__":
     try:
-        if settings: asyncio.run(main_validator_loop())
-        else: print("Could not load settings. Aborting.")
+        if settings:
+            asyncio.run(main_validator_loop())
+        else:
+            print("Could not load settings. Aborting.")
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
