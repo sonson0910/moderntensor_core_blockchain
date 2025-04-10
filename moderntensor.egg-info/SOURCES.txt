@@ -8,6 +8,7 @@ moderntensor.egg-info/entry_points.txt
 moderntensor.egg-info/requires.txt
 moderntensor.egg-info/top_level.txt
 sdk/__init__.py
+sdk/runner.py
 sdk/version.py
 sdk/cli/__init__.py
 sdk/cli/main.py

@@ -529,13 +529,18 @@ class ValidatorNode:
                 expected_result_format={"output": "tensor", "loss": "float"} # Ví dụ
             )
             task_assignments[miner.uid] = assignment # Lưu tạm
-
+            self.tasks_sent[task_id] = assignment
+            logger.debug(
+                f"Added task {task_id} to self.tasks_sent for miner {miner.uid}"
+            )
             # Tạo coroutine để gửi task và thêm vào danh sách chờ
             tasks_to_send.append(self._send_task_via_network_async(miner.api_endpoint, task))
 
+        # --- Phần await asyncio.gather và xử lý results ---
         if not tasks_to_send:
-            logger.warning("No valid tasks could be prepared for sending (e.g., all selected miners lack valid endpoints).")
-            return
+            logger.warning("No valid tasks could be prepared for sending.")
+            # Cập nhật lại tasks_sent nếu không có task nào được gửi đi? Có thể không cần.
+            return  # Thoát nếu không có task nào để gửi
 
         logger.info(f"Sending {len(tasks_to_send)} tasks concurrently...")
         # Gửi đồng thời tất cả các task
@@ -550,23 +555,40 @@ class ValidatorNode:
             if i < len(miners_with_tasks):
                 miner = miners_with_tasks[i]
                 assignment = task_assignments.get(miner.uid)
+                assignment_check = self.tasks_sent.get(
+                    f"task_{self.current_cycle}_{self.info.uid}_{miner.uid}"
+                )  # Tìm lại task_id theo cấu trúc
+                # Tìm task_id tương ứng với miner trong lần gửi này
+                for tid, assign in self.tasks_sent.items():
+                    # Kiểm tra cycle và miner uid để đảm bảo đúng task
+                    if (
+                        tid.startswith(f"task_{self.current_cycle}_")
+                        and assign.miner_uid == miner.uid
+                    ):
+                        current_task_id = tid
+                        break
 
-                if assignment and isinstance(result, bool) and result:
-                    # Chỉ lưu task và cập nhật last_selected_time nếu gửi thành công
-                    self.tasks_sent[assignment.task_id] = assignment
-                    if miner.uid in self.miners_info: # Cập nhật trạng thái trong bộ nhớ của node
-                        self.miners_info[miner.uid].last_selected_time = self.current_cycle
-                        logger.debug(f"Updated last_selected_time for miner {miner.uid} to cycle {self.current_cycle}")
-                    successful_sends += 1
-                    # Không log thành công ở đây nữa vì đã log trong _send_task_via_network_async
+                if current_task_id and isinstance(result, bool) and result:
+                     # Gửi thành công, cập nhật last_selected_time
+                     if miner.uid in self.miners_info:
+                         self.miners_info[miner.uid].last_selected_time = self.current_cycle
+                         logger.debug(f"Updated last_selected_time for miner {miner.uid} to cycle {self.current_cycle}")
+                     successful_sends += 1
+                elif current_task_id:
+                     # Gửi thất bại, xóa task khỏi self.tasks_sent? Hoặc đánh dấu là thất bại?
+                     # Tạm thời chỉ log lỗi
+                     logger.warning(f"Failed to send task {current_task_id} to Miner {miner.uid}. Error/Result: {result}")
+                     # Cân nhắc xóa khỏi tasks_sent để tránh validator chờ kết quả không bao giờ đến
+                     # del self.tasks_sent[current_task_id]
                 else:
-                    # Ghi log lỗi nếu gửi thất bại
-                    logger.warning(f"Failed to send task {assignment.task_id if assignment else 'N/A'} to Miner {miner.uid}. Error/Result: {result}")
-            else:
-                # Trường hợp này không nên xảy ra nếu logic đúng
-                logger.error(f"Result index {i} out of bounds for miners_with_tasks list during task sending.")
+                     logger.error(f"Could not map result index {i} back to a sent task for miner {miner.uid}")
 
-        logger.info(f"Finished sending tasks attempt. Successful sends: {successful_sends}/{len(tasks_to_send)}.")
+            else:
+                logger.error(f"Result index {i} out of bounds for miners_with_tasks list during task sending result processing.")
+
+
+        logger.info(f"Finished sending tasks attempt. Successful sends: {successful_sends}/{len(tasks_to_send)}. Tasks currently tracked: {len(self.tasks_sent)}")
+
 
     # --- Nhận và Chấm điểm Kết quả ---
     # --- 2. Sửa receive_results và bỏ _listen_for_results_async ---
