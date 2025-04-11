@@ -7,6 +7,7 @@ import math
 import hashlib  # Đảm bảo đã import
 import asyncio
 from typing import List, Dict, Any, Tuple, Optional, Set, Union
+import numpy as np  # Cần cài đặt numpy: pip install numpy
 from collections import defaultdict
 
 from sdk.config.settings import settings
@@ -57,6 +58,38 @@ EPSILON = 1e-9
 logger = logging.getLogger(__name__)
 
 # --- Logic Đồng thuận và Tính toán Trạng thái Validator ---
+
+
+def calculate_historical_consistency(
+    scores: List[float], max_stddev_penalty: float = 2.0
+) -> float:
+    """
+    Tính điểm chất lượng dựa trên độ lệch chuẩn của điểm số lịch sử.
+    Điểm càng cao khi độ lệch chuẩn càng thấp (ổn định hơn).
+
+    Args:
+        scores: Danh sách các điểm số lịch sử của validator.
+        max_stddev_penalty: Độ lệch chuẩn tối đa chấp nhận được trước khi điểm chất lượng về 0.
+
+    Returns:
+        Điểm chất lượng từ 0.0 đến 1.0.
+    """
+    if not scores or len(scores) < 2:
+        return 0.5  # Trả về giá trị trung bình nếu không đủ dữ liệu
+
+    stddev = float(np.std(scores))
+
+    # Chuẩn hóa điểm: 1.0 khi stddev=0, giảm dần về 0 khi stddev tăng
+    # Ví dụ: Giảm tuyến tính, về 0 khi stddev >= max_stddev_penalty
+    # Cần đảm bảo max_stddev_penalty > 0
+    if max_stddev_penalty <= 0:
+        max_stddev_penalty = 0.5  # Giá trị an toàn
+
+    normalized_penalty = min(1.0, stddev / max_stddev_penalty)
+    consistency_score = 1.0 - normalized_penalty
+
+    # Đảm bảo kết quả cuối cùng trong khoảng [0, 1]
+    return max(0.0, min(1.0, consistency_score))
 
 
 # --- Placeholder Function: Tìm UTXO theo UID ---
@@ -153,6 +186,8 @@ def run_consensus_logic(
         str, ValidatorInfo
     ],  # {validator_uid_hex: ValidatorInfo} - Trạng thái đầu chu kỳ
     settings: Any,
+    consensus_possible: bool,
+    self_validator_uid: str,
 ) -> Tuple[Dict[str, float], Dict[str, Any]]:
     """
     Thực hiện đồng thuận điểm miners, tính toán trạng thái dự kiến VÀ phần thưởng dự kiến cho validators.
@@ -164,6 +199,44 @@ def run_consensus_logic(
     )  # {validator_uid_hex: [deviation1, deviation2,...]}
     calculated_validator_states: Dict[str, Any] = {}  # {validator_uid_hex: {state}}
     total_validator_contribution: float = 0.0  # Tổng W*E để tính thưởng validator
+    if not consensus_possible:
+        logger.warning(
+            f"Cycle {current_cycle}: Insufficient P2P scores received. Skipping detailed consensus calculations and reward distribution. Applying only trust decay if applicable."
+        )
+        # Chỉ tính decay cho trust score, không tính P_adj, E_v, reward
+        for validator_uid_hex, validator_info in validators_info.items():
+            time_since_val_eval = 1  # Giả định 1 chu kỳ
+            # Tính trust chỉ với decay (score_new = 0)
+            new_val_trust_score = update_trust_score(
+                validator_info.trust_score,
+                time_since_val_eval,
+                0.0,
+                delta_trust=settings.CONSENSUS_PARAM_DELTA_TRUST,
+                # Các tham số alpha, k_alpha, sigmoid không ảnh hưởng khi score_new=0
+                alpha_base=settings.CONSENSUS_PARAM_ALPHA_BASE,
+                k_alpha=settings.CONSENSUS_PARAM_K_ALPHA,
+                update_sigmoid_L=settings.CONSENSUS_PARAM_UPDATE_SIG_L,
+                update_sigmoid_k=settings.CONSENSUS_PARAM_UPDATE_SIG_K,
+                update_sigmoid_x0=settings.CONSENSUS_PARAM_UPDATE_SIG_X0,
+            )
+            # Lưu trạng thái tối thiểu
+            calculated_validator_states[validator_uid_hex] = {
+                "E_v": getattr(validator_info, "last_performance", 0.0),  # Giữ E_v cũ
+                "trust": new_val_trust_score,  # Chỉ có decay
+                "reward": 0.0,  # Không có reward
+                "weight": validator_info.weight,
+                "contribution": 0.0,
+                "last_update_cycle": current_cycle,
+                "start_trust": validator_info.trust_score,
+                "start_status": validator_info.status,
+                "notes": "Consensus skipped due to insufficient scores.",
+            }
+            # final_miner_scores vẫn rỗng
+
+        return (
+            final_miner_scores,
+            calculated_validator_states,
+        )  # Trả về kết quả rỗng/chỉ decay
 
     # --- 1. Tính điểm đồng thuận Miner (P_miner_adjusted) và độ lệch ---
     scores_by_miner: Dict[str, List[Tuple[float, float]]] = defaultdict(
@@ -264,18 +337,33 @@ def run_consensus_logic(
         )
 
         # Metric Quality Placeholder
-        metric_quality_example = max(0.0, 1.0 - avg_dev * 1.5)
+        # Giả định validator_info.performance_history chứa list điểm số float
+        historical_scores = getattr(validator_info, "performance_history", [])
+        # Cần lấy tham số max_stddev_penalty từ settings hoặc đặt mặc định
+        max_penalty_for_consistency = getattr(
+            settings, "CONSENSUS_METRIC_MAX_STDDEV", 0.2
+        )  # Ví dụ: ngưỡng 0.2
+        metric_quality = calculate_historical_consistency(
+            historical_scores, max_penalty_for_consistency
+        )
         logger.debug(
-            f"  Validator {validator_uid_hex}: Mock Metric Quality = {metric_quality_example:.3f}"
+            f"  Validator {validator_uid_hex}: Historical Consistency Metric = {metric_quality:.3f} (based on {len(historical_scores)} scores)"
         )
 
-        # Q_task Placeholder (giả sử validator không làm task)
-        q_task_val_example = 0.0
+        # Kiểm tra xem UID của validator này có trong danh sách điểm miner cuối cùng không
+        q_task_val = 0.0  # Mặc định là 0
+        if (
+            validator_uid_hex in final_miner_scores
+        ):  # final_miner_scores đã được tính ở phần 1 của hàm
+            q_task_val = final_miner_scores[validator_uid_hex]
+            logger.debug(
+                f"  Validator {validator_uid_hex} also acted as miner. Using P_adj={q_task_val:.4f} as Q_task_validator."
+            )
 
         # Tính E_validator mới
         new_e_validator = calculate_validator_performance(
-            q_task_validator=q_task_val_example,
-            metric_validator_quality=metric_quality_example,
+            q_task_validator=q_task_val,
+            metric_validator_quality=metric_quality,
             deviation=avg_dev,  # Độ lệch trung bình của validator này
             theta1=settings.CONSENSUS_PARAM_THETA1,
             theta2=settings.CONSENSUS_PARAM_THETA2,
@@ -336,7 +424,7 @@ def run_consensus_logic(
             "last_update_cycle": current_cycle,
             # Lưu thêm trạng thái đầu vào để tiện debug/kiểm tra
             "avg_deviation": avg_dev,
-            "metric_quality": metric_quality_example,
+            "metric_quality": metric_quality,
             "start_trust": validator_info.trust_score,
             "start_status": getattr(validator_info, "status", STATUS_ACTIVE),
         }
