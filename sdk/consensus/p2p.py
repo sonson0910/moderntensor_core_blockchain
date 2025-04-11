@@ -8,13 +8,21 @@ from typing import List, Dict, Any, Optional
 from pycardano import PaymentSigningKey, ExtendedSigningKey
 import binascii
 import asyncio
-import httpx # Đảm bảo đã import httpx
+import httpx  # Đảm bảo đã import httpx
 import json
 
-from sdk.core.datatypes import MinerResult, TaskAssignment, ValidatorScore, ValidatorInfo, PaymentVerificationKey, ScoreSubmissionPayload
+from sdk.core.datatypes import (
+    MinerResult,
+    TaskAssignment,
+    ValidatorScore,
+    ValidatorInfo,
+    PaymentVerificationKey,
+    ScoreSubmissionPayload,
+)
 from sdk.metagraph.metagraph_datum import STATUS_ACTIVE, STATUS_INACTIVE
 
 logger = logging.getLogger(__name__)
+
 
 # --- Helper function for canonical serialization (Sửa lỗi) ---
 def canonical_json_serialize(data: Any) -> str:
@@ -22,6 +30,7 @@ def canonical_json_serialize(data: Any) -> str:
     Serialize dữ liệu thành chuỗi JSON một cách ổn định (sắp xếp key).
     Handles nested dataclasses and basic types.
     """
+
     # Helper function to convert dataclasses to dicts recursively
     def convert_to_dict(obj):
         if dataclasses.is_dataclass(obj):
@@ -38,7 +47,7 @@ def canonical_json_serialize(data: Any) -> str:
             # Recursively convert items in a list
             return [convert_to_dict(item) for item in obj]
         elif isinstance(obj, dict):
-             # Recursively convert values in a dict
+            # Recursively convert values in a dict
             return {k: convert_to_dict(v) for k, v in obj.items()}
         else:
             # Return basic types as is (int, float, str, bool, None)
@@ -50,9 +59,10 @@ def canonical_json_serialize(data: Any) -> str:
     data_to_serialize = convert_to_dict(data)
 
     # Dump the resulting dict structure to JSON, ensuring keys are sorted
-    return json.dumps(data_to_serialize, sort_keys=True, separators=(',', ':'))
-# -----------------------------------------------------------------------------------
+    return json.dumps(data_to_serialize, sort_keys=True, separators=(",", ":"))
 
+
+# -----------------------------------------------------------------------------------
 
 
 def _calculate_score_from_result(task_data: Any, result_data: Any) -> float:
@@ -65,20 +75,25 @@ def _calculate_score_from_result(task_data: Any, result_data: Any) -> float:
     score = 0.0
     try:
         loss = float(result_data.get("loss", 1.0))
-        score = max(0.0, min(1.0, 1.0 - loss * 1.2)) # Điều chỉnh hệ số
+        score = max(0.0, min(1.0, 1.0 - loss * 1.2))  # Điều chỉnh hệ số
         logger.debug(f"Calculated score based on loss {loss:.4f}: {score:.3f}")
     except (TypeError, ValueError) as e:
-        score = 0.1 # Phạt nhẹ nếu format sai
-        logger.warning(f"Could not parse loss from result data {str(result_data)[:50]}... : {e}. Assigning low score.")
+        score = 0.1  # Phạt nhẹ nếu format sai
+        logger.warning(
+            f"Could not parse loss from result data {str(result_data)[:50]}... : {e}. Assigning low score."
+        )
     except Exception as e:
-        logger.exception(f"Unexpected error calculating score from result: {e}. Assigning low score.")
+        logger.exception(
+            f"Unexpected error calculating score from result: {e}. Assigning low score."
+        )
         score = 0.1
     return score
+
 
 def score_results_logic(
     results_received: Dict[str, List[MinerResult]],
     tasks_sent: Dict[str, TaskAssignment],
-    validator_uid: str
+    validator_uid: str,
 ) -> Dict[str, List[ValidatorScore]]:
     """
     Chấm điểm tất cả các kết quả hợp lệ nhận được từ miners.
@@ -91,13 +106,17 @@ def score_results_logic(
     Returns:
         Dictionary điểm số đã chấm {task_id: [ValidatorScore]}.
     """
-    logger.info(f"[V:{validator_uid}] Scoring {len(results_received)} received tasks...")
+    logger.info(
+        f"[V:{validator_uid}] Scoring {len(results_received)} received tasks..."
+    )
     validator_scores: Dict[str, List[ValidatorScore]] = {}
 
     for task_id, results in results_received.items():
         assignment = tasks_sent.get(task_id)
         if not assignment:
-            logger.warning(f"Received result for unknown/unsent task {task_id}. Skipping scoring.")
+            logger.warning(
+                f"Received result for unknown/unsent task {task_id}. Skipping scoring."
+            )
             continue
 
         if task_id not in validator_scores:
@@ -106,23 +125,32 @@ def score_results_logic(
         for result in results:
             # Kiểm tra xem miner có đúng là miner được giao task không
             if result.miner_uid != assignment.miner_uid:
-                 logger.warning(f"Received result for task {task_id} from unexpected miner {result.miner_uid}. Expected {assignment.miner_uid}. Skipping.")
-                 continue
+                logger.warning(
+                    f"Received result for task {task_id} from unexpected miner {result.miner_uid}. Expected {assignment.miner_uid}. Skipping."
+                )
+                continue
 
-            score = _calculate_score_from_result(assignment.task_data, result.result_data)
-            logger.info(f"  Scored Miner {result.miner_uid} for task {task_id}: {score:.3f}")
+            score = _calculate_score_from_result(
+                assignment.task_data, result.result_data
+            )
+            logger.info(
+                f"  Scored Miner {result.miner_uid} for task {task_id}: {score:.3f}"
+            )
 
             val_score = ValidatorScore(
                 task_id=task_id,
                 miner_uid=result.miner_uid,
                 validator_uid=validator_uid,
-                score=score # Điểm P_miner,v
+                score=score,  # Điểm P_miner,v
                 # timestamp được tự động gán khi tạo ValidatorScore
             )
             validator_scores[task_id].append(val_score)
 
-    logger.info(f"Finished scoring. Generated scores for {len(validator_scores)} tasks.")
+    logger.info(
+        f"Finished scoring. Generated scores for {len(validator_scores)} tasks."
+    )
     return validator_scores
+
 
 async def broadcast_scores_logic(
     local_scores: Dict[str, List[ValidatorScore]],
@@ -130,13 +158,15 @@ async def broadcast_scores_logic(
     signing_key: ExtendedSigningKey,
     active_validators: List[ValidatorInfo],
     current_cycle: int,
-    http_client: httpx.AsyncClient
+    http_client: httpx.AsyncClient,
 ):
     """
     Gửi điểm số cục bộ (local_scores) đến các validator khác, có ký dữ liệu.
     """
     self_uid = self_validator_info.uid
-    logger.info(f"[V:{self_uid}] Broadcasting local scores for cycle {current_cycle}...")
+    logger.info(
+        f"[V:{self_uid}] Broadcasting local scores for cycle {current_cycle}..."
+    )
 
     # 1. Chuẩn bị danh sách điểm số cần gửi
     local_scores_list: List[ValidatorScore] = []
@@ -147,10 +177,14 @@ async def broadcast_scores_logic(
             local_scores_list.extend(scores_from_self)
 
     if not local_scores_list:
-        logger.info(f"[V:{self_uid}] No local scores generated in this cycle to broadcast.")
+        logger.info(
+            f"[V:{self_uid}] No local scores generated in this cycle to broadcast."
+        )
         return
 
-    logger.info(f"[V:{self_uid}] Preparing to broadcast {len(local_scores_list)} score entries.")
+    logger.info(
+        f"[V:{self_uid}] Preparing to broadcast {len(local_scores_list)} score entries."
+    )
 
     # --- 2. Ký dữ liệu ---
     signature_hex: Optional[str] = None
@@ -163,11 +197,13 @@ async def broadcast_scores_logic(
         submitter_vkey_cbor_hex = vkey.to_cbor_hex()
 
         # Sử dụng hàm serialize đã sửa lỗi
-        data_to_sign_str = canonical_json_serialize(local_scores_list) # <<< Sử dụng hàm đã sửa
-        data_to_sign_bytes = data_to_sign_str.encode('utf-8')
+        data_to_sign_str = canonical_json_serialize(
+            local_scores_list
+        )  # <<< Sử dụng hàm đã sửa
+        data_to_sign_bytes = data_to_sign_str.encode("utf-8")
 
         signature_bytes = signing_key.sign(data_to_sign_bytes)
-        signature_hex = binascii.hexlify(signature_bytes).decode('utf-8')
+        signature_hex = binascii.hexlify(signature_bytes).decode("utf-8")
     except Exception as sign_e:
         logger.error(f"Failed to sign broadcast payload: {sign_e}")
         return
@@ -175,9 +211,12 @@ async def broadcast_scores_logic(
     # Tạo Payload (cần import ScoreSubmissionPayload)
     # Giả sử ScoreSubmissionPayload đã được import
     from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
-    if 'ScoreSubmissionPayload' not in globals() or not callable(ScoreSubmissionPayload):
-         logger.error("ScoreSubmissionPayload model is not available. Cannot broadcast.")
-         return
+
+    if "ScoreSubmissionPayload" not in globals() or not callable(
+        ScoreSubmissionPayload
+    ):
+        logger.error("ScoreSubmissionPayload model is not available. Cannot broadcast.")
+        return
 
     try:
         payload = ScoreSubmissionPayload(
@@ -185,19 +224,26 @@ async def broadcast_scores_logic(
             submitter_validator_uid=self_validator_info.uid,
             cycle=current_cycle,
             submitter_vkey_cbor_hex=submitter_vkey_cbor_hex,
-            signature=signature_hex
+            signature=signature_hex,
         )
-        payload_dict = payload.model_dump(mode='json') # payload là Pydantic nên dùng model_dump
+        payload_dict = payload.model_dump(
+            mode="json"
+        )  # payload là Pydantic nên dùng model_dump
     except Exception as pydantic_e:
-        logger.exception(f"Failed to create or serialize ScoreSubmissionPayload: {pydantic_e}")
+        logger.exception(
+            f"Failed to create or serialize ScoreSubmissionPayload: {pydantic_e}"
+        )
         return
-
 
     # -----------------------
 
     # 3. Tạo Payload (thêm signature_hex)
-    if 'ScoreSubmissionPayload' not in globals() or not callable(ScoreSubmissionPayload):
-        logger.error("ScoreSubmissionPayload model is not available or not callable. Cannot broadcast.")
+    if "ScoreSubmissionPayload" not in globals() or not callable(
+        ScoreSubmissionPayload
+    ):
+        logger.error(
+            "ScoreSubmissionPayload model is not available or not callable. Cannot broadcast."
+        )
         return
 
     try:
@@ -206,18 +252,20 @@ async def broadcast_scores_logic(
             submitter_validator_uid=self_uid,
             cycle=current_cycle,
             submitter_vkey_cbor_hex=submitter_vkey_cbor_hex,
-            signature=signature_hex # <<<--- Thêm chữ ký vào payload
+            signature=signature_hex,  # <<<--- Thêm chữ ký vào payload
         )
-        payload_dict = payload.model_dump(mode='json')
+        payload_dict = payload.model_dump(mode="json")
     except Exception as pydantic_e:
-        logger.exception(f"Failed to create or serialize ScoreSubmissionPayload: {pydantic_e}")
+        logger.exception(
+            f"Failed to create or serialize ScoreSubmissionPayload: {pydantic_e}"
+        )
         return
 
     # 4. Gửi request đến các validator khác
     # ... (logic gửi request giữ nguyên) ...
     # 4. Gửi request đến các validator khác
     broadcast_tasks = []
-    sent_to_validators: List[ValidatorInfo] = [] # Giữ list để khớp với results
+    sent_to_validators: List[ValidatorInfo] = []  # Giữ list để khớp với results
 
     # Duyệt qua danh sách active_validators được truyền vào
     for validator in active_validators:
@@ -225,13 +273,19 @@ async def broadcast_scores_logic(
         if validator.uid == self_uid:
             continue
         # Bỏ qua nếu không có endpoint hợp lệ
-        if not validator.api_endpoint or not validator.api_endpoint.startswith(("http://", "https://")):
-            logger.warning(f"Validator {validator.uid} has invalid API endpoint: '{validator.api_endpoint}'. Skipping broadcast.")
+        if not validator.api_endpoint or not validator.api_endpoint.startswith(
+            ("http://", "https://")
+        ):
+            logger.warning(
+                f"Validator {validator.uid} has invalid API endpoint: '{validator.api_endpoint}'. Skipping broadcast."
+            )
             continue
         # === THÊM KIỂM TRA STATUS ===
-        if getattr(validator, 'status', STATUS_INACTIVE) != STATUS_ACTIVE:
-             logger.debug(f"Validator {validator.uid} is not active (status={getattr(validator, 'status', 'N/A')}). Skipping broadcast.")
-             continue
+        if getattr(validator, "status", STATUS_INACTIVE) != STATUS_ACTIVE:
+            logger.debug(
+                f"Validator {validator.uid} is not active (status={getattr(validator, 'status', 'N/A')}). Skipping broadcast."
+            )
+            continue
         # ============================
 
         target_url = f"{validator.api_endpoint}/v1/consensus/receive_scores"
@@ -243,8 +297,9 @@ async def broadcast_scores_logic(
             # Thêm validator tương ứng vào list để xử lý kết quả sau này
             sent_to_validators.append(validator)
         except Exception as post_err:
-            logger.error(f"Error initiating post request to V:{validator.uid} at {target_url}: {post_err}")
-
+            logger.error(
+                f"Error initiating post request to V:{validator.uid} at {target_url}: {post_err}"
+            )
 
     if not broadcast_tasks:
         logger.info("No valid target validators found to broadcast scores to.")
@@ -263,13 +318,23 @@ async def broadcast_scores_logic(
         if isinstance(res, httpx.Response):
             if 200 <= res.status_code < 300:
                 success_count += 1
-                logger.debug(f"Successfully sent scores to V:{target_val_uid} (Status: {res.status_code})")
+                logger.debug(
+                    f"Successfully sent scores to V:{target_val_uid} (Status: {res.status_code})"
+                )
             else:
                 response_text = res.text[:200]
-                logger.warning(f"Failed to send scores to V:{target_val_uid}. Status: {res.status_code}, Response: '{response_text}'")
+                logger.warning(
+                    f"Failed to send scores to V:{target_val_uid}. Status: {res.status_code}, Response: '{response_text}'"
+                )
         elif isinstance(res, Exception):
-            logger.error(f"Error broadcasting scores to V:{target_val_uid}: {type(res).__name__} - {res}")
+            logger.error(
+                f"Error broadcasting scores to V:{target_val_uid}: {type(res).__name__} - {res}"
+            )
         else:
-            logger.error(f"Unknown result type ({type(res)}) when broadcasting to V:{target_val_uid}")
+            logger.error(
+                f"Unknown result type ({type(res)}) when broadcasting to V:{target_val_uid}"
+            )
 
-    logger.info(f"Broadcast attempt finished for cycle {current_cycle}. Success: {success_count}/{len(broadcast_tasks)}.")
+    logger.info(
+        f"Broadcast attempt finished for cycle {current_cycle}. Success: {success_count}/{len(broadcast_tasks)}."
+    )

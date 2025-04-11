@@ -14,6 +14,7 @@ from sdk.metagraph.update_metagraph import update_datum
 from sdk.metagraph.metagraph_datum import MinerDatum
 from sdk.config.settings import settings
 
+
 def register_key(
     payment_xsk: ExtendedSigningKey,
     stake_xsk: Optional[ExtendedSigningKey],
@@ -49,12 +50,12 @@ def register_key(
         ValueError: If no UTxO is found at the contract address.
     """
     # Use default values from settings if not provided
-    network = network or settings.CARDANO_NETWORK
-    contract_address = contract_address or settings.TEST_CONTRACT_ADDRESS
+    network = network or settings.CARDANO_NETWORK # type: ignore
+    contract_address = contract_address or settings.TEST_CONTRACT_ADDRESS # type: ignore
 
     # Find the UTxO with the lowest incentive
     lowest_utxo: UTxO = get_utxo_with_lowest_performance(
-        contract_address=contract_address,
+        contract_address=contract_address, # type: ignore
         datumclass=MinerDatum,  # Assumes MinerDatum is the correct datum class
         context=context,
     )

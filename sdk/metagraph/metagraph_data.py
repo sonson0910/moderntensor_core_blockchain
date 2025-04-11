@@ -45,7 +45,7 @@ async def get_all_miner_data(
         if utxo.output.datum:
             try:
                 # Decode bằng phương thức của lớp MinerDatum
-                decoded_datum: MinerDatum = MinerDatum.from_cbor(utxo.output.datum.cbor)
+                decoded_datum: MinerDatum = MinerDatum.from_cbor(utxo.output.datum.cbor) # type: ignore
 
                 # Trích xuất thông tin từ datum đã decode
                 # Sử dụng property để lấy giá trị float đã unscale
@@ -69,7 +69,7 @@ async def get_all_miner_data(
 
             except Exception as e:
                 logger.warning(f"Failed to decode or process MinerDatum for UTxO {utxo.input}: {e}", exc_info=True)
-                logger.debug(f"Datum CBOR: {utxo.output.datum.cbor.hex() if utxo.output.datum.cbor else 'None'}")
+                logger.debug(f"Datum CBOR: {utxo.output.datum.cbor.hex() if utxo.output.datum.cbor else 'None'}") # type: ignore
                 continue # Bỏ qua UTXO lỗi
         elif utxo.output.datum_hash:
              logger.debug(f"Skipping UTxO {utxo.input} with datum hash (inline datum required).")
@@ -112,7 +112,7 @@ async def get_all_validator_data(
     for utxo in utxos:
         if utxo.output.datum:
             try:
-                decoded_datum: ValidatorDatum = ValidatorDatum.from_cbor(utxo.output.datum.cbor)
+                decoded_datum: ValidatorDatum = ValidatorDatum.from_cbor(utxo.output.datum.cbor) # type: ignore
 
                 datum_dict = {
                     "uid": getattr(decoded_datum, 'uid', b'').hex(),
@@ -134,7 +134,7 @@ async def get_all_validator_data(
 
             except Exception as e:
                 logger.warning(f"Failed to decode or process ValidatorDatum for UTxO {utxo.input}: {e}", exc_info=True)
-                logger.debug(f"Datum CBOR: {utxo.output.datum.cbor.hex() if utxo.output.datum.cbor else 'None'}")
+                logger.debug(f"Datum CBOR: {utxo.output.datum.cbor.hex() if utxo.output.datum.cbor else 'None'}") # type: ignore
                 continue
         elif utxo.output.datum_hash:
              logger.debug(f"Skipping UTxO {utxo.input} with datum hash.")

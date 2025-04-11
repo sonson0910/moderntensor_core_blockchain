@@ -6,6 +6,7 @@ from pycardano import Address
 from sdk.config.settings import settings, logger  # Global logger/settings
 from sdk.service.context import get_chain_context
 
+
 @pytest.fixture(scope="session")
 def chain_context_fixture():
     """
@@ -26,7 +27,7 @@ def chain_context_fixture():
 @pytest.mark.integration
 def test_inspect_utxo(chain_context_fixture, hotkey_skey_fixture):
     """
-    Integration test to inspect (log/print) all UTxOs at the address derived from 
+    Integration test to inspect (log/print) all UTxOs at the address derived from
     the provided hotkey_skey_fixture. This is primarily for observation/troubleshooting.
 
     Steps:
@@ -37,7 +38,7 @@ def test_inspect_utxo(chain_context_fixture, hotkey_skey_fixture):
 
     Args:
         chain_context_fixture: A BlockFrostChainContext fixture providing blockchain access.
-        hotkey_skey_fixture: A fixture that returns a tuple (payment_xsk, stake_xsk) 
+        hotkey_skey_fixture: A fixture that returns a tuple (payment_xsk, stake_xsk)
                             for deriving addresses.
 
     Notes:
@@ -57,7 +58,7 @@ def test_inspect_utxo(chain_context_fixture, hotkey_skey_fixture):
     from_address = Address(
         payment_part=pay_xvk.hash(),
         staking_part=stake_xvk.hash() if stake_xvk else None,
-        network=from_network
+        network=from_network,
     )
 
     logger.info(f"Inspecting UTxOs for address: {from_address}")

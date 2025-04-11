@@ -19,11 +19,12 @@ from pycardano import (
     MultiAsset,
     min_lovelace,
     Address,
-    Network
+    Network,
 )
 
 from sdk.config.settings import settings, logger  # Use global settings & logger
 from sdk.service.context import get_chain_context
+
 
 @pytest.fixture(scope="session")
 def chain_context_fixture():
@@ -37,6 +38,7 @@ def chain_context_fixture():
       3) Returns the context for UTxO queries, transaction submissions, etc.
     """
     return get_chain_context(method="blockfrost")
+
 
 @pytest.mark.integration
 def test_mint_mit_token(chain_context_fixture, hotkey_skey_fixture):
@@ -65,7 +67,9 @@ def test_mint_mit_token(chain_context_fixture, hotkey_skey_fixture):
 
     # 0) Get Payment/Stake extended signing keys from fixture
     (payment_skey, staking_skey) = hotkey_skey_fixture
-    logger.info("[test_mint_michielcoin] Start minting 'MichielCOIN' with hotkey as payment key.")
+    logger.info(
+        "[test_mint_michielcoin] Start minting 'MichielCOIN' with hotkey as payment key."
+    )
 
     # 1) Construct main_address, also reuse it as receive_address
     from_network = chain_context_fixture.network
@@ -100,12 +104,14 @@ def test_mint_mit_token(chain_context_fixture, hotkey_skey_fixture):
         key_pair = PaymentKeyPair.generate()
         key_pair.signing_key.save(policy_skey_path)
         key_pair.verification_key.save(policy_vkey_path)
-        logger.info(f"[test_mint_michielcoin] Generated policy keys => {policy_skey_path}, {policy_vkey_path}")
+        logger.info(
+            f"[test_mint_michielcoin] Generated policy keys => {policy_skey_path}, {policy_vkey_path}"
+        )
 
     # 6) Load policy keys, build a simple ScriptAll policy with ScriptPubkey
     policy_signing_key = PaymentSigningKey.load(policy_skey_path)
     policy_verification_key = PaymentVerificationKey.load(policy_vkey_path)
-    pub_key_policy = ScriptPubkey(policy_verification_key.hash())
+    pub_key_policy = ScriptPubkey(policy_verification_key.hash()) # type: ignore
     policy = ScriptAll([pub_key_policy])
 
     policy_id = policy.hash()
@@ -130,7 +136,7 @@ def test_mint_mit_token(chain_context_fixture, hotkey_skey_fixture):
     # 8) Calculate min ADA for a UTxO with this multi-asset => add to the builder
     min_val = min_lovelace(
         chain_context_fixture,
-        output=TransactionOutput(receive_address, Value(0, multiasset))
+        output=TransactionOutput(receive_address, Value(0, multiasset)),
     )
     builder.add_output(TransactionOutput(receive_address, Value(min_val, multiasset)))
 
@@ -139,8 +145,7 @@ def test_mint_mit_token(chain_context_fixture, hotkey_skey_fixture):
 
     # Build and sign => [payment_skey, policy_signing_key]
     signed_tx = builder.build_and_sign(
-        signing_keys=[payment_skey, policy_signing_key],
-        change_address=main_address
+        signing_keys=[payment_skey, policy_signing_key], change_address=main_address # type: ignore
     )
 
     # 9) Submit the transaction

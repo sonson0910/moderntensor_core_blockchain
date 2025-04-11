@@ -1,7 +1,8 @@
 # sdk/formulas/incentive.py
 import math
 from typing import List
-from .utils import sigmoid # Import hàm sigmoid
+from .utils import sigmoid  # Import hàm sigmoid
+
 
 def calculate_miner_incentive(
     trust_score: float,
@@ -11,7 +12,7 @@ def calculate_miner_incentive(
     # Tham số Sigmoid cho Trust Score -> Incentive (Giá trị mẫu, cần xác định)
     incentive_sigmoid_L: float = 1.0,
     incentive_sigmoid_k: float = 10.0,
-    incentive_sigmoid_x0: float = 0.5
+    incentive_sigmoid_x0: float = 0.5,
 ) -> float:
     """
     Tính phần thưởng cho miner dựa trên điểm tin cậy (qua sigmoid), trọng số và điểm hiệu suất.
@@ -36,7 +37,7 @@ def calculate_miner_incentive(
         trust_score,
         L=incentive_sigmoid_L,
         k=incentive_sigmoid_k,
-        y0=incentive_sigmoid_x0
+        y0=incentive_sigmoid_x0,
     )
 
     # Tính tổng hiệu suất có trọng số của miner này
@@ -45,17 +46,18 @@ def calculate_miner_incentive(
 
     # Tính incentive
     incentive = trust_factor * (sum_weighted_performance / total_system_value)
-    return max(0.0, incentive) # Đảm bảo phần thưởng không âm
+    return max(0.0, incentive)  # Đảm bảo phần thưởng không âm
+
 
 def calculate_validator_incentive(
     trust_score: float,
     validator_weight: float,
-    validator_performance: float, # E_v
-    total_validator_value: float, # Sum(W_u * E_u)
+    validator_performance: float,  # E_v
+    total_validator_value: float,  # Sum(W_u * E_u)
     # Tham số Sigmoid cho Trust Score -> Incentive (Giá trị mẫu, cần xác định)
     incentive_sigmoid_L: float = 1.0,
     incentive_sigmoid_k: float = 10.0,
-    incentive_sigmoid_x0: float = 0.5
+    incentive_sigmoid_x0: float = 0.5,
 ) -> float:
     """
     Tính phần thưởng cho validator dựa trên điểm tin cậy (qua sigmoid), trọng số và hiệu suất.
@@ -75,12 +77,12 @@ def calculate_validator_incentive(
     if total_validator_value == 0:
         return 0.0
 
-     # Áp dụng sigmoid cho trust score
+    # Áp dụng sigmoid cho trust score
     trust_factor = sigmoid(
         trust_score,
         L=incentive_sigmoid_L,
         k=incentive_sigmoid_k,
-        y0=incentive_sigmoid_x0
+        y0=incentive_sigmoid_x0,
     )
 
     # Tính đóng góp có trọng số của validator này
@@ -88,4 +90,4 @@ def calculate_validator_incentive(
 
     # Tính incentive
     incentive = trust_factor * (weighted_performance / total_validator_value)
-    return max(0.0, incentive) # Đảm bảo phần thưởng không âm
+    return max(0.0, incentive)  # Đảm bảo phần thưởng không âm

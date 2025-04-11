@@ -15,11 +15,12 @@ from pycardano import (
     VerificationKeyWitness,
     MultiAsset,
     Asset,
-    BlockFrostChainContext
+    BlockFrostChainContext,
 )
 
 from sdk.config.settings import settings, logger
 from sdk.keymanager.decryption_utils import decode_hotkey_skey
+
 
 def send_ada(
     chain_context,
@@ -27,7 +28,7 @@ def send_ada(
     stake_xsk: Optional[ExtendedSigningKey] = None,
     to_address_str: str = "",
     lovelace_amount: int = 1_000_000,
-    network: Network = None,
+    network: Network = None, # type: ignore
     change_address_str: Optional[str] = None,
 ) -> str:
     """
@@ -57,24 +58,31 @@ def send_ada(
     pay_xvk = payment_xsk.to_verification_key()
     if stake_xsk:
         stk_xvk = stake_xsk.to_verification_key()
-        from_address = Address(payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network)
+        from_address = Address(
+            payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network
+        )
     else:
         from_address = Address(payment_part=pay_xvk.hash(), network=network)
 
     # Determine destination (default to from_address if blank)
-    to_address = Address.from_primitive(to_address_str) if to_address_str else from_address
+    to_address = (
+        Address.from_primitive(to_address_str) if to_address_str else from_address
+    )
     # Determine change address
-    change_address = Address.from_primitive(change_address_str) if change_address_str else from_address
+    change_address = (
+        Address.from_primitive(change_address_str)
+        if change_address_str
+        else from_address
+    )
 
     # Build transaction
     builder = TransactionBuilder(chain_context)
     builder.add_input_address(from_address)
-    builder.add_output(TransactionOutput(to_address, lovelace_amount))
+    builder.add_output(TransactionOutput(to_address, lovelace_amount)) # type: ignore
 
     # Sign transaction (with payment_xsk only)
     signed_tx = builder.build_and_sign(
-        signing_keys=[payment_xsk],
-        change_address=change_address
+        signing_keys=[payment_xsk], change_address=change_address
     )
 
     # Submit transaction
@@ -94,12 +102,12 @@ def send_token(
     asset_name: str,
     token_amount: int,
     fee: int = 200_000,
-    network: Network = None
+    network: Network = None, # type: ignore
 ) -> str:
     """
     Sends a specified native token (policy_id + asset_name) plus a small amount of ADA (e.g. 2 ADA)
     to `to_address_str`, with leftover tokens and ADA returned to from_address as change.
-    
+
     Steps:
       1) Decode the hotkey to retrieve (payment_xsk, stake_xsk).
       2) Fetch all UTxOs from from_address to sum coin and multi-asset tokens.
@@ -129,18 +137,20 @@ def send_token(
     network = network or settings.CARDANO_NETWORK
 
     # 1) Decode the hotkey
-    payment_xsk, stake_xsk = decode_hotkey_skey(base_dir, coldkey_name, hotkey_name, password)
+    payment_xsk, stake_xsk = decode_hotkey_skey(
+        base_dir, coldkey_name, hotkey_name, password
+    )
     if not payment_xsk:
         raise ValueError(f"Failed to decode Payment XSK for hotkey '{hotkey_name}'")
 
-    pay_xvk = payment_xsk.to_verification_key()
-    stake_xvk = stake_xsk.to_verification_key() if stake_xsk else None
+    pay_xvk = payment_xsk.to_verification_key() # type: ignore
+    stake_xvk = stake_xsk.to_verification_key() if stake_xsk else None # type: ignore
 
     # Construct from_address
     from_address = Address(
         payment_part=pay_xvk.hash(),
         staking_part=stake_xvk.hash() if stake_xvk else None,
-        network=network
+        network=network,
     )
     logger.info(f"[send_token] from_address={from_address}")
 
@@ -173,6 +183,7 @@ def send_token(
     aname_bytes = asset_name.encode("utf-8")
 
     from pycardano import ScriptHash, AssetName
+
     policy_obj = ScriptHash.from_primitive(pid_bytes)
     asset_obj = AssetName(aname_bytes)
 
@@ -222,13 +233,11 @@ def send_token(
 
     # 7) Build transaction body
     tx_body = TransactionBody(
-        inputs=tx_inputs,
-        outputs=[out_token, out_change],
-        fee=fee
+        inputs=tx_inputs, outputs=[out_token, out_change], fee=fee
     )
 
     # 8) Sign
-    signature = payment_xsk.sign(tx_body.hash())
+    signature = payment_xsk.sign(tx_body.hash()) # type: ignore
     vk_witness = VerificationKeyWitness(pay_xvk, signature)
     witness_set = TransactionWitnessSet(vkey_witnesses=[vk_witness])
 

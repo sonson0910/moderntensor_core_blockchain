@@ -5,19 +5,20 @@ from pycardano import (
     Address,
     Network,
     PlutusData,
-    Redeemer, # <<<--- Thêm Redeemer
-    TransactionId
+    Redeemer,  # <<<--- Thêm Redeemer
+    TransactionId,
 )
-from typing import List # <<<--- Thêm List
-from pycardano import UTxO # <<<--- Thêm UTxO
+from typing import List  # <<<--- Thêm List
+from pycardano import UTxO  # <<<--- Thêm UTxO
 
 # Import các thành phần cần thiết từ SDK
-from sdk.metagraph.remove_fake_utxo import remove_fake_utxos # Hàm cần test
+from sdk.metagraph.remove_fake_utxo import remove_fake_utxos  # Hàm cần test
 from sdk.service.context import get_chain_context
 from sdk.smartcontract.validator import read_validator
-from sdk.config.settings import settings, logger # <<<--- Import settings
+from sdk.config.settings import settings, logger  # <<<--- Import settings
 
 # --- Xóa Mock HelloWorldDatum không cần thiết ---
+
 
 # Fixture cho blockchain context
 @pytest.fixture(scope="session")
@@ -26,19 +27,23 @@ def chain_context_fixture():
     try:
         network = settings.CARDANO_NETWORK
     except AttributeError:
-        network = Network.TESTNET # Mặc định nếu settings load lỗi
-        logger.warning(f"Could not read CARDANO_NETWORK from settings, defaulting to {network}")
+        network = Network.TESTNET  # Mặc định nếu settings load lỗi
+        logger.warning(
+            f"Could not read CARDANO_NETWORK from settings, defaulting to {network}"
+        )
 
     logger.info(f"Using network: {network} for test session context.")
     # Đảm bảo project_id được truyền vào
     if not settings.BLOCKFROST_PROJECT_ID:
-         pytest.fail("BLOCKFROST_PROJECT_ID is not set in settings.")
+        pytest.fail("BLOCKFROST_PROJECT_ID is not set in settings.")
     return get_chain_context(method="blockfrost")
 
 
 # Fixture lấy TẤT CẢ UTxOs tại địa chỉ contract
 @pytest.fixture
-def utxos_at_contract_address(chain_context_fixture) -> List[UTxO]: # <<<--- Đổi tên và thêm kiểu trả về
+def utxos_at_contract_address(
+    chain_context_fixture,
+) -> List[UTxO]:  # <<<--- Đổi tên và thêm kiểu trả về
     """
     Lấy *tất cả* UTxOs hiện có tại địa chỉ Plutus contract.
     Lưu ý: Hàm remove_fake_utxos sẽ cố gắng tiêu thụ tất cả các UTxO này.
@@ -46,7 +51,7 @@ def utxos_at_contract_address(chain_context_fixture) -> List[UTxO]: # <<<--- Đ�
     logger.info("Attempting to find ALL UTxOs at the contract address...")
     validator = read_validator()
     if not validator or "script_hash" not in validator:
-         pytest.fail("Failed to load validator script hash.")
+        pytest.fail("Failed to load validator script hash.")
 
     script_hash = validator["script_hash"]
     network = Network.TESTNET
@@ -76,13 +81,15 @@ def script():
     """Provides the Plutus contract script bytes."""
     validator = read_validator()
     if not validator or "script_bytes" not in validator:
-         pytest.fail("Failed to load validator script bytes.")
+        pytest.fail("Failed to load validator script bytes.")
     return validator["script_bytes"]
 
 
 # Hàm test chính
 @pytest.mark.integration
-def test_remove_fake_utxos(chain_context_fixture, utxos_at_contract_address, script, hotkey_skey_fixture):
+def test_remove_fake_utxos(
+    chain_context_fixture, utxos_at_contract_address, script, hotkey_skey_fixture
+):
     """
     Tests the remove_fake_utxos function by attempting to remove all UTxOs found at the contract address.
 
@@ -100,7 +107,9 @@ def test_remove_fake_utxos(chain_context_fixture, utxos_at_contract_address, scr
     # Unpack signing keys
     payment_xsk, stake_xsk = hotkey_skey_fixture
     if not payment_xsk:
-         pytest.fail("Payment signing key (payment_xsk) not found in hotkey_skey_fixture.")
+        pytest.fail(
+            "Payment signing key (payment_xsk) not found in hotkey_skey_fixture."
+        )
 
     # Define network from settings
     network = Network.TESTNET
@@ -110,14 +119,16 @@ def test_remove_fake_utxos(chain_context_fixture, utxos_at_contract_address, scr
     # This test assumes the script allows spending these UTxOs with Redeemer(0).
     redeemer = Redeemer(0)
     logger.info(f"Using Redeemer: {redeemer} to attempt removal.")
-    logger.warning(f"Attempting to remove {len(utxos_at_contract_address)} UTxOs found at the contract address.")
+    logger.warning(
+        f"Attempting to remove {len(utxos_at_contract_address)} UTxOs found at the contract address."
+    )
 
     # Execute the function to remove UTxOs
     try:
         tx_id_obj = remove_fake_utxos(
             payment_xsk=payment_xsk,
-            stake_xsk=stake_xsk, # Can be None
-            fake_utxos=utxos_at_contract_address, # Pass the list of found UTxOs
+            stake_xsk=stake_xsk,  # Can be None
+            fake_utxos=utxos_at_contract_address,  # Pass the list of found UTxOs
             script=script,
             context=chain_context_fixture,
             network=network,
@@ -134,6 +145,7 @@ def test_remove_fake_utxos(chain_context_fixture, utxos_at_contract_address, scr
     # assert isinstance(tx_id_obj, TransactionId), f"Expected TransactionId object, got {type(tx_id_obj)}"
 
     tx_id_hex = str(tx_id_obj)
-    logger.info(f"Removal transaction submitted successfully. Transaction ID: {tx_id_hex}")
+    logger.info(
+        f"Removal transaction submitted successfully. Transaction ID: {tx_id_hex}"
+    )
     assert len(tx_id_hex) == 64, "Transaction ID hex string must be 64 characters long"
-

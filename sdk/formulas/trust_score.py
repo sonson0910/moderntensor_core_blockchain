@@ -1,18 +1,19 @@
 # sdk/formulas/trust_score.py
 import math
-from .utils import sigmoid, calculate_alpha_effective # Import helpers
+from .utils import sigmoid, calculate_alpha_effective  # Import helpers
+
 
 def update_trust_score(
     trust_score_old: float,
-    time_since_last_eval: int, # Số chu kỳ/đơn vị thời gian
-    score_new: float, # Điểm hiệu suất mới (P_adj hoặc E_val)
+    time_since_last_eval: int,  # Số chu kỳ/đơn vị thời gian
+    score_new: float,  # Điểm hiệu suất mới (P_adj hoặc E_val)
     # Tham số (Giá trị mẫu, cần xác định/DAO quản trị)
     delta_trust: float = 0.1,
     alpha_base: float = 0.1,
     k_alpha: float = 1.0,
     update_sigmoid_L: float = 1.0,
     update_sigmoid_k: float = 5.0,
-    update_sigmoid_x0: float = 0.5
+    update_sigmoid_x0: float = 0.5,
 ) -> float:
     """
     Cập nhật điểm tin cậy với suy giảm, learning rate thay đổi và sigmoid cho điểm mới.
@@ -39,10 +40,7 @@ def update_trust_score(
 
     # 3. Ánh xạ điểm mới qua sigmoid
     mapped_score_new = sigmoid(
-        score_new,
-        L=update_sigmoid_L,
-        k=update_sigmoid_k,
-        y0=update_sigmoid_x0
+        score_new, L=update_sigmoid_L, k=update_sigmoid_k, y0=update_sigmoid_x0
     )
     # Nếu score_new = 0 (không được đánh giá), mapped_score_new cũng sẽ gần 0 (tùy tham số sigmoid)
     # và phần cập nhật gần như bằng 0. Đặc biệt nếu score_new = 0, không nên cộng thêm gì.
@@ -51,15 +49,15 @@ def update_trust_score(
     # 4. Tính điểm mới
     updated_score = decayed_score + update_term
 
-    return max(0.0, min(1.0, updated_score)) # Giới hạn trong khoảng [0, 1]
+    return max(0.0, min(1.0, updated_score))  # Giới hạn trong khoảng [0, 1]
 
 
 def calculate_selection_probability(
     trust_score: float,
-    time_since_last_selection: int, # Số chu kỳ/đơn vị thời gian
+    time_since_last_selection: int,  # Số chu kỳ/đơn vị thời gian
     # Tham số (Giá trị mẫu, cần xác định/DAO quản trị)
     beta: float = 0.2,
-    max_time_bonus_effect: int = 10 # Giới hạn số chu kỳ bonus có tác dụng
+    max_time_bonus_effect: int = 10,  # Giới hạn số chu kỳ bonus có tác dụng
 ) -> float:
     """
     Tính xác suất chọn miner/validator dựa trên điểm tin cậy và thời gian không được chọn (có giới hạn).

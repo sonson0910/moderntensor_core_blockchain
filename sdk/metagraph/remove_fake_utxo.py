@@ -16,6 +16,7 @@ from pycardano import (
 
 from sdk.config.settings import settings  # Configuration for Cardano network
 
+
 def remove_fake_utxos(
     payment_xsk: ExtendedSigningKey,
     stake_xsk: Optional[ExtendedSigningKey],
@@ -97,7 +98,7 @@ def remove_fake_utxos(
     builder.add_output(
         TransactionOutput(
             address=owner_address,
-            amount=total_amount,
+            amount=total_amount, # type: ignore
         )
     )
 

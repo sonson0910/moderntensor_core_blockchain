@@ -59,7 +59,7 @@ def update_datum(
         Exception: If the transaction fails to build or submit due to network issues or invalid data.
     """
     # Default to configured network if not provided
-    network = network or settings.CARDANO_NETWORK
+    network = network or settings.CARDANO_NETWORK # type: ignore
 
     # Derive payment verification key from signing key
     pay_xvk = PaymentExtendedVerificationKey.from_signing_key(payment_xsk)
@@ -70,12 +70,12 @@ def update_datum(
         owner_address = Address(
             payment_part=pay_xvk.hash(),
             staking_part=stk_xvk.hash(),
-            network=network,
+            network=network, # type: ignore
         )
     else:
         owner_address = Address(
             payment_part=pay_xvk.hash(),
-            network=network,
+            network=network, # type: ignore
         )
 
     # Define the owner as the hash of the payment verification key
@@ -84,7 +84,7 @@ def update_datum(
     # Create the contract address using the provided script hash
     contract_address = Address(
         payment_part=script_hash,
-        network=network,
+        network=network, # type: ignore
     )
 
     # Use provided redeemer or default to a simple HelloWorldRedeemer
@@ -110,7 +110,7 @@ def update_datum(
     builder.add_output(
         TransactionOutput(
             address=contract_address,
-            amount=utxo.output.amount.coin,  # Preserve the original amount
+            amount=utxo.output.amount.coin,  # Preserve the original amount # type: ignore
             datum=new_datum,                # Attach the new datum
         )
     )

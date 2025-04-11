@@ -13,7 +13,7 @@ from sdk.service.tx_service import send_ada
 @pytest.fixture(scope="session")
 def chain_context_fixture():
     """
-    Creates a chain context, specifically a BlockFrostChainContext in TESTNET mode, 
+    Creates a chain context, specifically a BlockFrostChainContext in TESTNET mode,
     for use throughout the test session.
 
     Steps:
@@ -33,18 +33,20 @@ def chain_context_fixture():
 @pytest.mark.integration
 def test_get_chain_context_blockfrost(chain_context_fixture):
     """
-    Integration test to verify that chain_context_fixture is indeed 
+    Integration test to verify that chain_context_fixture is indeed
     a BlockFrostChainContext instance when using the "blockfrost" method.
     """
     from pycardano import BlockFrostChainContext
-    assert isinstance(chain_context_fixture, BlockFrostChainContext), \
-        "chain_context_fixture should be an instance of BlockFrostChainContext."
+
+    assert isinstance(
+        chain_context_fixture, BlockFrostChainContext
+    ), "chain_context_fixture should be an instance of BlockFrostChainContext."
 
 
 @pytest.mark.integration
 def test_get_address_info(chain_context_fixture, hotkey_skey_fixture):
     """
-    Test retrieval of address information (UTxOs, lovelace, token balances) 
+    Test retrieval of address information (UTxOs, lovelace, token balances)
     using get_address_info.
 
     Steps:
@@ -58,7 +60,11 @@ def test_get_address_info(chain_context_fixture, hotkey_skey_fixture):
 
     pay_xvk = payment_xsk.to_verification_key()
     stake_xvk = stake_xsk.to_verification_key()
-    from_address = Address(payment_part=pay_xvk.hash(), staking_part=stake_xvk.hash(), network=Network.TESTNET)
+    from_address = Address(
+        payment_part=pay_xvk.hash(),
+        staking_part=stake_xvk.hash(),
+        network=Network.TESTNET,
+    )
 
     info = get_address_info(str(from_address), chain_context_fixture)
     assert "lovelace" in info, "Response dict should contain 'lovelace' key."
@@ -66,7 +72,9 @@ def test_get_address_info(chain_context_fixture, hotkey_skey_fixture):
     logger.info(f"Address info: {info}")
 
     # Check address match and non-negative UTxO count
-    assert info["address"] == str(from_address), "Address in info should match from_address."
+    assert info["address"] == str(
+        from_address
+    ), "Address in info should match from_address."
     assert info["utxo_count"] >= 0, "UTXO count should be a non-negative integer."
 
 
@@ -89,7 +97,7 @@ def test_send_ada(chain_context_fixture, hotkey_skey_fixture):
     # Load the receiver address from env or default
     to_address_str = os.getenv(
         "TEST_RECEIVER_ADDRESS",
-        "addr_test1qpkxr3kpzex93m646qr7w82d56md2kchtsv9jy39dykn4cmcxuuneyeqhdc4wy7de9mk54fndmckahxwqtwy3qg8pums5vlxhz"
+        "addr_test1qpkxr3kpzex93m646qr7w82d56md2kchtsv9jy39dykn4cmcxuuneyeqhdc4wy7de9mk54fndmckahxwqtwy3qg8pums5vlxhz",
     )
 
     tx_id = send_ada(

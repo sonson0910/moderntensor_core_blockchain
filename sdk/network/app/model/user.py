@@ -8,6 +8,3 @@ class User(BaseModel):
     reg_key: str
     role: int
     reg_name: str
-
-
-

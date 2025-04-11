@@ -73,6 +73,7 @@ def find_suitable_ada_input(
     )
     return None
 
+
 def create_utxo_explicit_input(
     payment_xsk: ExtendedSigningKey,
     stake_xsk: Optional[ExtendedSigningKey],  # Cho phép None
@@ -101,18 +102,18 @@ def create_utxo_explicit_input(
         ValueError: Nếu không tìm thấy UTXO đầu vào phù hợp.
         Exception: Nếu có lỗi xảy ra trong quá trình build hoặc submit.
     """
-    network = network or settings.CARDANO_NETWORK
+    network = network or settings.CARDANO_NETWORK # type: ignore
 
     # --- Xác định địa chỉ ví funding và địa chỉ contract ---
     pay_xvk = payment_xsk.to_verification_key()
     owner_address: Address
     if stake_xsk:
         stk_xvk = stake_xsk.to_verification_key()
-        owner_address = Address(pay_xvk.hash(), stk_xvk.hash(), network=network)
+        owner_address = Address(pay_xvk.hash(), stk_xvk.hash(), network=network) # type: ignore
     else:
-        owner_address = Address(pay_xvk.hash(), network=network)
+        owner_address = Address(pay_xvk.hash(), network=network) # type: ignore
 
-    contract_address = Address(payment_part=script_hash, network=network)
+    contract_address = Address(payment_part=script_hash, network=network) # type: ignore
     logger_cu.info(
         f"Attempting explicit UTXO creation for contract: {contract_address}"
     )
@@ -147,7 +148,7 @@ def create_utxo_explicit_input(
         builder.add_output(
             TransactionOutput(
                 address=contract_address,
-                amount=amount,  # Lượng ADA lock vào contract
+                amount=amount,  # Lượng ADA lock vào contract # type: ignore
                 datum=datum,
             )
         )
@@ -183,7 +184,7 @@ def create_utxo(
     script_hash: ScriptHash,
     datum: PlutusData,
     context: BlockFrostChainContext,
-    network: Network = None,
+    network: Network = None, # type: ignore
 ) -> TransactionId:
     """
     Creates a UTxO with the specified amount of lovelace and datum locked into a Plutus smart contract.
@@ -247,7 +248,7 @@ def create_utxo(
     builder.add_output(
         TransactionOutput(
             address=contract_address,
-            amount=amount,
+            amount=amount, # type: ignore
             datum=datum,
         )
     )

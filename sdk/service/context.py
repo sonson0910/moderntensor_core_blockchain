@@ -8,16 +8,16 @@ def get_chain_context(method="blockfrost"):
     """
     Returns a chain context object for interacting with the Cardano blockchain.
 
-    Currently, only the "blockfrost" method is supported, which uses the 
-    BlockFrostChainContext class from pycardano. The function is designed 
+    Currently, only the "blockfrost" method is supported, which uses the
+    BlockFrostChainContext class from pycardano. The function is designed
     to be extensible, so additional methods could be implemented in the future.
 
     Args:
         method (str): The name of the method to use for chain context creation.
                       Default is "blockfrost".
-        project_id (str): The Blockfrost project ID (API key). 
+        project_id (str): The Blockfrost project ID (API key).
                           Required if method is "blockfrost".
-        network (Network): The Cardano network to connect to 
+        network (Network): The Cardano network to connect to
                            (MAINNET or TESTNET). Default is TESTNET.
 
     Raises:
@@ -38,7 +38,11 @@ def get_chain_context(method="blockfrost"):
         else:
             base_url = "https://cardano-preprod.blockfrost.io/api/"
 
-        logger.info(f"Initializing BlockFrostChainContext with network={network}, project_id={project_id}")
-        return BlockFrostChainContext(project_id=project_id, network=Network.TESTNET, base_url=base_url)
+        logger.info(
+            f"Initializing BlockFrostChainContext with network={network}, project_id={project_id}"
+        )
+        return BlockFrostChainContext(
+            project_id=project_id, network=Network.TESTNET, base_url=base_url
+        )
     else:
         raise ValueError(f"Unsupported chain context method: {method}")

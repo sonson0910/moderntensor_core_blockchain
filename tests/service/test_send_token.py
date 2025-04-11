@@ -9,6 +9,7 @@ from sdk.config.settings import settings, logger  # Global logger & settings
 from sdk.service.context import get_chain_context
 from sdk.service.tx_service import send_token
 
+
 @pytest.fixture(scope="session")
 def chain_context_fixture():
     """
@@ -16,18 +17,20 @@ def chain_context_fixture():
 
     Steps:
       1) Reads BLOCKFROST_PROJECT_ID from environment or from settings if applicable.
-      2) Calls get_chain_context(...) with method="blockfrost", passing the project_id, 
+      2) Calls get_chain_context(...) with method="blockfrost", passing the project_id,
          and sets network=TESTNET.
       3) Returns the chain context fixture for building/submitting transactions.
     """
-    project_id = os.getenv("BLOCKFROST_PROJECT_ID", "preprod06dzhzKlynuTInzvxHDH5cXbdHo524DE")
+    project_id = os.getenv(
+        "BLOCKFROST_PROJECT_ID", "preprod06dzhzKlynuTInzvxHDH5cXbdHo524DE"
+    )
     return get_chain_context(method="blockfrost")
 
 
 @pytest.mark.integration
 def test_send_michielcoin(chain_context_fixture, hotkey_skey_fixture):
     """
-    Integration test to send 50 "MichielCOIN" (MIT) tokens using send_token(...) 
+    Integration test to send 50 "MichielCOIN" (MIT) tokens using send_token(...)
     from a hotkey-based address to a receiver address.
 
     Prerequisites:
@@ -43,7 +46,7 @@ def test_send_michielcoin(chain_context_fixture, hotkey_skey_fixture):
       5) Verify the returned tx_id is non-empty, indicating a successful transaction.
 
     Notes:
-      - The function requires the hotkey address to hold at least 50 "MichielCOIN" 
+      - The function requires the hotkey address to hold at least 50 "MichielCOIN"
         plus enough ADA for fees (set to 200k lovelace here).
       - If there's insufficient token/ADA, the test may fail or raise an exception.
     """
@@ -68,7 +71,7 @@ def test_send_michielcoin(chain_context_fixture, hotkey_skey_fixture):
 
     # Token info
     token_amount = 50
-    asset_name   = "MIT"
+    asset_name = "MIT"
 
     # 4) Send tokens
     tx_id = send_token(
@@ -82,7 +85,7 @@ def test_send_michielcoin(chain_context_fixture, hotkey_skey_fixture):
         asset_name=asset_name,
         token_amount=token_amount,
         fee=200_000,  # 0.2 ADA fee
-        network=Network.TESTNET
+        network=Network.TESTNET,
     )
 
     # 5) Validate tx_id

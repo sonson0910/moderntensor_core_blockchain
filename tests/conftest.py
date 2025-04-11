@@ -8,10 +8,11 @@ from cryptography.fernet import Fernet
 from pycardano import ExtendedSigningKey
 from sdk.keymanager.encryption_utils import get_or_create_salt, generate_encryption_key
 
+
 def decode_hotkey_skeys(base_dir, coldkey_name, hotkey_name, password):
     """
-    Reads the 'hotkeys.json' file for a given coldkey, retrieves the 
-    encrypted data for a specified hotkey, and decrypts it using a 
+    Reads the 'hotkeys.json' file for a given coldkey, retrieves the
+    encrypted data for a specified hotkey, and decrypts it using a
     Fernet cipher derived from the user's password and salt.
 
     Steps:
@@ -30,7 +31,7 @@ def decode_hotkey_skeys(base_dir, coldkey_name, hotkey_name, password):
         password (str): The password required to decrypt the hotkey data.
 
     Returns:
-        (ExtendedSigningKey, ExtendedSigningKey): A tuple containing the 
+        (ExtendedSigningKey, ExtendedSigningKey): A tuple containing the
         payment extended signing key and the stake extended signing key.
     """
     coldkey_dir = os.path.join(base_dir, coldkey_name)
@@ -59,13 +60,14 @@ def decode_hotkey_skeys(base_dir, coldkey_name, hotkey_name, password):
 
     return payment_xsk, stake_xsk
 
+
 @pytest.fixture(scope="session")
 def hotkey_config():
     """
     Loads hotkey configuration from environment variables or falls back to defaults.
 
     This fixture uses a session scope, meaning it is executed once per test session.
-    The returned dictionary can be used to configure tests that require a specific hotkey 
+    The returned dictionary can be used to configure tests that require a specific hotkey
     for integration or higher-level functional tests.
 
     Environment Variables:
@@ -91,13 +93,14 @@ def hotkey_config():
         "base_dir": base_dir,
         "coldkey_name": coldkey_name,
         "hotkey_name": hotkey_name,
-        "password": password
+        "password": password,
     }
+
 
 @pytest.fixture(scope="session")
 def hotkey_skey_fixture(hotkey_config):
     """
-    A session-scoped fixture that decodes and provides the payment and stake 
+    A session-scoped fixture that decodes and provides the payment and stake
     ExtendedSigningKeys using the configuration from hotkey_config.
 
     Steps:
@@ -106,13 +109,13 @@ def hotkey_skey_fixture(hotkey_config):
         3) Return the signing keys as a tuple (payment_xsk, stake_xsk).
 
     Returns:
-        (ExtendedSigningKey, ExtendedSigningKey): A tuple containing 
+        (ExtendedSigningKey, ExtendedSigningKey): A tuple containing
         the payment and stake extended signing keys for the specified hotkey.
     """
     pmt, stk = decode_hotkey_skeys(
         hotkey_config["base_dir"],
         hotkey_config["coldkey_name"],
         hotkey_config["hotkey_name"],
-        hotkey_config["password"]
+        hotkey_config["password"],
     )
     return (pmt, stk)

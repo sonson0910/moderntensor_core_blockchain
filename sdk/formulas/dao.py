@@ -1,13 +1,14 @@
 # sdk/formulas/dao.py
 import math
 
+
 def calculate_voting_power(
     stake_p: float,
-    time_staked_p: float, # Thời gian đã stake (cùng đơn vị với total_time)
-    total_time: float,    # Khoảng thời gian tham chiếu
-    lockup_multiplier: float = 1.0, # Hệ số nhân nếu khóa stake
+    time_staked_p: float,  # Thời gian đã stake (cùng đơn vị với total_time)
+    total_time: float,  # Khoảng thời gian tham chiếu
+    lockup_multiplier: float = 1.0,  # Hệ số nhân nếu khóa stake
     # Tham số (Giá trị mẫu, cần xác định/DAO quản trị)
-    time_bonus_factor_kg: float = 1.0
+    time_bonus_factor_kg: float = 1.0,
 ) -> float:
     """
     Tính quyền biểu quyết trong DAO dựa trên stake, thời gian stake (sqrt) và hệ số khóa stake.
@@ -33,7 +34,7 @@ def calculate_voting_power(
         # Áp dụng sqrt để lợi ích giảm dần
         time_bonus = time_bonus_factor_kg * math.sqrt(time_ratio)
     else:
-        time_bonus = 0 # Tránh lỗi chia cho 0
+        time_bonus = 0  # Tránh lỗi chia cho 0
 
     # Tính voting power
     voting_power = stake_p * (1 + time_bonus) * lockup_multiplier

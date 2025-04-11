@@ -35,6 +35,7 @@ class FindDateRange(BaseModel):
 class Blank(BaseModel):
     pass
 
+
 class APIResponseModel(BaseModel):
     status_code: int
     is_success: bool

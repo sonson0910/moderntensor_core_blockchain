@@ -12,4 +12,3 @@ class Container(containers.DeclarativeContainer):
     )
     user_repository = providers.Factory(UserRepository)
     user_service = providers.Factory(UserService, user_repository=user_repository)
-

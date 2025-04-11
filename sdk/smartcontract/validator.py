@@ -4,8 +4,11 @@ from pycardano import (
 )
 import json
 
+
 def read_validator() -> dict:
-    with open("/Users/sonson/Documents/code/moderntensor/sdk/smartcontract/plutus.json", "r") as f:
+    with open(
+        "/Users/sonson/Documents/code/moderntensor/sdk/smartcontract/plutus.json", "r"
+    ) as f:
         validator = json.load(f)
     script_bytes = PlutusV3Script(
         bytes.fromhex(validator["validators"][0]["compiledCode"])

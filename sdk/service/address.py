@@ -10,17 +10,22 @@ from pycardano import (
     TransactionId,
     VerificationKeyHash,
     ExtendedSigningKey,
-    Network
+    Network,
 )
 
-def get_addr(payment_xsk: ExtendedSigningKey, stake_xsk: ExtendedSigningKey, network: Network):
-    
+
+def get_addr(
+    payment_xsk: ExtendedSigningKey, stake_xsk: ExtendedSigningKey, network: Network
+):
+
     network = network or settings.CARDANO_NETWORK
 
     pay_xvk = payment_xsk.to_verification_key()
     if stake_xsk:
         stk_xvk = stake_xsk.to_verification_key()
-        owner_address = Address(payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network)
+        owner_address = Address(
+            payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network
+        )
     else:
         owner_address = Address(payment_part=pay_xvk.hash(), network=network)
 

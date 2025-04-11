@@ -1,9 +1,10 @@
 # sdk/moderntensor_formulas/resource_allocation.py
 
+
 def calculate_subnet_resource(
-    subnet_contribution: float, # Tổng W*P của subnet
-    total_contribution: float, # Tổng W*P toàn hệ thống
-    total_resources: float
+    subnet_contribution: float,  # Tổng W*P của subnet
+    total_contribution: float,  # Tổng W*P toàn hệ thống
+    total_resources: float,
 ) -> float:
     """
     Tính tài nguyên phân bổ cho subnet dựa trên đóng góp tương đối.

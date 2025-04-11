@@ -25,46 +25,29 @@ class BaseService:
 
     def get_list(self, schema: Any) -> Any:
         return APIResponseModel(
-            status_code = 209,
-            data=schema,
-            is_success = True,
-            msg_err = "Ok"
+            status_code=209, data=schema, is_success=True, msg_err="Ok"
         )
         return self._repository.read_by_options(schema)
 
     def get_by_id(self, id: int) -> Any:
-        return APIResponseModel(
-            status_code = 200,
-            data=id,
-            is_success = True,
-            msg_err = "Ok"
-        )
+        return APIResponseModel(status_code=200, data=id, is_success=True, msg_err="Ok")
         return self._repository.read_by_id(id)
 
     def add(self, schema: Any) -> Any:
         return APIResponseModel(
-            status_code = 200,
-            data=schema,
-            is_success = True,
-            msg_err = "add Ok"
+            status_code=200, data=schema, is_success=True, msg_err="add Ok"
         )
         return self._repository.create(schema)
 
     def patch(self, id: int, schema: Any) -> Any:
         return APIResponseModel(
-            status_code = 200,
-            data=schema,
-            is_success = True,
-            msg_err = "update Ok"
+            status_code=200, data=schema, is_success=True, msg_err="update Ok"
         )
         return self._repository.update(id, schema)
 
     def patch_attr(self, id: int, attr: str, value: Any) -> Any:
         return APIResponseModel(
-            status_code = 200,
-            data=attr,
-            is_success = True,
-            msg_err = "Update attr ok"
+            status_code=200, data=attr, is_success=True, msg_err="Update attr ok"
         )
         return self._repository.update_attr(id, attr, value)
 

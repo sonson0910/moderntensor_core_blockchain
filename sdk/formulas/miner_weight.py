@@ -2,11 +2,12 @@
 import math
 from typing import List, Sequence
 
+
 def calculate_miner_weight(
     performance_history: Sequence[float],
     current_time_step: int,
     # Tham số (Giá trị mẫu, cần xác định/DAO quản trị)
-    decay_constant_W: float = 0.5
+    decay_constant_W: float = 0.5,
 ) -> float:
     """
     Tính trọng số của Miner (W_x) dựa trên lịch sử hiệu suất với suy giảm theo hàm mũ.
@@ -44,5 +45,4 @@ def calculate_miner_weight(
         decay_factor = math.exp(-decay_constant_W * time_diff)
         weight += performance_score * decay_factor
 
-    return max(0.0, weight) # Đảm bảo trọng số không âm
-
+    return max(0.0, weight)  # Đảm bảo trọng số không âm

@@ -1,4 +1,4 @@
-from typing import Any,  Type, TypeVar
+from typing import Any, Type, TypeVar
 
 from sdk.network.app.core.config import configs
 from sdk.network.app.core.exceptions import DuplicatedError, NotFoundError
@@ -14,20 +14,20 @@ class BaseRepository:
     def read_by_id(self, id: int, eager: bool = False):
         return None
 
-    def create(self, schema: T):
+    def create(self, schema: T): # type: ignore
         return None
-    
-    def update(self, id: int, schema: T):
+
+    def update(self, id: int, schema: T): # type: ignore
         return None
 
     def update_attr(self, id: int, field: str, value: Any):
         return None
 
-    def whole_update(self, id: int, schema: T):
-         return None
+    def whole_update(self, id: int, schema: T): # type: ignore
+        return None
 
     def delete_by_id(self, id: int):
-         return None
+        return None
 
     # def close_scoped_session(self):
     #     with self.session_factory() as session:

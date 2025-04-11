@@ -5,18 +5,25 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from sdk.network.app.core.container import Container
 from sdk.network.app.core.middleware import inject
 from sdk.network.app.schema.base_schema import APIResponseModel, Blank
-from sdk.network.app.schema.user_schema import FindUser, FindUserResult, UploadUserFile, UpsertUser, User
+from sdk.network.app.schema.user_schema import (
+    FindUser,
+    FindUserResult,
+    UploadUserFile,
+    UpsertUser,
+    User,
+)
 from sdk.network.app.services.user_service import UserService
 
 router = APIRouter(prefix="/user", tags=["user"])
 
 # Dependency injection
 
+
 @router.get("", response_model=FindUserResult)
 @inject
 def get_user_list(
     find_query: FindUser = Depends(),
-    service: UserService = Depends(Provide[Container.user_service])
+    service: UserService = Depends(Provide[Container.user_service]),
 ):
     return service.get_list(find_query)
 
@@ -24,8 +31,7 @@ def get_user_list(
 @router.get("/{user_id}", response_model=APIResponseModel)
 @inject
 def get_user(
-    user_id: int,
-    service: UserService = Depends(Provide[Container.user_service])
+    user_id: int, service: UserService = Depends(Provide[Container.user_service])
 ):
     return service.get_by_id(user_id)
 
@@ -33,19 +39,18 @@ def get_user(
 @router.post("", response_model=APIResponseModel)
 @inject
 def create_user(
-    user: UpsertUser,
-    service: UserService = Depends(Provide[Container.user_service])
+    user: UpsertUser, service: UserService = Depends(Provide[Container.user_service])
 ):
     return service.add(user)
+
 
 @router.post("/files", response_model=APIResponseModel)
 @inject
 def create_user_file(
     files: List[UploadFile] = File(..., description=".txt | .json"),
-    service: UserService = Depends(Provide[Container.user_service])
+    service: UserService = Depends(Provide[Container.user_service]),
 ):
     return service.add_file(files)
-
 
 
 @router.patch("/{user_id}", response_model=APIResponseModel)
@@ -53,7 +58,7 @@ def create_user_file(
 def update_user(
     user_id: int,
     user: UpsertUser,
-    service: UserService = Depends(Provide[Container.user_service])
+    service: UserService = Depends(Provide[Container.user_service]),
 ):
     return service.patch(user_id, user)
 
@@ -61,7 +66,6 @@ def update_user(
 @router.delete("/{user_id}", response_model=Blank)
 @inject
 def delete_user(
-    user_id: int,
-    service: UserService = Depends(Provide[Container.user_service])
+    user_id: int, service: UserService = Depends(Provide[Container.user_service])
 ):
     return service.remove_by_id(user_id)

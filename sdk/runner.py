@@ -120,8 +120,8 @@ class ValidatorRunner:
                 self.validator_node_instance = self.validator_class(
                     validator_info=validator_info,
                     cardano_context=cardano_context,
-                    signing_key=payment_esk, # type: ignore
-                    stake_signing_key=stake_esk, # type: ignore
+                    signing_key=payment_esk,  # type: ignore
+                    stake_signing_key=stake_esk,  # type: ignore
                     # Truyền thêm config vào validator nếu lớp đó yêu cầu
                 )
                 # --- Inject instance for API endpoints ---
