@@ -171,6 +171,34 @@ class Settings(BaseSettings):
         0.5, description="Điểm uốn (x0) của hàm sigmoid f_sig."
     )
 
+    # --- Thêm Cấu hình Mini-Batch ---
+    CONSENSUS_ENABLE_MINI_BATCH: bool = Field(
+        True,  # <<<--- Đặt là True để bật logic mới, False để dùng logic cũ
+        alias="CONSENSUS_ENABLE_MINI_BATCH",
+        description="Enable mini-batch tasking within a consensus cycle.",
+    )
+    CONSENSUS_MINI_BATCH_SIZE: int = Field(
+        5,  # <<<--- Ví dụ: Gửi task cho 5 miner mỗi lô
+        alias="CONSENSUS_MINI_BATCH_SIZE",
+        description="Number of miners to select in each mini-batch (N).",
+    )
+    CONSENSUS_MINI_BATCH_WAIT_SECONDS: int = Field(
+        30,  # <<<--- Ví dụ: Chờ kết quả mỗi lô trong 120 giây (2 phút)
+        alias="CONSENSUS_MINI_BATCH_WAIT_SECONDS",
+        description="Timeout (seconds) to wait for results within a single mini-batch.",
+    )
+    CONSENSUS_TASKING_PHASE_RATIO: float = Field(
+        0.85,  # <<<--- Ví dụ: Giai đoạn gửi task/nhận kết quả chiếm 85% chu kỳ
+        alias="CONSENSUS_TASKING_PHASE_RATIO",
+        description="Ratio of the cycle interval dedicated to sending tasks and receiving results (mini-batches).",
+    )
+    CONSENSUS_MINI_BATCH_INTERVAL_SECONDS: int = Field(
+        5,  # <<<--- Ví dụ: Chờ 5 giây giữa các lô nếu không có gì làm
+        alias="CONSENSUS_MINI_BATCH_INTERVAL_SECONDS",
+        description="Short delay (seconds) between mini-batch iterations to avoid busy-waiting.",
+    )
+    # ----
+
     # --- Fraud Detection & Penalty (Validator) ---
     CONSENSUS_DATUM_COMPARISON_TOLERANCE: float = Field(
         1e-5,

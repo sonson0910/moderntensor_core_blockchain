@@ -527,6 +527,64 @@ class ValidatorNode:
             max_time_bonus=max_time_bonus,  # Truyền giới hạn bonus thời gian
         )
 
+    def _select_available_miners_for_batch(self, num_to_select: int) -> List[MinerInfo]:
+        """
+        Chọn một lô các miner khả dụng (không bận) và đang hoạt động (active)
+        sử dụng logic lựa chọn chính.
+
+        Args:
+            num_to_select: Số lượng miner mong muốn cho lô (N).
+
+        Returns:
+            Danh sách các đối tượng MinerInfo cho các miner khả dụng được chọn,
+            tối đa num_to_select miner. Trả về list rỗng nếu không có miner phù hợp.
+        """
+        # 1. Lọc các miner đang hoạt động (active)
+        active_miners_all = [
+            m for m in self.miners_info.values()
+            if getattr(m, "status", STATUS_ACTIVE) == STATUS_ACTIVE
+        ]
+        if not active_miners_all:
+            logger.debug("Mini-batch selection: No active miners found.")
+            return []
+
+        # 2. Lọc tiếp các miner không bận (uid không có trong self.miner_is_busy)
+        available_miners = [
+            m for m in active_miners_all if m.uid not in self.miner_is_busy
+        ]
+
+        if not available_miners:
+            # Không log warning vì đây là trường hợp bình thường khi chờ miner xử lý xong
+            logger.debug("Mini-batch selection: No available (not busy) active miners found at the moment.")
+            return []
+
+        logger.debug(f"Mini-batch selection: {len(available_miners)} available miners to choose from.")
+
+        # 3. Chuẩn bị đầu vào cho logic lựa chọn chính (cần một dict)
+        available_miners_dict = {m.uid: m for m in available_miners}
+
+        # 4. Lấy các tham số lựa chọn từ settings
+        beta = self.settings.CONSENSUS_PARAM_BETA
+        max_time_bonus = self.settings.CONSENSUS_PARAM_MAX_TIME_BONUS
+
+        # 5. Gọi logic lựa chọn hiện có (select_miners_logic) trên nhóm miner khả dụng
+        #    Giới hạn số lượng chọn bằng số lượng thực tế khả dụng
+        actual_num_to_select = min(num_to_select, len(available_miners))
+        if actual_num_to_select <= 0:
+            return [] # Không có ai để chọn
+
+        # Gọi hàm logic từ selection.py
+        selected_miners_for_batch = select_miners_logic(
+            miners_info=available_miners_dict,
+            current_cycle=self.current_cycle, # Sử dụng cycle hiện tại để tính bonus time
+            num_to_select=actual_num_to_select, # Chọn tối đa N
+            beta=beta,
+            max_time_bonus=max_time_bonus,
+        )
+
+        logger.debug(f"Mini-batch selection: Selected {len(selected_miners_for_batch)} miners for this batch: {[m.uid for m in selected_miners_for_batch]}")
+        return selected_miners_for_batch
+
     # --- Giao Task ---
     # --- 1. Đánh dấu _create_task_data ---
     def _create_task_data(self, miner_uid: str) -> Any:
@@ -547,92 +605,225 @@ class ValidatorNode:
         )
 
     # --- Phương thức helper mới để gửi task lô ---
+    # async def _send_task_batch(
+    #     self, miners_to_send: List[MinerInfo], batch_num: int
+    # ) -> Dict[str, TaskAssignment]:
+    #     """Gửi một lô task đến các miner được chỉ định và trả về dict các task đã gửi thành công."""
+    #     tasks_to_send_coroutines = []
+    #     tasks_sent_successfully: Dict[str, TaskAssignment] = {}
+    #     miners_sent_to = []  # Giữ thứ tự để khớp với results
+
+    #     if not miners_to_send:
+    #         return tasks_sent_successfully
+
+    #     logger.info(f"Preparing to send task batch to {len(miners_to_send)} miners...")
+
+    #     for miner_info in miners_to_send:
+    #         miner_uid = miner_info.uid
+    #         # Đánh dấu bận ngay
+    #         self.miner_is_busy.add(miner_uid)
+
+    #         # Tạo task ID duy nhất (thêm timestamp nhỏ hoặc số thứ tự batch nếu cần)
+    #         task_id = f"task_{self.current_cycle}_{self.info.uid}_{miner_uid}_b{batch_num}_{random.randint(1000,9999)}"
+    #         try:
+    #             task_data = self._create_task_data(miner_uid)
+    #             if task_data is None:
+    #                 raise ValueError("_create_task_data returned None")
+    #             task = TaskModel(task_id=task_id, **task_data)
+    #         except Exception as e:
+    #             logger.exception(f"Failed to create task for miner {miner_uid}: {e}")
+    #             self.miner_is_busy.discard(miner_uid)  # Hủy đánh dấu bận
+    #             continue  # Bỏ qua miner này
+
+    #         assignment = TaskAssignment(
+    #             task_id=task_id,
+    #             task_data=task_data,
+    #             miner_uid=miner_uid,
+    #             validator_uid=self.info.uid,
+    #             timestamp_sent=time.time(),
+    #             expected_result_format={},  # Cập nhật nếu cần
+    #         )
+    #         self.tasks_sent[task_id] = assignment  # Thêm vào danh sách chờ tổng
+    #         tasks_sent_successfully[task_id] = assignment  # Thêm vào danh sách lô này
+    #         miners_sent_to.append(miner_info)  # Lưu lại miner đã gửi
+
+    #         tasks_to_send_coroutines.append(
+    #             self._send_task_via_network_async(miner_info.api_endpoint, task)  # type: ignore
+    #         )
+
+    #     # Gửi task đi
+    #     if tasks_to_send_coroutines:
+    #         logger.info(
+    #             f"Sending batch of {len(tasks_to_send_coroutines)} tasks concurrently..."
+    #         )
+    #         results = await asyncio.gather(
+    #             *tasks_to_send_coroutines, return_exceptions=True
+    #         )
+
+    #         # Xử lý lỗi gửi
+    #         success_count = 0
+    #         for i, result in enumerate(results):
+    #             if i < len(miners_sent_to):
+    #                 miner_info_sent = miners_sent_to[i] # Lấy miner theo đúng thứ tự gửi
+    #                 # Tìm assignment tương ứng trong lô đã gửi thành công
+    #                 assignment_key_to_find = None
+    #                 for task_id_key, assign_val in tasks_sent_successfully.items():
+    #                     if assign_val.miner_uid == miner_info_sent.uid:
+    #                         # Giả định chỉ gửi 1 task/miner/batch, nếu gửi nhiều cần logic phức tạp hơn
+    #                         assignment_key_to_find = task_id_key
+    #                         break
+
+    #                 if assignment_key_to_find:
+    #                     assign = tasks_sent_successfully[assignment_key_to_find]
+    #                     if isinstance(result, bool) and result:
+    #                         success_count += 1
+    #                     else:
+    #                         logger.warning(f"Failed send task {assign.task_id} to {assign.miner_uid}: {result}. Marking available.")
+    #                         self.miner_is_busy.discard(assign.miner_uid)
+    #                         if assign.task_id in self.tasks_sent: del self.tasks_sent[assign.task_id]
+    #                         del tasks_sent_successfully[assign.task_id] # Xóa khỏi dict trả về
+    #                 else:
+    #                     # Lỗi logic: Không tìm thấy assignment cho miner đã gửi?
+    #                     logger.error(f"Could not find assignment for miner {miner_info_sent.uid} in successfully sent batch after gather.")
+
+    #             else: logger.error("Result index mismatch during send processing.")
+    #     else:
+    #         logger.warning("No tasks were actually sent in this batch.")
+
+    #     return tasks_sent_successfully
+
     async def _send_task_batch(
-        self, miners_to_send: List[MinerInfo], batch_num: int
+        self, miners_for_batch: List[MinerInfo], batch_num: int
     ) -> Dict[str, TaskAssignment]:
-        """Gửi một lô task đến các miner được chỉ định và trả về dict các task đã gửi thành công."""
+        """
+        Creates and sends tasks to a specific batch of miners asynchronously.
+        Marks miners as busy and tracks successfully sent tasks.
+
+        Args:
+            miners_for_batch: List of MinerInfo objects selected for this batch.
+            batch_num: The sequence number of this mini-batch within the cycle.
+
+        Returns:
+            A dictionary {task_id: TaskAssignment} for tasks successfully sent
+            in this batch. Returns an empty dict if no tasks could be sent.
+        """
+        if not miners_for_batch:
+            logger.info(f"Batch {batch_num}: No miners provided for task sending.")
+            return {}
+
+        logger.info(f"Batch {batch_num}: Preparing to send tasks to {len(miners_for_batch)} miners...")
+
         tasks_to_send_coroutines = []
-        tasks_sent_successfully: Dict[str, TaskAssignment] = {}
-        miners_sent_to = []  # Giữ thứ tự để khớp với results
+        # Temporary dict to track assignments only for THIS batch before sending
+        batch_assignments: Dict[str, TaskAssignment] = {}
+        # Keep track of miner UIDs we actually attempt to send to in this batch
+        miners_sent_attempted_uids = []
 
-        if not miners_to_send:
-            return tasks_sent_successfully
-
-        logger.info(f"Preparing to send task batch to {len(miners_to_send)} miners...")
-
-        for miner_info in miners_to_send:
+        for miner_info in miners_for_batch:
             miner_uid = miner_info.uid
-            # Đánh dấu bận ngay
-            self.miner_is_busy.add(miner_uid)
+            # Basic check (already done in selection, but good for safety)
+            if not miner_info.api_endpoint or not miner_info.api_endpoint.startswith(("http://", "https://")):
+                logger.warning(f"Batch {batch_num}: Miner {miner_uid} has invalid API endpoint ('{miner_info.api_endpoint}'). Skipping.")
+                continue
 
-            # Tạo task ID duy nhất (thêm timestamp nhỏ hoặc số thứ tự batch nếu cần)
-            task_id = f"task_{self.current_cycle}_{self.info.uid}_{miner_uid}_b{batch_num}_{random.randint(1000,9999)}"
+            # Create unique task ID including batch number
+            # Ensure validator UID is hex string
+            self_uid_hex = self.info.uid.hex() if isinstance(self.info.uid, bytes) else self.info.uid
+            task_id = f"task_{self.current_cycle}_{self_uid_hex}_{miner_uid}_b{batch_num}_{random.randint(1000,9999)}"
+
             try:
+                # Create task data using the overridable method
                 task_data = self._create_task_data(miner_uid)
-                if task_data is None:
+                if task_data is None: # Ensure task data was created
                     raise ValueError("_create_task_data returned None")
+                # Assume TaskModel can take task_id and unpack task_data dict
                 task = TaskModel(task_id=task_id, **task_data)
+            except NotImplementedError:
+                logger.error(f"CRITICAL: _create_task_data not implemented by subclass for miner {miner_uid}! Cannot send task.")
+                continue # Skip this miner
             except Exception as e:
-                logger.exception(f"Failed to create task for miner {miner_uid}: {e}")
-                self.miner_is_busy.discard(miner_uid)  # Hủy đánh dấu bận
-                continue  # Bỏ qua miner này
+                logger.exception(f"Batch {batch_num}: Failed to create task for miner {miner_uid}: {e}")
+                continue # Skip this miner
 
+            # Create TaskAssignment
             assignment = TaskAssignment(
                 task_id=task_id,
                 task_data=task_data,
                 miner_uid=miner_uid,
-                validator_uid=self.info.uid,
+                validator_uid=self_uid_hex, # Use hex UID
                 timestamp_sent=time.time(),
-                expected_result_format={},  # Cập nhật nếu cần
+                expected_result_format={}, # TODO: Define actual expected format if needed
             )
-            self.tasks_sent[task_id] = assignment  # Thêm vào danh sách chờ tổng
-            tasks_sent_successfully[task_id] = assignment  # Thêm vào danh sách lô này
-            miners_sent_to.append(miner_info)  # Lưu lại miner đã gửi
 
+            # --- State Updates Before Sending ---
+            self.miner_is_busy.add(miner_uid) # Mark as busy immediately
+            self.tasks_sent[task_id] = assignment # Add to overall tracking
+            batch_assignments[task_id] = assignment # Add to this batch's tracking
+            miners_sent_attempted_uids.append(miner_uid) # Track UID for result processing
+            # ------------------------------------
+
+            # Prepare the coroutine for sending
             tasks_to_send_coroutines.append(
-                self._send_task_via_network_async(miner_info.api_endpoint, task)  # type: ignore
+                self._send_task_via_network_async(miner_info.api_endpoint, task)
             )
+            logger.debug(f"Batch {batch_num}: Prepared task {task_id} for miner {miner_uid}.")
 
-        # Gửi task đi
-        if tasks_to_send_coroutines:
-            logger.info(
-                f"Sending batch of {len(tasks_to_send_coroutines)} tasks concurrently..."
-            )
-            results = await asyncio.gather(
-                *tasks_to_send_coroutines, return_exceptions=True
-            )
+        # --- Send Tasks Concurrently ---
+        if not tasks_to_send_coroutines:
+            logger.warning(f"Batch {batch_num}: No valid tasks could be prepared for sending.")
+            return {} # Return empty dict if nothing was prepared
 
-            # Xử lý lỗi gửi
-            success_count = 0
-            for i, result in enumerate(results):
-                if i < len(miners_sent_to):
-                    miner_info_sent = miners_sent_to[i] # Lấy miner theo đúng thứ tự gửi
-                    # Tìm assignment tương ứng trong lô đã gửi thành công
-                    assignment_key_to_find = None
-                    for task_id_key, assign_val in tasks_sent_successfully.items():
-                        if assign_val.miner_uid == miner_info_sent.uid:
-                            # Giả định chỉ gửi 1 task/miner/batch, nếu gửi nhiều cần logic phức tạp hơn
-                            assignment_key_to_find = task_id_key
-                            break
+        logger.info(f"Batch {batch_num}: Sending {len(tasks_to_send_coroutines)} tasks concurrently...")
+        # Gather results (True for success, False/Exception for failure)
+        send_results = await asyncio.gather(*tasks_to_send_coroutines, return_exceptions=True)
 
-                    if assignment_key_to_find:
-                        assign = tasks_sent_successfully[assignment_key_to_find]
-                        if isinstance(result, bool) and result:
-                            success_count += 1
-                        else:
-                            logger.warning(f"Failed send task {assign.task_id} to {assign.miner_uid}: {result}. Marking available.")
-                            self.miner_is_busy.discard(assign.miner_uid)
-                            if assign.task_id in self.tasks_sent: del self.tasks_sent[assign.task_id]
-                            del tasks_sent_successfully[assign.task_id] # Xóa khỏi dict trả về
-                    else:
-                        # Lỗi logic: Không tìm thấy assignment cho miner đã gửi?
-                        logger.error(f"Could not find assignment for miner {miner_info_sent.uid} in successfully sent batch after gather.")
+        # --- Process Send Results ---
+        successful_sends_in_batch = 0
+        failed_assignment_keys_in_batch = []
 
-                else: logger.error("Result index mismatch during send processing.")
-        else:
-            logger.warning("No tasks were actually sent in this batch.")
+        # Iterate through results, matching them back to miners sent in this batch
+        for i, send_result in enumerate(send_results):
+            # Ensure index is valid
+            if i >= len(miners_sent_attempted_uids):
+                logger.error(f"Batch {batch_num}: Result index {i} mismatch with attempted miners.")
+                continue
 
-        return tasks_sent_successfully
+            miner_uid_sent = miners_sent_attempted_uids[i]
+            # Find the corresponding task_id in this batch
+            task_id_for_miner = None
+            for tid, assign in batch_assignments.items():
+                if assign.miner_uid == miner_uid_sent:
+                    task_id_for_miner = tid
+                    break
+
+            if not task_id_for_miner:
+                logger.error(f"Batch {batch_num}: Could not find assignment for miner {miner_uid_sent} in this batch's tracking.")
+                continue
+
+            # Check if sending was successful
+            if isinstance(send_result, bool) and send_result:
+                successful_sends_in_batch += 1
+                logger.debug(f"Batch {batch_num}: Successfully sent task {task_id_for_miner} to miner {miner_uid_sent}.")
+            else:
+                # Sending failed
+                logger.warning(f"Batch {batch_num}: Failed sending task {task_id_for_miner} to miner {miner_uid_sent}. Error: {send_result}")
+                # --- Revert State Updates for Failed Send ---
+                self.miner_is_busy.discard(miner_uid_sent) # Mark as not busy anymore
+                if task_id_for_miner in self.tasks_sent:
+                    del self.tasks_sent[task_id_for_miner] # Remove from overall tracking
+                # Mark for removal from the batch's successful assignments
+                failed_assignment_keys_in_batch.append(task_id_for_miner)
+                # -------------------------------------------
+
+        # Remove failed assignments from the dictionary to be returned
+        for task_id_to_remove in failed_assignment_keys_in_batch:
+            if task_id_to_remove in batch_assignments:
+                del batch_assignments[task_id_to_remove]
+
+        logger.info(f"Batch {batch_num}: Sending attempt finished. Successful sends in this batch: {successful_sends_in_batch}/{len(tasks_to_send_coroutines)}.")
+
+        # Return only the assignments for tasks successfully sent in this batch
+        return batch_assignments
 
     # --- Phương thức chấm điểm lô mới ---
     def _score_batch_results(self, tasks_in_batch: Dict[str, TaskAssignment]):
@@ -720,14 +911,164 @@ class ValidatorNode:
         )
 
         # --- Thêm phương thức này vào class ValidatorNode ---
+    # def _score_individual_result(self, task_data: Any, result_data: Any) -> float:
+    #     """
+    #     Placeholder cho logic chấm điểm của Subnet cụ thể.
+    #     Phương thức này BẮT BUỘC phải được override bởi lớp Validator kế thừa.
+    #     """
+    #     logger.error(f"CRITICAL: Validator {getattr(self, 'info', {}).get('uid', 'UNKNOWN')} is using the base "
+    #                  f"'_score_individual_result'. Subnet scoring logic is missing! Returning score 0.0.")
+    #     # Hoặc bạn có thể dùng:
+    #     # raise NotImplementedError("Subclasses must implement _score_individual_result")
+    #     return 0.0
+
+    #     # --- Add this scoring method specific to mini-batches ---
+
+    async def _score_current_batch(self, batch_assignments: Dict[str, TaskAssignment]):
+        """
+        Scores results for a completed mini-batch, handling timeouts.
+        Appends scores (including 0.0 for timeouts) to self.cycle_scores.
+        Releases miners from the busy set and removes tasks from tasks_sent.
+
+        Args:
+            batch_assignments: Dict {task_id: TaskAssignment} for the batch just finished.
+        """
+        batch_num_str = (
+            ""  # Try to extract batch number for logging if available in task_id
+        )
+        if batch_assignments:
+            first_task_id = next(iter(batch_assignments.keys()))
+            parts = first_task_id.split("_b")
+            if len(parts) > 1:
+                num_part = parts[-1].split("_")[0]
+                if num_part.isdigit():
+                    batch_num_str = f" (Batch ~{num_part})"
+
+        logger.info(
+            f"Scoring results for {len(batch_assignments)} tasks{batch_num_str}..."
+        )
+        scores_added_count = 0
+        timeouts_count = 0
+
+        # Atomically get and clear the current results buffer
+        # NOTE: This assumes add_miner_result uses the same lock. If not, acquire lock here.
+        # If add_miner_result is sync and called from API thread, this might be okay without async lock.
+        # Let's add the lock for safety assuming potential concurrency.
+        # This method itself runs synchronously within the main async run_cycle loop.
+        # The lock is needed because add_miner_result (called by API) might run concurrently.
+        async with self.results_buffer_lock:  # Use the sync version of the lock
+            buffered_results_copy = self.results_buffer.copy()
+            self.results_buffer.clear()
+            logger.debug(
+                f"Copied and cleared results buffer. Size was: {len(buffered_results_copy)}"
+            )
+
+        # Get validator UID (should be hex string already)
+        self_uid_hex = (
+            self.info.uid.hex() if isinstance(self.info.uid, bytes) else self.info.uid
+        )
+
+        # Iterate through the tasks EXPECTED in this batch
+        for task_id, assignment in batch_assignments.items():
+            miner_uid = assignment.miner_uid
+            score = 0.0
+            result_found = False
+
+            # Check if a result for this task_id arrived in the buffer
+            if task_id in buffered_results_copy:
+                result = buffered_results_copy[task_id]
+                result_found = True
+
+                # Double-check miner UID (should be correct if add_miner_result checked)
+                if result.miner_uid == miner_uid:
+                    try:
+                        # ===>>> CALL THE SUBNET-SPECIFIC SCORING LOGIC HERE <<<===
+                        # This method MUST be overridden by the specific Validator subclass
+                        # (e.g., Subnet1Validator needs to implement this or ensure its
+                        # scoring logic is accessible via this call).
+                        score = self._score_individual_result(
+                            assignment.task_data, result.result_data
+                        )
+                        logger.info(
+                            f"  Task {task_id}: Raw score calculated = {score:.4f} for Miner {miner_uid}"
+                        )
+
+                        # Clamp score
+                        score = max(0.0, min(1.0, score))
+                        scores_added_count += 1
+                        logger.debug(
+                            f"  Task {task_id}: Scored result from miner {miner_uid}. Score: {score:.4f}"
+                        )
+
+                    except NotImplementedError:
+                        logger.error(
+                            f"CRITICAL: Scoring logic '_score_individual_result' not implemented in {self.__class__.__name__} for task {task_id}! Assigning score 0."
+                        )
+                        score = 0.0  # Assign 0 if scoring is not implemented
+                    except Exception as e:
+                        logger.exception(
+                            f"  Task {task_id}: Error scoring result from miner {miner_uid}: {e}. Assigning score 0."
+                        )
+                        score = 0.0  # Assign 0 on scoring error
+                else:
+                    # This case indicates a potential logic error in how results are buffered/matched
+                    logger.error(
+                        f"  Task {task_id}: Result in buffer from unexpected miner {result.miner_uid} (expected {miner_uid}). Assigning score 0."
+                    )
+                    score = 0.0
+            else:
+                # Timeout for this batch
+                timeouts_count += 1
+                score = 0.0  # Assign score 0 for timeout
+                logger.warning(
+                    f"  Task {task_id}: Timeout - No result received from miner {miner_uid} within batch wait time. Assigning score 0."
+                )
+
+            # Create ValidatorScore object
+            val_score = ValidatorScore(
+                task_id=task_id,
+                miner_uid=miner_uid,
+                validator_uid=self_uid_hex,
+                score=score,
+                timestamp=time.time(),  # Timestamp of scoring
+            )
+
+            # Append score to the main cycle accumulator
+            # Use defaultdict initialized in __init__
+            self.cycle_scores[task_id].append(val_score)
+
+            # --- Release Miner and Task Tracking ---
+            self.miner_is_busy.discard(miner_uid)  # Mark miner as available
+            if task_id in self.tasks_sent:
+                del self.tasks_sent[task_id]  # Remove from overall pending tasks
+            # ---------------------------------------
+
+        logger.info(
+            f"Batch scoring complete{batch_num_str}. Scores added: {scores_added_count}. Timeouts (Score 0): {timeouts_count}."
+        )
+
+    # --- Add this placeholder scoring method (IMPORTANT) ---
+    # This NEEDS to be overridden by Subnet1Validator
     def _score_individual_result(self, task_data: Any, result_data: Any) -> float:
         """
-        Placeholder cho logic chấm điểm của Subnet cụ thể.
-        Phương thức này BẮT BUỘC phải được override bởi lớp Validator kế thừa.
+        (Placeholder/Needs Override) Calculates score for a single result.
+
+        *** This method MUST be implemented by the specific Validator subclass ***
+        (e.g., Subnet1Validator) to contain the actual scoring logic
+        (like calling calculate_clip_score).
+
+        Args:
+            task_data: Data originally sent in the task.
+            result_data: Data received from the miner.
+
+        Returns:
+            Score between 0.0 and 1.0.
         """
-        logger.error(f"CRITICAL: Validator {getattr(self, 'info', {}).get('uid', 'UNKNOWN')} is using the base "
-                     f"'_score_individual_result'. Subnet scoring logic is missing! Returning score 0.0.")
-        # Hoặc bạn có thể dùng:
+        logger.error(
+            f"CRITICAL: Validator {getattr(self, 'info', {}).get('uid', 'UNKNOWN')} is using the base "
+            f"'_score_individual_result'. Subnet scoring logic is missing! Returning score 0.0."
+        )
+        # In a real scenario, either raise NotImplementedError or implement base logic
         # raise NotImplementedError("Subclasses must implement _score_individual_result")
         return 0.0
 
@@ -1120,7 +1461,7 @@ class ValidatorNode:
                 local_scores=flat_scores_list # Truyền list điểm
             )
         except Exception as e:
-             logger.exception(f"Error during broadcast_scores_logic: {e}")
+            logger.exception(f"Error during broadcast_scores_logic: {e}")
 
     async def _get_active_validators(self) -> List[ValidatorInfo]:
         """Lấy danh sách validator đang hoạt động."""
@@ -1351,184 +1692,287 @@ class ValidatorNode:
         )
 
     async def run_cycle(self):
-        """Thực hiện một chu kỳ đồng thuận hoàn chỉnh (async)."""
+        """Thực hiện một chu kỳ đồng thuận hoàn chỉnh (async) với logic mini-batch."""
         logger.info(
             f"\n--- Starting Cycle {self.current_cycle} for Validator {self.info.uid} ---"
         )
         cycle_start_time = time.time()
-        self.cycle_scores = defaultdict(list)  # Reset điểm tích lũy
-        self.tasks_sent = {}  # Reset task chờ kết quả
-        self.miner_is_busy = set()
-        async with self.results_buffer_lock:  # Xóa buffer an toàn
-            self.results_buffer.clear()
 
-        # --- Tính toán thời gian ---
-        interval_seconds = (
-            self.settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
-        )
-        end_batching_time = (
-            cycle_start_time + interval_seconds * 0.85
-        )  # Dừng gửi batch mới sau 85% thời gian
-        mini_batch_wait_seconds = getattr(
-            self.settings, "CONSENSUS_MINI_BATCH_WAIT_SECONDS", 60
-        )  # Thời gian chờ kết quả mỗi lô
-        send_score_time = (
-            cycle_start_time
-            + interval_seconds
-            - self.settings.CONSENSUS_SEND_SCORE_OFFSET_MINUTES * 60
-        )
-        consensus_timeout_time = (
-            cycle_start_time
-            + interval_seconds
-            - self.settings.CONSENSUS_CONSENSUS_TIMEOUT_OFFSET_MINUTES * 60
-        )
-        commit_time = (
-            cycle_start_time
-            + interval_seconds
-            - self.settings.CONSENSUS_COMMIT_OFFSET_SECONDS
-        )
-        # -------------------------
+        # === Reset State for New Cycle ===
+        self.cycle_scores = defaultdict(list)  # Reset điểm tích lũy cho chu kỳ này
+        # self.tasks_sent is managed per batch now, cleared in _score_current_batch
+        # self.results_buffer is cleared in _score_current_batch
+        self.miner_is_busy = set()  # Reset miners đang bận
+        # Clear received P2P scores for the *new* cycle to avoid using old data
+        async with self.received_scores_lock:
+            if self.current_cycle in self.received_validator_scores:
+                del self.received_validator_scores[self.current_cycle]
+            self.received_validator_scores[self.current_cycle] = defaultdict(dict)
+        # --------------------------------
+
+        # --- Tính toán các mốc thời gian quan trọng ---
+        try:
+            interval_seconds = (
+                self.settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
+            )
+            tasking_ratio = self.settings.CONSENSUS_TASKING_PHASE_RATIO
+            send_offset_seconds = self.settings.CONSENSUS_SEND_SCORE_OFFSET_MINUTES * 60
+            consensus_offset_seconds = (
+                self.settings.CONSENSUS_CONSENSUS_TIMEOUT_OFFSET_MINUTES * 60
+            )
+            commit_offset_seconds = self.settings.CONSENSUS_COMMIT_OFFSET_SECONDS
+            mini_batch_wait_seconds = self.settings.CONSENSUS_MINI_BATCH_WAIT_SECONDS
+            mini_batch_size = self.settings.CONSENSUS_MINI_BATCH_SIZE
+            mini_batch_interval_seconds = (
+                self.settings.CONSENSUS_MINI_BATCH_INTERVAL_SECONDS
+            )
+
+            metagraph_update_time = cycle_start_time + interval_seconds
+            # Thời điểm dừng gửi task mới và chờ kết quả lô cuối cùng
+            end_batching_time = cycle_start_time + (interval_seconds * tasking_ratio)
+            # Thời điểm gửi điểm P2P (sau khi tasking phase kết thúc)
+            send_score_time = metagraph_update_time - send_offset_seconds
+            # Thời điểm cuối cùng chờ điểm P2P
+            consensus_timeout_time = metagraph_update_time - consensus_offset_seconds
+            # Thời điểm commit lên blockchain
+            commit_time = metagraph_update_time - commit_offset_seconds
+
+            # Ensure timings are logical
+            if not (
+                cycle_start_time
+                < end_batching_time
+                < send_score_time
+                < consensus_timeout_time
+                < commit_time
+                < metagraph_update_time
+            ):
+                logger.error(
+                    "Cycle timing configuration is illogical. Check offsets and interval."
+                )
+                # Decide how to handle: skip cycle, use defaults, raise error?
+                # For now, log error and potentially proceed with caution or adjusted times.
+                # Example adjustment: ensure minimum gaps
+                end_batching_time = min(
+                    end_batching_time, send_score_time - 60
+                )  # Ensure 60s before send
+                consensus_timeout_time = min(
+                    consensus_timeout_time, commit_time - 30
+                )  # Ensure 30s before commit
+                logger.warning("Adjusted cycle timings due to potential conflicts.")
+
+            logger.info(
+                f"Cycle {self.current_cycle} Timings: EndBatching={time.strftime('%H:%M:%S', time.localtime(end_batching_time))}, SendScore={time.strftime('%H:%M:%S', time.localtime(send_score_time))}, ConsensusTimeout={time.strftime('%H:%M:%S', time.localtime(consensus_timeout_time))}, Commit={time.strftime('%H:%M:%S', time.localtime(commit_time))}"
+            )
+
+        except AttributeError as e:
+            logger.error(
+                f"Missing timing configuration in settings: {e}. Cannot run cycle."
+            )
+            return
+        # ------------------------------------------
+
+        penalized_validator_updates: Dict[str, ValidatorDatum] = {}
+        final_miner_scores: Dict[str, float] = {}
+        calculated_validator_states: Dict[str, Any] = {}
+        miner_updates: Dict[str, MinerDatum] = {}
+        validator_updates: Dict[str, ValidatorDatum] = {}  # Self update
 
         try:
             # === BƯỚC 0: KIỂM TRA & PHẠT VALIDATOR (TỪ CHU KỲ TRƯỚC) ===
-            # Mục đích: Phát hiện validator gian lận (commit sai trạng thái ở chu kỳ trước)
-            # Hành động: Gọi verify_and_penalize_logic từ state.py
-            # Input: current_cycle, previous_calculated_states, validators_info (hiện tại), context, settings
-            # Output: Cập nhật trực tiếp trust/status trong self.validators_info nếu có phạt.
-            #         Trả về penalized_validator_updates (dict datum mới cho validator bị phạt).
-            penalized_validator_updates = (
-                await self.verify_and_penalize_validators()
-            )  # Đã thêm return value
+            logger.info("Step 0: Verifying previous cycle validator updates...")
+            penalized_validator_updates = await self.verify_and_penalize_validators()
             logger.info(
                 f"Step 0: Verification/Penalization check completed. Penalized datums prepared: {len(penalized_validator_updates)}"
             )
 
             # === BƯỚC 1: TẢI DỮ LIỆU METAGRAPH ===
-            # Mục đích: Lấy trạng thái mới nhất của miners và validators từ blockchain.
-            # Hành động: Gọi self.load_metagraph_data()
-            # Output: Cập nhật self.miners_info và self.validators_info (bao gồm cả self.info).
-            await self.load_metagraph_data()  # Sử dụng await vì hàm này là async
+            logger.info("Step 1: Loading Metagraph data...")
+            await self.load_metagraph_data()
             if not self.miners_info:
                 logger.warning(
-                    "No miners found in metagraph for this cycle. Skipping task assignment."
+                    "Step 1: No miners found in metagraph. Skipping task assignment phase."
                 )
-                # Có thể raise Exception hoặc kết thúc chu kỳ nhẹ nhàng hơn
-                return  # Kết thúc chu kỳ nếu không có miner
-
-            logger.info(
-                f"Step 1: Metagraph data loaded. Miners: {len(self.miners_info)}, Validators: {len(self.validators_info)}"
-            )
-
-            # === BƯỚC 2: CHỌN MINERS ===
-            # Mục đích: Chọn ra các miners để giao nhiệm vụ dựa trên trust và cơ chế công bằng.
-            # Hành động: Gọi self.select_miners() (đồng bộ - sync) -> gọi logic trong selection.py
-            # Input: self.miners_info, self.current_cycle, các tham số từ settings.
-            # Output: List các MinerInfo được chọn (selected_miners).
-            selected_miners = self.select_miners()
-            if not selected_miners:
-                logger.warning(
-                    "No miners were selected for task assignment in this cycle."
+                # Skip to P2P/Consensus phase with potentially empty scores
+            else:
+                logger.info(
+                    f"Step 1: Metagraph loaded. Miners: {len(self.miners_info)}, Validators: {len(self.validators_info)}"
                 )
-                return  # Kết thúc chu kỳ nếu không chọn được miner
 
-            logger.info(f"Step 2: Selected {len(selected_miners)} miners for tasks.")
+                # === BƯỚC 2-5: VÒNG LẶP MINI-BATCH (Chọn, Gửi, Chờ, Chấm điểm) ===
+                logger.info("Step 2-5: Entering Mini-Batch Tasking Phase...")
+                batch_num = 0
+                while time.time() < end_batching_time:
+                    batch_start_time = time.time()
+                    batch_num += 1
+                    logger.debug(f"--- Starting Mini-Batch {batch_num} ---")
 
-            # === BƯỚC 3: GỬI TASK & THEO DÕI ===
-            # Mục đích: Tạo và gửi nhiệm vụ đến các miners đã chọn qua mạng, lưu lại thông tin task đã gửi.
-            # Hành động: Gọi self.send_task_and_track() (hiện là async để gửi đồng thời)
-            # Input: selected_miners
-            # Output: Cập nhật self.tasks_sent (dict: task_id -> TaskAssignment) cho các task gửi thành công.
-            #         Cập nhật last_selected_time trong self.miners_info.
-            # Note: Phần tạo task (_create_task_data) và gửi (_send_task_via_network_async) cần hoàn thiện logic thực tế.
-            await self.send_task_and_track(selected_miners)
-            logger.info(
-                f"Step 3: Task sending attempted. Tasks tracked: {len(self.tasks_sent)}"
-            )
+                    # 2a. Chọn miners khả dụng cho lô
+                    selected_miners = self._select_available_miners_for_batch(
+                        mini_batch_size
+                    )
 
-            # Chờ cho đến gần thời điểm gửi điểm P2P
+                    if not selected_miners:
+                        logger.debug(
+                            f"Batch {batch_num}: No available miners to select. Waiting..."
+                        )
+                        # Chờ một chút trước khi thử lại
+                        await asyncio.sleep(mini_batch_interval_seconds)
+                        # Kiểm tra lại thời gian trước khi tiếp tục vòng lặp
+                        if time.time() >= end_batching_time:
+                            logger.info(
+                                "Tasking phase time ended while waiting for available miners."
+                            )
+                            break
+                        continue  # Bỏ qua phần còn lại của lần lặp này
+
+                    # 2b. Gửi lô task
+                    # Hàm _send_task_batch đã đánh dấu miner là busy và thêm vào self.tasks_sent
+                    batch_assignments = await self._send_task_batch(
+                        selected_miners, batch_num
+                    )
+
+                    # Nếu không gửi được task nào (lỗi mạng, etc.), vẫn nên chờ rồi chấm điểm (timeout)
+                    if not batch_assignments:
+                        logger.warning(
+                            f"Batch {batch_num}: Failed to send any tasks to selected miners."
+                        )
+                        # Có thể cần gỡ bỏ các miner đã đánh dấu busy ở _send_task_batch nếu nó fail toàn bộ
+                        for m in selected_miners:
+                            self.miner_is_busy.discard(m.uid)
+
+                    # 2c. Chờ kết quả lô (ngắn hạn)
+                    # API endpoint sẽ nhận kết quả vào self.results_buffer trong lúc này
+                    logger.debug(
+                        f"Batch {batch_num}: Waiting {mini_batch_wait_seconds}s for results..."
+                    )
+                    await asyncio.sleep(mini_batch_wait_seconds)
+                    logger.debug(f"Batch {batch_num}: Finished waiting period.")
+
+                    # 2d. Chấm điểm lô hiện tại (gồm cả timeout)
+                    # Hàm này sẽ cập nhật self.cycle_scores, gỡ busy miners, xóa khỏi tasks_sent
+                    await self._score_current_batch(
+                        batch_assignments
+                    )  # <<< Dùng await vì hàm này đã sửa thành async
+
+                    # Tính thời gian thực hiện lô và chờ nếu cần
+                    batch_duration = time.time() - batch_start_time
+                    logger.debug(f"Batch {batch_num} duration: {batch_duration:.1f}s.")
+                    remaining_time_in_tasking_phase = end_batching_time - time.time()
+                    if remaining_time_in_tasking_phase <= 0:
+                        logger.info("Tasking phase time ended.")
+                        break  # Thoát vòng lặp nếu hết giờ
+
+                    # Có thể thêm một khoảng nghỉ ngắn cố định giữa các lô
+                    await asyncio.sleep(mini_batch_interval_seconds)
+
+                logger.info("Step 2-5: Mini-Batch Tasking Phase Finished.")
+            # === KẾT THÚC VÒNG LẶP MINI-BATCH ===
+
+            # === BƯỚC 6: BROADCAST ĐIỂM CỤC BỘ ===
+            # Chờ đến thời điểm gửi điểm (nếu chưa đến)
             wait_before_broadcast_time = send_score_time - time.time()
             if wait_before_broadcast_time > 0:
-                logger.info(f"Cycle {self.current_cycle}: Active tasking/result receiving phase. Waiting {wait_before_broadcast_time:.1f}s until P2P score broadcast.")
+                logger.info(
+                    f"Step 6: Waiting {wait_before_broadcast_time:.1f}s until P2P score broadcast time..."
+                )
                 await asyncio.sleep(wait_before_broadcast_time)
-            else:
-                logger.warning(f"Cycle {self.current_cycle}: Already past P2P score broadcast time by {-wait_before_broadcast_time:.1f}s.")
 
-            # 6. Broadcast điểm đã tích lũy
-            logger.info(f"Step 6b: Broadcasting {sum(len(v) for v in self.cycle_scores.values())} accumulated local scores...")
-            # Cần sửa broadcast_scores_logic để nhận dict này hoặc chuyển nó thành list trước khi gửi
-            await self.broadcast_scores(self.cycle_scores) # Truyền điểm đã tích lũy
+            logger.info(
+                f"Step 6: Broadcasting {sum(len(v) for v in self.cycle_scores.values())} accumulated local scores..."
+            )
+            await self.broadcast_scores(
+                self.cycle_scores
+            )  # Truyền dict điểm đã tích lũy
 
             # === BƯỚC 7: CHỜ NHẬN ĐIỂM P2P ===
-            # Mục đích: Chờ nhận đủ điểm số từ các validator khác để bắt đầu tính toán đồng thuận.
-            # Hành động: Tính thời gian chờ, gọi self.wait_for_consensus_scores() (async)
-            # Input: Timeout (dựa trên consensus_timeout_time).
-            # Output: boolean (consensus_possible) cho biết có đủ điểm hay không.
-            #         self.received_validator_scores được cập nhật ngầm bởi API endpoint nhận điểm.
             wait_for_scores_timeout = consensus_timeout_time - time.time()
-            consensus_possible = False
+            consensus_possible = False  # Mặc định là không thể
             if wait_for_scores_timeout > 0:
                 logger.info(
                     f"Step 7: Waiting up to {wait_for_scores_timeout:.1f}s for P2P scores..."
                 )
+                # Hàm này sẽ kiểm tra điểm trong self.received_validator_scores[self.current_cycle]
                 consensus_possible = await self.wait_for_consensus_scores(
                     wait_for_scores_timeout
                 )
                 logger.info(
-                    f"Step 7: Consensus possible based on received scores: {consensus_possible}"
+                    f"Step 7: Consensus possible based on received P2P scores: {consensus_possible}"
                 )
             else:
                 logger.warning(
                     f"Step 7: Not enough time left ({wait_for_scores_timeout:.1f}s) to wait for consensus scores."
                 )
+                # Kiểm tra nhanh lần cuối xem có đủ điểm không ngay cả khi hết giờ
+                async with self.received_scores_lock:
+                    active_validators = await self._get_active_validators()
+                    total_active = len(active_validators)
+                    # Kiểm tra xem có ít nhất 1 task nào đó đủ điểm không?
+                    # Hoặc đơn giản là dựa vào cờ consensus_possible đã tính ở trên
+                    # Nếu timeout, kiểm tra xem có đủ điểm tối thiểu không
+                    min_validators_needed = (
+                        self.settings.CONSENSUS_MIN_VALIDATORS_FOR_CONSENSUS
+                    )
+                    scores_received_count = 0
+                    if self.current_cycle in self.received_validator_scores:
+                        # Đếm số validator khác nhau đã gửi điểm cho bất kỳ task nào trong chu kỳ này
+                        unique_senders = set()
+                        for task_scores in self.received_validator_scores[
+                            self.current_cycle
+                        ].values():
+                            unique_senders.update(task_scores.keys())
+                        # Có thể cộng thêm chính mình nếu đã chấm điểm
+                        if self.cycle_scores:
+                            unique_senders.add(self.info.uid)
+                        scores_received_count = len(unique_senders)
+
+                    if scores_received_count >= min_validators_needed:
+                        logger.info(
+                            f"Sufficient unique validators ({scores_received_count}) sent scores despite timeout. Allowing consensus."
+                        )
+                        consensus_possible = True
+                    else:
+                        logger.warning(
+                            f"Insufficient unique validators ({scores_received_count} < {min_validators_needed}) sent scores after timeout. Consensus will be skipped or limited."
+                        )
+                        consensus_possible = False
 
             # === BƯỚC 8: CHẠY ĐỒNG THUẬN & TÍNH TOÁN TRẠNG THÁI ===
-            # Mục đích: Tính điểm đồng thuận cuối cùng cho miners (P_adj) và trạng thái dự kiến (E_v, trust, reward) cho validators.
-            # Hành động: Gọi self.run_consensus_and_penalties() (sync) -> gọi run_consensus_logic từ state.py
-            # Input: current_cycle, tasks_sent, received_scores (P2P + local), validators_info, settings.
-            # Output: final_miner_scores (dict), calculated_validator_states (dict trạng thái dự kiến).
-            #         Cập nhật self.previous_cycle_results["calculated_validator_states"] cho chu kỳ sau.
-            logger.info(f"Step 8: Running consensus calculations...")
-            final_miner_scores, calculated_validator_states = self.run_consensus_and_penalties(consensus_possible=consensus_possible, self_validator_uid=self.info.uid)
-            if not consensus_possible:
-                logger.warning(
-                    "Consensus calculation was performed with potentially incomplete P2P score set!"
+            logger.info("Step 8: Running final consensus calculations...")
+            # Hàm này nhận cờ consensus_possible để biết có nên tính toán đầy đủ hay chỉ decay
+            final_miner_scores, calculated_validator_states = (
+                self.run_consensus_and_penalties(
+                    consensus_possible=consensus_possible,
+                    self_validator_uid=self.info.uid,
                 )
+            )
             # Lưu trạng thái dự kiến cho việc kiểm tra ở chu kỳ tiếp theo
             self.previous_cycle_results["calculated_validator_states"] = (
                 calculated_validator_states.copy()
-            )  # Lưu bản copy
+            )
             self.previous_cycle_results["final_miner_scores"] = (
                 final_miner_scores.copy()
-            )  # Lưu điểm miner nếu cần
+            )
             logger.info(
                 f"Step 8: Consensus calculation finished. Final miner scores: {len(final_miner_scores)}, Validator states calculated: {len(calculated_validator_states)}"
             )
 
             # === BƯỚC 9: CHUẨN BỊ CẬP NHẬT MINER DATUM ===
-            # Mục đích: Tạo các đối tượng MinerDatum mới dựa trên kết quả đồng thuận.
-            # Hành động: Gọi self.update_miner_state() (sync) -> gọi prepare_miner_updates_logic từ state.py
-            # Input: current_cycle, miners_info (có thể đã bị cập nhật trust ở bước 0), final_scores, settings.
-            # Output: miner_updates (dict: uid_hex -> MinerDatum mới).
-            logger.info(f"Step 9: Preparing miner datum updates...")
-            miner_updates = await self.update_miner_state(final_miner_scores)
+            logger.info("Step 9: Preparing miner datum updates...")
+            miner_updates = await self.update_miner_state(
+                final_miner_scores
+            )  # update_miner_state đã là async
             logger.info(f"Step 9: Prepared {len(miner_updates)} miner datums.")
 
             # === BƯỚC 10: CHUẨN BỊ CẬP NHẬT VALIDATOR DATUM (CHO CHÍNH MÌNH) ===
-            # Mục đích: Tạo đối tượng ValidatorDatum mới cho chính validator này.
-            # Hành động: Gọi self.prepare_validator_updates() (async) -> gọi prepare_validator_updates_logic từ state.py
-            # Input: current_cycle, self.info, calculated_validator_states, settings, context.
-            # Output: validator_updates (dict: self_uid_hex -> ValidatorDatum mới).
-            logger.info(f"Step 10: Preparing self validator datum update...")
+            logger.info("Step 10: Preparing self validator datum update...")
             validator_updates = await self.prepare_validator_updates(
                 calculated_validator_states
-            )
+            )  # Đã là async
             logger.info(
                 f"Step 10: Prepared {len(validator_updates)} self validator datums."
             )
 
             # === BƯỚC 11: CHỜ COMMIT ===
-            # Mục đích: Đợi đến thời điểm commit đã định sẵn.
-            # Hành động: Tính thời gian chờ, đợi (asyncio.sleep).
             wait_before_commit = commit_time - time.time()
             if wait_before_commit > 0:
                 logger.info(
@@ -1541,23 +1985,17 @@ class ValidatorNode:
                 )
 
             # === BƯỚC 12: COMMIT LÊN BLOCKCHAIN ===
-            # Mục đích: Gửi giao dịch cập nhật các MinerDatum và ValidatorDatum lên blockchain.
-            # Hành động: Gọi self.commit_updates_to_blockchain() (async) -> gọi commit_updates_logic từ state.py
-            # Input: miner_updates, validator_updates (self), penalized_validator_updates (từ Bước 0), context, keys, settings, script_hash/bytes, network.
-            # Output: Gửi giao dịch lên mạng Cardano.
-            # Note: Logic commit thực tế cần được hoàn thiện.
-            logger.info(f"Step 12: Committing updates to blockchain...")
+            logger.info("Step 12: Committing updates to blockchain...")
+            # Commit cả miner updates, self validator update, và penalized updates từ đầu chu kỳ
             await self.commit_updates_to_blockchain(
                 miner_updates=miner_updates,
-                validator_updates=validator_updates,
-                penalized_validator_updates=penalized_validator_updates,  # Truyền datum phạt vào đây
+                validator_updates=validator_updates,  # Chỉ chứa self update
+                penalized_validator_updates=penalized_validator_updates,  # Từ Bước 0
             )
-            logger.info(f"Step 12: Commit process initiated.")
-
+            logger.info("Step 12: Commit process initiated.")
 
         except Exception as e:
             logger.exception(f"Error during consensus cycle {self.current_cycle}: {e}")
-            # Cân nhắc có nên dừng hẳn node hay chỉ bỏ qua chu kỳ lỗi
 
         finally:
             # === DỌN DẸP CUỐI CHU KỲ ===
@@ -1565,22 +2003,19 @@ class ValidatorNode:
             logger.info(
                 f"--- Cycle {self.current_cycle} Finished (Duration: {cycle_end_time - cycle_start_time:.1f}s) ---"
             )
-            # Tăng số thứ tự chu kỳ
             self.current_cycle += 1
-            self._save_current_cycle()
-            # Dọn dẹp dữ liệu P2P của các chu kỳ quá cũ để tiết kiệm bộ nhớ
-            cleanup_cycle = (
-                self.current_cycle - 3
-            )  # Ví dụ: Giữ lại dữ liệu 2 chu kỳ trước đó
+            self._save_current_cycle()  # Lưu chu kỳ vừa hoàn thành
+            # Dọn dẹp P2P scores cũ
+            cleanup_cycle = self.current_cycle - 3
             async with self.received_scores_lock:
                 if cleanup_cycle in self.received_validator_scores:
                     try:
                         del self.received_validator_scores[cleanup_cycle]
                         logger.info(
-                            f"Cleaned up received scores for cycle {cleanup_cycle}"
+                            f"Cleaned up received P2P scores for cycle {cleanup_cycle}"
                         )
                     except KeyError:
-                        pass  # Đã bị xóa bởi luồng khác?
+                        pass
 
 
 # --- Hàm chạy chính (Đã cập nhật) ---
