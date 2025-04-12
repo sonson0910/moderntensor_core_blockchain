@@ -287,7 +287,6 @@ class Settings(BaseSettings):
         description="Khoảng thời gian tham chiếu (giây) cho bonus thời gian DAO (ví dụ: 1 năm).",
     )  # Đổi sang giây
 
-    CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES: int = Field(60)
 
     # Giữ nguyên validator của bạn
     @field_validator("CARDANO_NETWORK", mode="before")

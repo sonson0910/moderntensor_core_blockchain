@@ -450,7 +450,7 @@ class ValidatorNode:
                         wallet_addr_hash=wallet_addr_hash_bytes,
                         performance_history_hash=on_chain_history_hash_bytes,  # Lưu lại hash on-chain
                     )
-
+                    logger.debug(f"  Loaded Validator Peer: UID={uid_hex}, Status={datum_dict.get('status', 'N/A')}, Endpoint='{datum_dict.get('api_endpoint', 'N/A')}'")
                     self.current_utxo_map[uid_hex] = utxo_object
                 except Exception as e:
                     logger.warning(

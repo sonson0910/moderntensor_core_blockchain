@@ -4,6 +4,7 @@ import uvicorn
 import requests
 import time
 import threading
+from typing import Optional
 
 # Define common data models
 class TaskModel(BaseModel):
@@ -14,6 +15,10 @@ class TaskModel(BaseModel):
     description: str = Field(..., description="Detailed description of the task")
     deadline: str = Field(..., description="Deadline for task completion")
     priority: int = Field(..., description="Priority of the task (1-5)")
+    validator_endpoint: Optional[str] = Field(
+        None,
+        description="API endpoint of the originating validator to send the result back to"
+    )
 
 class ResultModel(BaseModel):
     """
