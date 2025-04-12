@@ -477,10 +477,7 @@ async def verify_and_penalize_logic(
     settings: Any,
     script_hash: ScriptHash,
     network: Network,
-    # Bỏ các key vì hàm này chỉ chuẩn bị datum phạt, không commit trực tiếp
-    # signing_key: PaymentSigningKey,
-    # stake_signing_key: Optional[StakeSigningKey]
-) -> Dict[str, ValidatorDatum]:
+) -> None:
     """
     Kiểm tra ValidatorDatum chu kỳ trước, áp dụng phạt trust/status vào validators_info
     và chuẩn bị ValidatorDatum mới để commit hình phạt đó.
@@ -488,9 +485,9 @@ async def verify_and_penalize_logic(
     logger.info(f"Verifying previous cycle ({current_cycle - 1}) validator updates...")
     previous_cycle = current_cycle - 1
     if previous_cycle < 0:
-        return {}
+        return
 
-    penalized_validator_datums: Dict[str, ValidatorDatum] = {}
+    # penalized_validator_datums: Dict[str, ValidatorDatum] = {}
     tolerance = settings.CONSENSUS_DATUM_COMPARISON_TOLERANCE
     divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
     logger.debug(f"Verification tolerance (float): {tolerance}")
@@ -500,23 +497,15 @@ async def verify_and_penalize_logic(
         all_validator_results: List[Tuple[UTxO, Dict]] = await get_all_validator_data(
             context, script_hash, network
         )
-
-        # Process on-chain data
-        on_chain_states_decoded: Dict[str, Dict] = {}  # Store decoded dict
-        utxo_map_on_chain: Dict[str, UTxO] = (
-            {}
-        )  # << CORRECT NAME: Store original UTxO object
-
+        on_chain_states_decoded: Dict[str, Dict] = {}
+        utxo_map_on_chain: Dict[str, UTxO] = {}
         for utxo_obj, datum_dict in all_validator_results:
             uid_hex = datum_dict.get("uid")
             last_update = datum_dict.get("last_update_slot")
-
+            # Chỉ quan tâm đến datum được cập nhật ở chu kỳ trước đó
             if uid_hex and last_update == previous_cycle:
                 on_chain_states_decoded[uid_hex] = datum_dict
-                utxo_map_on_chain[uid_hex] = (
-                    utxo_obj  # << CORRECT NAME: Store the UTxO object
-                )
-
+                utxo_map_on_chain[uid_hex] = utxo_obj
         logger.info(
             f"Found {len(on_chain_states_decoded)} validator datums updated in cycle {previous_cycle} for verification."
         )
@@ -525,14 +514,11 @@ async def verify_and_penalize_logic(
         expected_states = previous_calculated_states
         if not expected_states:
             logger.warning("No expected validator states found from previous cycle.")
-            return {}
-
+            return  # <<<--- Trả về None
         suspicious_validators: Dict[str, str] = {}
-
         for uid_hex, expected in expected_states.items():
             actual_decoded = on_chain_states_decoded.get(uid_hex)
             reason_parts = []
-
             if not actual_decoded:
                 if expected.get("start_status") == STATUS_ACTIVE:
                     reason_parts.append(
@@ -541,42 +527,28 @@ async def verify_and_penalize_logic(
                 if reason_parts:
                     suspicious_validators[uid_hex] = "; ".join(reason_parts)
                 continue
-
             # Compare Trust Score (float)
             expected_trust_float = expected.get("trust", -1.0)
             actual_trust_float = actual_decoded.get("trust_score", -999.0)
             if actual_trust_float == -999.0:
-                logger.error(
-                    f"Key 'trust_score' missing in decoded on-chain data for {uid_hex}."
-                )
-                reason_parts.append(
-                    "Trust score missing in on-chain data"
-                )  # Add reason if missing
+                reason_parts.append("Trust score missing in on-chain data")
             else:
                 diff_trust_float = abs(actual_trust_float - expected_trust_float)
                 if diff_trust_float > tolerance:
                     reason_parts.append(
                         f"Trust mismatch (Expected: {expected_trust_float:.5f}, Actual: {actual_trust_float:.5f}, Diff: {diff_trust_float:.5f})"
                     )
-
             # Compare Performance Score (float)
             expected_perf_float = expected.get("E_v", -1.0)
             actual_perf_float = actual_decoded.get("last_performance", -999.0)
             if actual_perf_float == -999.0:
-                logger.error(
-                    f"Key 'last_performance' missing in decoded on-chain data for {uid_hex}."
-                )
-                reason_parts.append(
-                    "Performance score missing in on-chain data"
-                )  # Add reason if missing
+                reason_parts.append("Performance score missing in on-chain data")
             else:
                 diff_perf_float = abs(actual_perf_float - expected_perf_float)
                 if diff_perf_float > tolerance:
                     reason_parts.append(
                         f"Performance mismatch (Expected: {expected_perf_float:.5f}, Actual: {actual_perf_float:.5f}, Diff: {diff_perf_float:.5f})"
                     )
-
-            # --- REMOVED Redundant/Incorrect Scaled Performance Comparison ---
 
             if reason_parts:
                 suspicious_validators[uid_hex] = "; ".join(reason_parts)
@@ -585,26 +557,16 @@ async def verify_and_penalize_logic(
                 )
 
         # 3. Consensus on Fraud (Mocked)
-        confirmed_deviators: Dict[str, str] = {}
-        if suspicious_validators:
-            logger.info(
-                f"Consensus on {len(suspicious_validators)} suspicious validators needed (currently mocked)."
-            )
-            confirmed_deviators = suspicious_validators  # Mock: confirm all
-            logger.warning(
-                f"Deviation confirmed (mock): {list(confirmed_deviators.keys())}"
-            )
+        confirmed_deviators = suspicious_validators # Mock
 
         # 4. Apply Penalties and Prepare Penalty Datums
         for uid_hex, reason in confirmed_deviators.items():
             validator_info = validators_info.get(uid_hex)
             if not validator_info:
-                logger.warning(
-                    f"Info for penalized validator {uid_hex} not found in current state."
-                )
+                logger.warning(f"Info for penalized validator {uid_hex} not found in current state.")
                 continue
 
-            logger.warning(f"Applying penalty to Validator {uid_hex} for: {reason}")
+            logger.warning(f"Applying penalty IN MEMORY to Validator {uid_hex} for: {reason}")
 
             # a. Determine Severity
             fraud_severity = _calculate_fraud_severity(reason, tolerance)
@@ -627,14 +589,16 @@ async def verify_and_penalize_logic(
             new_trust_score = max(
                 0.0, original_trust * (1 - penalty_eta * fraud_severity)
             )
-            if abs(new_trust_score - original_trust) > EPSILON:
+            if abs(new_trust_score - original_trust) > 1e-9:  # Dùng epsilon nhỏ
                 logger.warning(
-                    f"Penalizing Trust Score for {uid_hex}: {original_trust:.4f} -> {new_trust_score:.4f} (Eta: {penalty_eta}, Severity: {fraud_severity:.2f})"
+                    f"Updating IN-MEMORY Trust Score for {uid_hex}: {original_trust:.4f} -> {new_trust_score:.4f}"
                 )
-                validator_info.trust_score = new_trust_score
+                validator_info.trust_score = (
+                    new_trust_score  # <<<--- CẬP NHẬT TRỰC TIẾP
+                )
             else:
                 logger.info(
-                    f"Trust score for {uid_hex} remains {original_trust:.4f} (penalty negligible)."
+                    f"In-memory trust score for {uid_hex} remains {original_trust:.4f}."
                 )
 
             # d. Penalize Status
@@ -647,68 +611,66 @@ async def verify_and_penalize_logic(
                 and validator_info.status == STATUS_ACTIVE
             ):
                 new_status = STATUS_JAILED
-                logger.warning(
-                    f"Setting Validator {uid_hex} status to JAILED (Severity {fraud_severity:.2f} >= Threshold {jailed_threshold})."
-                )
-                validator_info.status = new_status
+                logger.warning(f"Updating IN-MEMORY Status for {uid_hex} to JAILED.")
+                validator_info.status = new_status  # <<<--- CẬP NHẬT TRỰC TIẾP
 
             # e. Prepare new ValidatorDatum for penalty commit
-            original_datum = None
-            original_utxo = utxo_map_on_chain.get(uid_hex)  # << USE CORRECT MAP NAME
+            # original_datum = None
+            # original_utxo = utxo_map_on_chain.get(uid_hex)  # << USE CORRECT MAP NAME
 
-            if (
-                original_utxo
-                and hasattr(original_utxo, "output")
-                and hasattr(original_utxo.output, "datum")
-            ):
-                potential_datum = original_utxo.output.datum
-                if isinstance(potential_datum, ValidatorDatum):
-                    original_datum = potential_datum
-                else:
-                    logger.warning(
-                        f"Object in utxo.output.datum for {uid_hex} not ValidatorDatum: {type(potential_datum)}"
-                    )
-            else:
-                logger.warning(
-                    f"Could not find original UTxO/output/datum in map for {uid_hex}"
-                )
+            # if (
+            #     original_utxo
+            #     and hasattr(original_utxo, "output")
+            #     and hasattr(original_utxo.output, "datum")
+            # ):
+            #     potential_datum = original_utxo.output.datum
+            #     if isinstance(potential_datum, ValidatorDatum):
+            #         original_datum = potential_datum
+            #     else:
+            #         logger.warning(
+            #             f"Object in utxo.output.datum for {uid_hex} not ValidatorDatum: {type(potential_datum)}"
+            #         )
+            # else:
+            #     logger.warning(
+            #         f"Could not find original UTxO/output/datum in map for {uid_hex}"
+            #     )
 
             # --- ADD CHECK FOR original_datum BEFORE try block ---
-            if not original_datum:
-                logger.error(
-                    f"Cannot prepare penalty datum for {uid_hex}: Original on-chain ValidatorDatum object not found/retrieved."
-                )
-                continue  # Skip to next deviator if datum object not found
-            # ---
+            # if not original_datum:
+            #     logger.error(
+            #         f"Cannot prepare penalty datum for {uid_hex}: Original on-chain ValidatorDatum object not found/retrieved."
+            #     )
+            #     continue  # Skip to next deviator if datum object not found
+            # # ---
 
-            try:
-                # Now original_datum is guaranteed to be a ValidatorDatum object
-                datum_to_commit = ValidatorDatum(
-                    uid=original_datum.uid,
-                    subnet_uid=original_datum.subnet_uid,
-                    stake=original_datum.stake,
-                    scaled_last_performance=original_datum.scaled_last_performance,
-                    scaled_trust_score=int(new_trust_score * divisor),
-                    accumulated_rewards=original_datum.accumulated_rewards,
-                    last_update_slot=current_cycle,  # Update slot
-                    performance_history_hash=original_datum.performance_history_hash,
-                    wallet_addr_hash=original_datum.wallet_addr_hash,
-                    status=new_status,  # Update status
-                    registration_slot=original_datum.registration_slot,
-                    api_endpoint=original_datum.api_endpoint,
-                )
-                penalized_validator_datums[uid_hex] = datum_to_commit
-                logger.info(f"Prepared penalty datum update for {uid_hex}.")
-            except Exception as build_e:
-                # This catch block might now catch errors if ValidatorDatum init fails for other reasons
-                logger.exception(
-                    f"Failed to build penalty datum for {uid_hex}: {build_e}"
-                )  # Use logger.exception
+            # try:
+            #     # Now original_datum is guaranteed to be a ValidatorDatum object
+            #     datum_to_commit = ValidatorDatum(
+            #         uid=original_datum.uid,
+            #         subnet_uid=original_datum.subnet_uid,
+            #         stake=original_datum.stake,
+            #         scaled_last_performance=original_datum.scaled_last_performance,
+            #         scaled_trust_score=int(new_trust_score * divisor),
+            #         accumulated_rewards=original_datum.accumulated_rewards,
+            #         last_update_slot=current_cycle,  # Update slot
+            #         performance_history_hash=original_datum.performance_history_hash,
+            #         wallet_addr_hash=original_datum.wallet_addr_hash,
+            #         status=new_status,  # Update status
+            #         registration_slot=original_datum.registration_slot,
+            #         api_endpoint=original_datum.api_endpoint,
+            #     )
+            #     penalized_validator_datums[uid_hex] = datum_to_commit
+            #     logger.info(f"Prepared penalty datum update for {uid_hex}.")
+            # except Exception as build_e:
+            #     # This catch block might now catch errors if ValidatorDatum init fails for other reasons
+            #     logger.exception(
+            #         f"Failed to build penalty datum for {uid_hex}: {build_e}"
+            #     )  # Use logger.exception
 
     except Exception as e:
         logger.exception(f"Error during validator verification/penalization: {e}")
 
-    return penalized_validator_datums
+    return 
 
 
 # --- Logic Chuẩn bị và Commit Cập nhật ---
@@ -941,6 +903,11 @@ async def prepare_validator_updates_logic(
         return {}
 
     state = calculated_states[self_uid_hex]
+
+    # Vì trust/status có thể đã bị thay đổi bởi verify_and_penalize_logic
+    current_trust_float = self_validator_info.trust_score
+    current_status = self_validator_info.status
+
     # Lấy thông tin tĩnh/ít thay đổi từ self_validator_info
     stake_current = int(self_validator_info.stake)
     subnet_uid_current = getattr(self_validator_info, "subnet_uid", 0)
@@ -949,17 +916,22 @@ async def prepare_validator_updates_logic(
     api_endpoint_current = self_validator_info.api_endpoint
     status_current = getattr(self_validator_info, "status", STATUS_ACTIVE)
 
-    # ===>>> SỬA LỖI SIZE BẰNG HASH <<<===
     # Hash địa chỉ và endpoint thay vì dùng bytes gốc
-    wallet_addr_hash_bytes = hashlib.sha256(
-        validator_address_str.encode("utf-8")
-    ).digest()
-    api_endpoint_bytes = (
-        hashlib.sha256(api_endpoint_current.encode("utf-8")).digest()
-        if api_endpoint_current
-        else None
-    )
-    # ===>>> KẾT THÚC SỬA LỖI SIZE <<<===
+    # Lấy hash từ info nếu có, nếu không thì hash lại
+    wallet_addr_hash_bytes = getattr(self_validator_info, "wallet_addr_hash", None)
+    if not wallet_addr_hash_bytes:
+        wallet_addr_hash_bytes = hashlib.sha256(
+            validator_address_str.encode("utf-8")
+        ).digest()
+
+    # Cần đảm bảo ValidatorInfo có lưu hash hoặc logic tính hash nhất quán
+    api_endpoint_bytes = getattr(
+        self_validator_info, "api_endpoint_hash", None
+    )  # Giả sử có trường hash
+    if not api_endpoint_bytes and api_endpoint_current:
+        api_endpoint_bytes = hashlib.sha256(
+            api_endpoint_current.encode("utf-8")
+        ).digest()
 
     # Lấy performance history hash
     perf_history_hash = getattr(self_validator_info, "performance_history_hash", None)
@@ -982,14 +954,16 @@ async def prepare_validator_updates_logic(
             subnet_uid=subnet_uid_current,
             stake=stake_current,
             scaled_last_performance=int(new_perf_float * divisor),
-            scaled_trust_score=int(new_trust_float * divisor),
-            accumulated_rewards=accumulated_rewards_new,
+            scaled_trust_score=int(
+                current_trust_float * divisor
+            ),  # Dùng trust hiện tại
+            accumulated_rewards=accumulated_rewards_new,  # Dùng reward đã cộng dồn (nếu có)
             last_update_slot=current_cycle,
             performance_history_hash=perf_history_hash,  # type: ignore
-            wallet_addr_hash=wallet_addr_hash_bytes,  # <<< Dùng hash
-            status=status_current,
+            wallet_addr_hash=wallet_addr_hash_bytes,  # type: ignore
+            status=current_status,  # Dùng status hiện tại
             registration_slot=registration_slot_current,
-            api_endpoint=api_endpoint_bytes,  # <<< Dùng hash hoặc None # type: ignore
+            api_endpoint=api_endpoint_bytes,  # type: ignore
         )
         validator_updates[self_uid_hex] = new_datum
         logger.info(f"Prepared update for self ({self_uid_hex})")
@@ -1002,46 +976,43 @@ async def prepare_validator_updates_logic(
 
 
 async def commit_updates_logic(
-    miner_updates: Dict[str, MinerDatum],  # {uid_hex: MinerDatum mới}
+    # <<<--- Bỏ miner_updates và penalized_validator_updates ---<<<
     validator_updates: Dict[
         str, ValidatorDatum
-    ],  # {uid_hex: ValidatorDatum mới (self)}
-    penalized_validator_updates: Dict[
-        str, ValidatorDatum
-    ],  # {uid_hex: ValidatorDatum mới (phạt)}
+    ],  # Chỉ còn self-update {uid_hex: ValidatorDatum mới}
     current_utxo_map: Dict[str, UTxO],  # Map từ uid_hex -> UTxO object ở đầu chu kỳ
     context: BlockFrostChainContext,
-    signing_key: ExtendedSigningKey,  # Đây là ExtendedSigningKey
-    stake_signing_key: Optional[ExtendedSigningKey],  # Đây cũng là ExtendedSigningKey
+    signing_key: ExtendedSigningKey,  # Khóa ký của validator chạy node
+    stake_signing_key: Optional[ExtendedSigningKey],  # Khóa stake nếu có
     settings: Any,  # Đối tượng settings đầy đủ
     script_hash: ScriptHash,
     script_bytes: PlutusV3Script,
     network: Network,
-):
+) -> Dict[str, Any]:  # Kiểu trả về có thể là dict chứa kết quả commit
     """
-    Commit các cập nhật MinerDatum và ValidatorDatum lên blockchain.
-    Sử dụng current_utxo_map để lấy input UTXO.
-    Thực hiện mỗi update một giao dịch riêng lẻ.
+    Commit cập nhật ValidatorDatum (CHỈ CHO CHÍNH MÌNH) lên blockchain.
+    Loại bỏ hoàn toàn việc commit cho miner hoặc commit phạt cho validator khác.
     """
-    logger.info(f"Starting blockchain commit process (1 Tx per Update)...")
-    log_details = f"Updates - Miners: {len(miner_updates)}, SelfValidators: {len(validator_updates)}, PenalizedValidators: {len(penalized_validator_updates)}"
-    logger.info(log_details)
+    logger.info(f"Starting blockchain commit process (SELF Validator Update Only)...")
 
-    # --- Lấy thông tin của Owner (Validator đang chạy node) ---
+    # Kiểm tra xem có bản cập nhật nào cần commit không (chỉ là self-update)
+    if not validator_updates:
+        logger.info("No self validator update prepared for this cycle.")
+        return {
+            "status": "completed_no_updates",
+            "submitted_count": 0,
+            "failed_count": 0,
+            "skipped_count": 0,
+        }
+
+    # --- Lấy thông tin Owner (Validator đang chạy node) ---
     try:
-        # Lấy VKey mở rộng nếu cần hash cụ thể từ nó
-        owner_payment_vkey = (
-            signing_key.to_verification_key()
-        )  # Trả về ExtendedVerificationKey
-        owner_payment_key_hash: VerificationKeyHash = (
-            owner_payment_vkey.hash()
-        )  # Lấy hash như cũ
+        owner_payment_vkey = signing_key.to_verification_key()
+        owner_payment_key_hash: VerificationKeyHash = owner_payment_vkey.hash()  # type: ignore
         owner_stake_key_hash: Optional[VerificationKeyHash] = None
         if stake_signing_key:
-            owner_stake_vkey = (
-                stake_signing_key.to_verification_key()
-            )  # Trả về ExtendedVerificationKey
-            owner_stake_key_hash = owner_stake_vkey.hash()  # Lấy hash như cũ
+            owner_stake_vkey = stake_signing_key.to_verification_key()
+            owner_stake_key_hash = owner_stake_vkey.hash()  # type: ignore
 
         owner_address = Address(
             payment_part=owner_payment_key_hash,
@@ -1050,160 +1021,173 @@ async def commit_updates_logic(
         )
         logger.info(f"Commit Owner Address: {owner_address}")
     except Exception as e:
-        logger.exception(
-            f"Failed to derive owner address or keys: {e}. Aborting commit."
-        )
+        logger.exception(f"Failed to derive owner address/keys: {e}. Aborting commit.")
         return {"status": "failed", "reason": "Owner key/address derivation failed."}
 
+    # Địa chỉ contract và Redeemer mặc định
     contract_address = Address(payment_part=script_hash, network=network)
+    # Giả định Tag 0 là cho validator update (cần khớp với script)
+    default_redeemer = Redeemer(0)
     logger.debug(f"Contract Address: {contract_address}")
+    logger.debug(f"Using Redeemer for Validator Update: {default_redeemer}")
 
-    default_redeemer = Redeemer(0)  # Tag 0
+    submitted_tx_ids: Dict[str, str] = {}
+    failed_updates: Dict[str, str] = {}
+    skipped_updates: Dict[str, str] = {}
 
-    submitted_tx_ids: Dict[str, str] = {}  # {uid_hex_type: tx_id}
-    failed_updates: Dict[str, str] = {}  # {uid_hex: error_message}
-    skipped_updates: Dict[str, str] = {}  # {uid_hex: reason}
-
-    # Hợp nhất các cập nhật Validator
-    all_validator_updates = validator_updates.copy()
-    all_validator_updates.update(penalized_validator_updates)
-    logger.info(f"Total validator updates to commit: {len(all_validator_updates)}")
-
-    # --- Gom tất cả updates vào một list để xử lý chung ---
-    # List các tuple: (uid_hex, new_datum, datum_type_str)
-    all_updates: List[Tuple[str, Union[MinerDatum, ValidatorDatum], str]] = []
-    for uid_hex, datum in miner_updates.items():
-        all_updates.append((uid_hex, datum, "Miner"))
-    for uid_hex, datum in all_validator_updates.items():
-        all_updates.append((uid_hex, datum, "Validator"))
-
-    logger.info(f"Total updates to attempt committing: {len(all_updates)}")
-
-    # --- Xử lý tuần tự từng update (để dễ quản lý lỗi và delay) ---
-    commit_count = 0
-    for uid_hex, new_datum, datum_type in all_updates:
-        commit_count += 1
-        log_prefix = (
-            f"Commit #{commit_count}/{len(all_updates)} ({datum_type} {uid_hex})"
+    # --- Chỉ xử lý bản cập nhật duy nhất (self-update) ---
+    # Lấy UID và Datum mới từ dict (chỉ nên có 1 key là UID của validator này)
+    if len(validator_updates) > 1:
+        logger.warning(
+            f"Expected only one self-update in validator_updates, but found {len(validator_updates)}. Processing the first one found..."
         )
-        logger.debug(f"{log_prefix}: Processing...")
 
-        # 1. Lấy Input UTXO từ map
-        input_utxo = current_utxo_map.get(uid_hex)
-        if not input_utxo:
-            error_msg = "Input UTxO not found in initial map"
-            logger.error(f"{log_prefix}: Skipped - {error_msg}")
-            skipped_updates[uid_hex] = error_msg
-            continue
+    # Lấy UID và Datum từ phần tử đầu tiên (hoặc duy nhất)
+    try:
+        self_uid_hex, new_datum = next(iter(validator_updates.items()))
+    except StopIteration:
+        logger.error(
+            "validator_updates dictionary is unexpectedly empty after initial check."
+        )
+        return {"status": "failed", "reason": "validator_updates became empty."}
 
-        logger.debug(f"{log_prefix}: Found Input UTxO: {input_utxo.input}")
+    log_prefix = f"CommitSelf (Validator {self_uid_hex})"
+    logger.debug(f"{log_prefix}: Processing...")
 
-        # 2. Xây dựng Giao dịch
-        try:
-            builder = TransactionBuilder(context=context)
+    # 1. Lấy Input UTXO từ map cho chính mình
+    input_utxo = current_utxo_map.get(self_uid_hex)
+    if not input_utxo:
+        error_msg = "Input UTxO not found in initial map for self-update"
+        logger.error(f"{log_prefix}: Skipped - {error_msg}")
+        skipped_updates[self_uid_hex] = error_msg
+        # Trả về kết quả ngay vì đây là bước quan trọng duy nhất
+        return {
+            "status": "completed_with_skips",
+            "submitted_count": 0,
+            "failed_count": 0,
+            "skipped_count": 1,
+            "submitted_txs": {},
+            "failures": {},
+            "skips": skipped_updates,
+        }
 
-            # a. Thêm Input Script UTXO (UTXO cũ chứa datum)
-            builder.add_script_input(
-                utxo=input_utxo, script=script_bytes, redeemer=default_redeemer
+    logger.debug(f"{log_prefix}: Found Input UTxO for self: {input_utxo.input}")
+
+    # 2. Xây dựng Giao dịch cho self-update
+    try:
+        builder = TransactionBuilder(context=context)
+
+        # a. Thêm Input Script UTXO (UTXO cũ của validator)
+        builder.add_script_input(
+            utxo=input_utxo,
+            script=script_bytes,
+            redeemer=default_redeemer,  # Redeemer cho validator update
+        )
+        logger.debug(f"{log_prefix}: Added script input: {input_utxo.input}")
+
+        # b. Thêm Output mới (trả về contract với datum mới)
+        #    Giữ nguyên giá trị (coin + multi-asset) của input UTXO
+        output_value: Value = input_utxo.output.amount
+        builder.add_output(
+            TransactionOutput(
+                address=contract_address,
+                amount=output_value,
+                datum=new_datum,  # Datum validator mới của chính mình
             )
-            logger.debug(f"{log_prefix}: Added script input: {input_utxo.input}")
+        )
+        logger.debug(
+            f"{log_prefix}: Added script output with new datum (Amount: {output_value.coin} Lovelace)"
+        )
 
-            # b. Thêm Output mới (trả về contract với datum mới)
-            #    Giữ nguyên giá trị (coin + multi-asset) của input UTXO
-            output_value: Value = input_utxo.output.amount
-            builder.add_output(
-                TransactionOutput(
-                    address=contract_address,
-                    amount=output_value,  # <<<--- Giữ nguyên giá trị đầy đủ
-                    datum=new_datum,
-                )
-            )
-            logger.debug(
-                f"{log_prefix}: Added script output with new datum (Amount: {output_value.coin} Lovelace)"
-            )
+        # c. Thêm Input từ ví Owner để trả phí và làm collateral
+        builder.add_input_address(owner_address)
+        logger.debug(f"{log_prefix}: Added owner address input: {owner_address}")
 
-            # c. Thêm Input từ ví Owner để trả phí và làm collateral
-            #    TransactionBuilder sẽ tự động chọn UTXO từ địa chỉ này
-            builder.add_input_address(owner_address)
-            logger.debug(f"{log_prefix}: Added owner address input: {owner_address}")
+        # d. Chỉ định người ký cần thiết (là hash của payment key của owner)
+        builder.required_signers = [owner_payment_key_hash]
+        logger.debug(
+            f"{log_prefix}: Set required signer: {owner_payment_key_hash.to_primitive().hex()}"
+        )
 
-            # d. Chỉ định người ký cần thiết (là hash của payment key của owner)
-            builder.required_signers = [owner_payment_key_hash]
-            logger.debug(
-                f"{log_prefix}: Set required signer: {owner_payment_key_hash.to_primitive().hex()}"
-            )
+        # e. Build và Ký Giao dịch
+        logger.debug(f"{log_prefix}: Building and signing transaction...")
+        # Chỉ cần payment key của owner (trừ khi script yêu cầu stake key)
+        signing_keys_list: List = [signing_key]
+        # if stake_signing_key and owner_stake_key_hash in builder.required_signers:
+        #    signing_keys_list.append(stake_signing_key)
 
-            # e. Build và Ký Giao dịch
-            #    build_and_sign sẽ tự động tính phí, cân bằng giao dịch,
-            #    tạo output trả về tiền thừa (change) cho owner_address.
-            logger.debug(f"{log_prefix}: Building and signing transaction...")
-            # Chỉ cần payment key để ký vì required_signers chỉ có payment key hash
-            # Nếu script yêu cầu stake key, cần thêm stake_signing_key vào list
-            signing_keys_list: List = [signing_key]
-            # if stake_signing_key and owner_stake_key_hash in builder.required_signers:
-            #    signing_keys_list.append(stake_signing_key)
+        signed_tx = builder.build_and_sign(
+            signing_keys=signing_keys_list,  # type: ignore
+            change_address=owner_address,
+        )
+        logger.debug(
+            f"{log_prefix}: Transaction built and signed. Fee: {signed_tx.transaction_body.fee}"
+        )
 
-            signed_tx = builder.build_and_sign(
-                signing_keys=signing_keys_list,
-                change_address=owner_address,
-            )
-            logger.debug(
-                f"{log_prefix}: Transaction built and signed. Fee: {signed_tx.transaction_body.fee}"
-            )
+    except Exception as build_e:
+        logger.exception(
+            f"{log_prefix}: Failed during transaction build/sign phase: {build_e}"
+        )
+        failed_updates[self_uid_hex] = f"Build/Sign Error: {str(build_e)}"
+        # Trả về kết quả lỗi
+        return {
+            "status": "completed_with_errors",
+            "submitted_count": 0,
+            "failed_count": 1,
+            "skipped_count": 0,
+            "submitted_txs": {},
+            "failures": failed_updates,
+            "skips": {},
+        }
 
-        except Exception as build_e:
-            logger.exception(
-                f"{log_prefix}: Failed during transaction build/sign phase: {build_e}"
-            )
-            failed_updates[uid_hex] = f"Build/Sign Error: {str(build_e)}"
-            continue  # Chuyển sang update tiếp theo
+    # 3. Submit Giao dịch self-update
+    tx_id_str: Optional[str] = None
+    try:
+        logger.info(
+            f"{log_prefix}: Submitting self-update transaction to the blockchain..."
+        )
+        # submit_tx của BlockFrostContext trả về TransactionId
+        tx_id: TransactionId = await context.submit_tx(signed_tx)  # type: ignore
+        tx_id_str = str(tx_id)
+        logger.info(
+            f"{log_prefix}: Successfully submitted self-update! TxID: {tx_id_str}"
+        )
+        submitted_tx_ids[f"validator_{self_uid_hex}"] = tx_id_str
 
-        # 3. Submit Giao dịch
-        try:
-            logger.info(f"{log_prefix}: Submitting transaction to the blockchain...")
-            tx_id: TransactionId = await context.submit_tx(
-                signed_tx
-            )  # submit_tx trả về TransactionId
-            tx_id_str = str(tx_id)
-            logger.info(
-                f"{log_prefix}: Successfully submitted update! TxID: {tx_id_str}"
-            )
-            submitted_tx_ids[f"{datum_type.lower()}_{uid_hex}"] = tx_id_str
+    except ApiError as e:
+        error_msg = f"Blockfrost API Error ({e.status_code}): {e.message}"
+        logger.error(
+            f"{log_prefix}: Blockfrost API Error on submit: Status={e.status_code}, Message={e.message}",
+            exc_info=False,
+        )
+        failed_updates[self_uid_hex] = error_msg
+    except Exception as e:
+        error_msg = f"Submit Error: {str(e)}"
+        logger.exception(
+            f"{log_prefix}: Generic error during transaction submission: {e}"
+        )
+        failed_updates[self_uid_hex] = error_msg
 
-            # Delay nhỏ
-            commit_delay = getattr(settings, "CONSENSUS_COMMIT_DELAY_SECONDS", 1.5)
-            logger.debug(f"Waiting {commit_delay}s before next commit...")
-            await asyncio.sleep(commit_delay)
-
-        except ApiError as e:
-            logger.error(
-                f"{log_prefix}: Blockfrost API Error on submit: Status={e.status_code}, Message={e.message}",
-                exc_info=False,
-            )
-            failed_updates[uid_hex] = (
-                f"Blockfrost API Error ({e.status_code}): {e.message}"
-            )
-        except Exception as e:
-            logger.exception(
-                f"{log_prefix}: Generic error during transaction submission: {e}"
-            )
-            failed_updates[uid_hex] = f"Submit Error: {str(e)}"
-
-    # --- 3. Tổng kết ---
+    # --- Tổng kết ---
     total_submitted = len(submitted_tx_ids)
     total_failed = len(failed_updates)
-    total_skipped = len(skipped_updates)
+    total_skipped = len(skipped_updates)  # Sẽ là 0 hoặc 1 ở đây
     logger.info(
-        f"Commit process finished. Submitted: {total_submitted}, Failed: {total_failed}, Skipped (No Input UTXO): {total_skipped}"
+        f"Validator Self-Commit process finished. Submitted: {total_submitted}, Failed: {total_failed}, Skipped (No Input UTXO): {total_skipped}"
     )
     if failed_updates:
-        logger.warning(f"Failed updates details: {failed_updates}")
+        logger.warning(f"Failed self-update details: {failed_updates}")
     if skipped_updates:
-        logger.warning(f"Skipped updates details: {skipped_updates}")
+        logger.warning(f"Skipped self-update details: {skipped_updates}")
 
-    # Trả về kết quả (ví dụ)
     return {
-        "status": "completed" if not failed_updates else "completed_with_errors",
+        "status": (
+            "completed"
+            if total_submitted == 1
+            else (
+                "completed_with_errors" if total_failed == 1 else "completed_with_skips"
+            )
+        ),
         "submitted_count": total_submitted,
         "failed_count": total_failed,
         "skipped_count": total_skipped,
