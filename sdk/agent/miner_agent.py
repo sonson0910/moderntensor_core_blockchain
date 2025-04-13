@@ -56,7 +56,7 @@ class MinerAgent:
         miner_stake_skey: Optional[ExtendedSigningKey] = None,
     ):
         self.miner_uid_hex = miner_uid_hex
-        self.miner_uid_bytes = bytes.fromhex(miner_uid_hex)
+        self.miner_uid_bytes = miner_uid_hex
         self.config = config
         self.signing_key = miner_skey
         self.stake_signing_key = miner_stake_skey
@@ -162,7 +162,7 @@ class MinerAgent:
                 contract_address=self.contract_address,
                 datumclass=MinerDatum,
                 context=self.context,
-                search_uid=self.miner_uid_bytes,
+                search_uid=bytes.fromhex(self.miner_uid_hex),
             )
             if utxo:
                 logger.info(f"Miner {self.miner_uid_hex}: Found own UTxO: {utxo.input}")

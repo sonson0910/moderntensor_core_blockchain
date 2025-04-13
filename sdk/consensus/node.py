@@ -1817,12 +1817,12 @@ class ValidatorNode:
     async def run_cycle(self):
         """
         Thực hiện một chu kỳ đồng thuận hoàn chỉnh (async) theo logic:
-        Miner Tự Cập Nhật + Phạt Ngầm Định Validator.
+        Miner Tự Cập Nhật + Phạt Ngầm Định Validator + Đồng bộ NTP-based.
         """
         logger.info(
-            f"\n--- Starting Cycle {self.current_cycle} (Miner Self-Update + Implicit Penalty) for Validator {self.info.uid} ---"
+            f"\n--- Starting Cycle {self.current_cycle} (Miner Self-Update + Implicit Penalty + NTP Sync) for Validator {self.info.uid} ---"
         )
-        cycle_start_time = time.time()
+        cycle_start_time = time.time()  # Ghi lại thời điểm bắt đầu chính xác
 
         # === 0. Reset State Chu Kỳ ===
         self.cycle_scores = defaultdict(list)
@@ -1835,14 +1835,19 @@ class ValidatorNode:
         # Xóa buffer kết quả miner
         async with self.results_buffer_lock:
             self.results_buffer.clear()
-        self.tasks_sent.clear()  # Xóa task đã gửi từ chu kỳ trước
-        logger.debug(f"Cycle {self.current_cycle}: State reset for new cycle.")
+        self.tasks_sent.clear()
+        logger.debug(f"Cycle {self.current_cycle}: State reset complete.")
 
-        # === 1. Tính Toán Thời Gian ===
+        # === 1. Tính Toán Thời Gian & Mốc Kết Thúc Mục Tiêu ===
+        target_cycle_end_time = 0.0  # Khởi tạo
         try:
             interval_seconds = (
                 self.settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
             )
+            target_cycle_end_time = (
+                cycle_start_time + interval_seconds
+            )  # Mốc kết thúc tuyệt đối
+
             tasking_ratio = self.settings.CONSENSUS_TASKING_PHASE_RATIO
             send_offset_seconds = self.settings.CONSENSUS_SEND_SCORE_OFFSET_MINUTES * 60
             consensus_offset_seconds = (
@@ -1855,20 +1860,18 @@ class ValidatorNode:
                 self.settings.CONSENSUS_MINI_BATCH_INTERVAL_SECONDS
             )
 
-            metagraph_update_time = cycle_start_time + interval_seconds
             end_batching_time = cycle_start_time + (interval_seconds * tasking_ratio)
-            send_score_time = metagraph_update_time - send_offset_seconds
-            consensus_timeout_time = metagraph_update_time - consensus_offset_seconds
-            commit_time = metagraph_update_time - commit_offset_seconds
+            send_score_time = target_cycle_end_time - send_offset_seconds
+            consensus_timeout_time = target_cycle_end_time - consensus_offset_seconds
+            commit_time = target_cycle_end_time - commit_offset_seconds
 
-            # Kiểm tra logic thời gian
             if not (
                 cycle_start_time
                 < end_batching_time
                 < send_score_time
                 < consensus_timeout_time
                 < commit_time
-                < metagraph_update_time
+                < target_cycle_end_time
             ):
                 logger.error(
                     "Cycle timing configuration is illogical. Check offsets and interval."
@@ -1876,37 +1879,35 @@ class ValidatorNode:
                 # Có thể dừng hoặc điều chỉnh lại thời gian ở đây
                 return  # Dừng chu kỳ nếu thời gian lỗi
             logger.info(
-                f"Cycle {self.current_cycle} Timings Calculated: EndBatching={time.strftime('%T', time.localtime(end_batching_time))}, SendScore={time.strftime('%T', time.localtime(send_score_time))}, ConsensusTimeout={time.strftime('%T', time.localtime(consensus_timeout_time))}, Commit={time.strftime('%T', time.localtime(commit_time))}"
+                f"Cycle {self.current_cycle} Target End Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(target_cycle_end_time))}"
+            )
+            logger.info(
+                f" - EndBatching={time.strftime('%T', time.localtime(end_batching_time))}, SendScore={time.strftime('%T', time.localtime(send_score_time))}, ConsensusTimeout={time.strftime('%T', time.localtime(consensus_timeout_time))}, Commit={time.strftime('%T', time.localtime(commit_time))}"
             )
 
         except AttributeError as e:
-            logger.error(
-                f"Missing timing configuration in settings: {e}. Cannot run cycle."
-            )
+            logger.error(f"Missing timing config: {e}")
             return
         except Exception as e:
-            logger.exception(f"Error calculating cycle timings: {e}")
+            logger.exception(f"Timing calculation error: {e}")
             return
 
-        # Khởi tạo biến kết quả cho chu kỳ này
+        # Khởi tạo biến kết quả
         final_miner_scores: Dict[str, float] = {}
         calculated_validator_states: Dict[str, Any] = {}
-        validator_self_update: Dict[str, ValidatorDatum] = {}  # Chỉ chứa self update
+        validator_self_update: Dict[str, ValidatorDatum] = {}
 
         try:
             # === BƯỚC 2: KIỂM TRA & PHẠT VALIDATOR (Cập nhật IN-MEMORY) ===
             logger.info(
                 "Step 2: Verifying previous cycle validator updates (In-Memory Penalty)..."
             )
-            # Hàm này giờ chỉ cập nhật self.validators_info, không trả về datum commit
-            await self.verify_and_penalize_validators()
-            logger.info(
-                "Step 2: Verification/Penalization check completed (In-Memory state updated)."
-            )
+            await self.verify_and_penalize_validators()  # Cập nhật self.validators_info
+            logger.info("Step 2: Verification/Penalization check completed.")
 
             # === BƯỚC 3: TẢI DỮ LIỆU METAGRAPH ===
             logger.info("Step 3: Loading Metagraph data...")
-            await self.load_metagraph_data()  # Load lại với trạng thái validator có thể đã bị phạt
+            await self.load_metagraph_data()  # Load lại với state đã có thể bị phạt
             logger.info(
                 f"Step 3: Metagraph loaded. Miners: {len(self.miners_info)}, Validators: {len(self.validators_info)}"
             )
@@ -1923,62 +1924,64 @@ class ValidatorNode:
                     batch_num += 1
                     logger.debug(f"--- Starting Mini-Batch {batch_num} ---")
 
-                    # 4a. Chọn miners khả dụng
+                    # 4a. Chọn miners
                     selected_miners = self._select_available_miners_for_batch(
                         mini_batch_size
                     )
-
                     if not selected_miners:
                         logger.debug(
                             f"Batch {batch_num}: No available miners. Waiting..."
                         )
                         await asyncio.sleep(mini_batch_interval_seconds)
                         if time.time() >= end_batching_time:
-                            break  # Hết giờ
+                            logger.info("Tasking time ended while waiting for miners.")
+                            break
                         continue
 
-                    # 4b. Gửi lô task
+                    # 4b. Gửi task
                     batch_assignments = await self._send_task_batch(
                         selected_miners, batch_num
                     )
                     tasks_sent_this_cycle += len(batch_assignments)
-
                     if not batch_assignments:
                         logger.warning(f"Batch {batch_num}: Failed to send any tasks.")
                         # Gỡ busy cho miner nếu send fail toàn bộ
                         for m in selected_miners:
                             self.miner_is_busy.discard(m.uid)
 
-                    # 4c. Chờ kết quả lô
+                    # 4c. Chờ kết quả
+                    time_now = time.time()
                     wait_duration = min(
                         mini_batch_wait_seconds,
-                        max(0, end_batching_time - time.time() - 1),
-                    )  # Chờ hoặc đến hết giờ tasking
+                        max(0, end_batching_time - time_now - 1),
+                    )  # Chờ hoặc đến hết giờ tasking - 1s
                     logger.debug(
-                        f"Batch {batch_num}: Waiting {wait_duration:.1f}s for results..."
+                        f"Batch {batch_num}: Waiting {wait_duration:.1f}s for results (until ~{time.strftime('%T', time.localtime(time_now + wait_duration))})..."
                     )
                     if wait_duration > 0:
                         await asyncio.sleep(wait_duration)
                     logger.debug(f"Batch {batch_num}: Finished waiting period.")
 
-                    # 4d. Chấm điểm lô hiện tại (gồm cả timeout)
-                    await self._score_current_batch(batch_assignments)
+                    # 4d. Chấm điểm lô
+                    await self._score_current_batch(
+                        batch_assignments
+                    )  # Cập nhật self.cycle_scores
 
-                    # Chờ giữa các lô
+                    # Nghỉ giữa các lô nếu còn thời gian
                     if time.time() < end_batching_time:
                         await asyncio.sleep(mini_batch_interval_seconds)
                     else:
-                        break  # Hết giờ
-
+                        logger.info("Tasking phase time ended after scoring batch.")
+                        break
                 logger.info(
-                    f"Step 4-7: Mini-Batch Tasking Phase Finished. Tasks sent: {tasks_sent_this_cycle}"
+                    f"Step 4-7: Mini-Batch Tasking Phase Finished. Total tasks sent: {tasks_sent_this_cycle}"
                 )
 
             # === BƯỚC 8: BROADCAST ĐIỂM CỤC BỘ ===
             wait_before_broadcast_time = send_score_time - time.time()
             if wait_before_broadcast_time > 0:
                 logger.info(
-                    f"Step 8: Waiting {wait_before_broadcast_time:.1f}s until P2P score broadcast time..."
+                    f"Step 8: Waiting {wait_before_broadcast_time:.1f}s until P2P score broadcast time ({time.strftime('%T', time.localtime(send_score_time))})..."
                 )
                 await asyncio.sleep(wait_before_broadcast_time)
             accumulated_scores_count = sum(len(v) for v in self.cycle_scores.values())
@@ -1994,7 +1997,7 @@ class ValidatorNode:
             consensus_possible = False
             if wait_for_scores_timeout > 0:
                 logger.info(
-                    f"Step 9: Waiting up to {wait_for_scores_timeout:.1f}s for P2P scores..."
+                    f"Step 9: Waiting up to {wait_for_scores_timeout:.1f}s for P2P scores (until {time.strftime('%T', time.localtime(consensus_timeout_time))})..."
                 )
                 consensus_possible = await self.wait_for_consensus_scores(
                     wait_for_scores_timeout
@@ -2004,7 +2007,7 @@ class ValidatorNode:
                 )
             else:
                 logger.warning(
-                    f"Step 9: Not enough time left ({wait_for_scores_timeout:.1f}s) to wait."
+                    f"Step 9: Not enough time left ({wait_for_scores_timeout:.1f}s) to wait for consensus scores."
                 )
                 # Kiểm tra lần cuối
                 async with self.received_scores_lock:
@@ -2015,7 +2018,11 @@ class ValidatorNode:
                     )
                     scores_received_count = 0
                     if self.current_cycle in self.received_validator_scores:
-                        unique_senders = set(val_dict.keys() for task_dict in self.received_validator_scores[self.current_cycle].values() for val_dict in task_dict)  # type: ignore
+                        unique_senders = set()
+                        for task_scores in self.received_validator_scores[
+                            self.current_cycle
+                        ].values():
+                            unique_senders.update(task_scores.keys())
                         if self.cycle_scores:
                             unique_senders.add(self.info.uid)
                         scores_received_count = len(unique_senders)
@@ -2030,10 +2037,7 @@ class ValidatorNode:
                         )
 
             # === BƯỚC 10: CHẠY ĐỒNG THUẬN & TÍNH TOÁN TRẠNG THÁI ===
-            logger.info(
-                "Step 10: Running final consensus calculations (using potentially penalized state)..."
-            )
-            # run_consensus_and_penalties sử dụng self.validators_info đã cập nhật ở Bước 2
+            logger.info("Step 10: Running final consensus calculations...")
             final_miner_scores, calculated_validator_states = (
                 self.run_consensus_and_penalties(
                     consensus_possible=consensus_possible,
@@ -2058,17 +2062,14 @@ class ValidatorNode:
 
             # 11a. Tính toán phần thưởng (incentive) cho từng miner dựa trên kết quả đồng thuận
             calculated_miner_rewards: Dict[str, float] = {}
-            if final_miner_scores:  # Chỉ tính nếu có điểm miner cuối cùng
-                # Tính tổng giá trị hệ thống (dùng để chuẩn hóa incentive)
-                # Tổng trọng số (W) * hiệu suất đồng thuận (P_adj) của các miner *đang hoạt động*
+            if final_miner_scores:
                 total_weighted_perf = sum(
                     getattr(minfo, "weight", 0.0) * final_miner_scores.get(uid, 0.0)
                     for uid, minfo in self.miners_info.items()
                     # Chỉ tính cho miner active tại thời điểm load metagraph đầu chu kỳ
                     if getattr(minfo, "status", STATUS_ACTIVE) == STATUS_ACTIVE
                 )
-                # Đặt giá trị tối thiểu để tránh chia cho 0 và incentive quá lớn khi mạng nhỏ
-                min_total_value = 1.0  # Có thể cấu hình qua settings
+                min_total_value = 1.0
                 total_system_value = max(min_total_value, total_weighted_perf)
                 logger.debug(
                     f"Calculated total_system_value for miner incentive: {total_system_value:.6f}"
@@ -2090,7 +2091,6 @@ class ValidatorNode:
                                 miner_info, "trust_score", 0.0
                             )
                             weight_for_incentive = getattr(miner_info, "weight", 0.0)
-
                             incentive = calculate_miner_incentive(
                                 trust_score=trust_for_incentive,
                                 miner_weight=weight_for_incentive,
@@ -2131,9 +2131,7 @@ class ValidatorNode:
                 final_miner_scores=final_miner_scores,
                 calculated_rewards=calculated_miner_rewards,  # Truyền phần thưởng đã tính
             )
-            logger.info(
-                f"Step 11: Consensus results (P_adj + Incentives) cached/published for {len(final_miner_scores)} miners."
-            )
+            logger.info("Step 11: Consensus results cached/published.")
 
             # === BƯỚC 12: CHUẨN BỊ CẬP NHẬT VALIDATOR DATUM (CHO CHÍNH MÌNH) ===
             logger.info("Step 12: Preparing self validator datum update...")
@@ -2149,7 +2147,7 @@ class ValidatorNode:
             wait_before_commit = commit_time - time.time()
             if wait_before_commit > 0:
                 logger.info(
-                    f"Step 13: Waiting {wait_before_commit:.1f}s before committing self-update..."
+                    f"Step 13: Waiting {wait_before_commit:.1f}s before committing self-update (target: {time.strftime('%T', time.localtime(commit_time))})..."
                 )
                 await asyncio.sleep(wait_before_commit)
             else:
@@ -2168,15 +2166,39 @@ class ValidatorNode:
             logger.exception(f"Error during consensus cycle {self.current_cycle}: {e}")
 
         finally:
-            # === DỌN DẸP CUỐI CHU KỲ ===
-            cycle_end_time = time.time()
+            # === DỌN DẸP CUỐI CHU KỲ & ĐỒNG BỘ HÓA ===
+            cycle_end_time_actual = time.time()  # Thời điểm thực tế kết thúc xử lý
+            cycle_duration_actual = cycle_end_time_actual - cycle_start_time
             logger.info(
-                f"--- Cycle {self.current_cycle} Finished (Miner Self-Update + Implicit Penalty) (Duration: {cycle_end_time - cycle_start_time:.1f}s) ---"
+                f"Cycle {self.current_cycle} internal processing finished (Duration: {cycle_duration_actual:.1f}s)."
             )
-            self.current_cycle += 1
-            self._save_current_cycle()
+
+            # --- Tính toán thời gian chờ đến mốc chu kỳ tiếp theo ---
+            # Sử dụng target_cycle_end_time đã tính ở đầu hàm
+            current_time = time.time()
+            wait_time_for_sync = target_cycle_end_time - current_time
+
+            if wait_time_for_sync > 0:
+                logger.info(
+                    f"Waiting {wait_time_for_sync:.1f}s to synchronize end of cycle {self.current_cycle} at target time {time.strftime('%T', time.localtime(target_cycle_end_time))}..."
+                )
+                await asyncio.sleep(wait_time_for_sync)
+            elif wait_time_for_sync < -5:  # Nếu trễ quá 5 giây
+                logger.warning(
+                    f"Cycle {self.current_cycle} processing exceeded target end time by {-wait_time_for_sync:.1f}s. Starting next cycle immediately."
+                )
+            else:  # Trễ ít hoặc vừa đúng giờ
+                logger.info(
+                    f"Cycle {self.current_cycle} finished near target time. Starting next cycle."
+                )
+
+            # --- Cập nhật và Lưu trạng thái ---
+            completed_cycle = self.current_cycle  # Lưu lại số chu kỳ vừa hoàn thành
+            self._save_current_cycle()  # Lưu chu kỳ đã hoàn thành (completed_cycle)
+            self.current_cycle += 1  # Tăng lên cho chu kỳ tiếp theo
+
             # Dọn dẹp P2P scores cũ
-            cleanup_cycle = self.current_cycle - 3
+            cleanup_cycle = completed_cycle - 2  # Giữ lại dữ liệu 2 chu kỳ trước
             async with self.received_scores_lock:
                 if cleanup_cycle in self.received_validator_scores:
                     try:
@@ -2186,6 +2208,8 @@ class ValidatorNode:
                         )
                     except KeyError:
                         pass
+            logger.info(f"--- End of Cycle {completed_cycle} ---")
+            # --- Kết thúc Finally ---
 
 
 # --- Hàm chạy chính (Đã cập nhật) ---
