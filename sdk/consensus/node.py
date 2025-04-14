@@ -1961,6 +1961,7 @@ class ValidatorNode:
         final_miner_scores: Dict[str, float] = {}
         calculated_validator_states: Dict[str, Any] = {}
         validator_self_update: Dict[str, ValidatorDatum] = {}
+        validator_self_update: Dict[str, ValidatorDatum] = {}
 
         try:
             # === C. Verify/Penalize Chu kỳ Trước ===
@@ -2124,6 +2125,7 @@ class ValidatorNode:
                     if getattr(minfo, "status", STATUS_ACTIVE) == STATUS_ACTIVE
                 )
                 min_total_value = 1.0
+                min_total_value = 1.0
                 total_system_value = max(min_total_value, total_weighted_perf)
                 logger.debug(
                     f"Calculated total_system_value for miner incentive: {total_system_value:.6f}"
@@ -2210,6 +2212,7 @@ class ValidatorNode:
             self.current_cycle += 1  # Tăng lên cho chu kỳ tiếp theo
 
             # Dọn dẹp P2P scores cũ
+            cleanup_cycle = completed_cycle - 2  # Giữ lại dữ liệu 2 chu kỳ trước
             cleanup_cycle = completed_cycle - 2  # Giữ lại dữ liệu 2 chu kỳ trước
             async with self.received_scores_lock:
                 if cleanup_cycle in self.received_validator_scores:
