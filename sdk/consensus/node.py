@@ -127,8 +127,12 @@ class ValidatorNode:
         self.stake_signing_key = stake_signing_key
         self.settings = settings  # Sử dụng instance settings đã import
         self.state_file = state_file  # Lưu đường dẫn file
-        self.current_cycle: int = self._load_last_cycle()
         self.miners_selected_for_cycle: Set[str] = set()
+
+        # Load cycle ban đầu
+        self.current_cycle = self._load_last_cycle()
+        self.slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH
+        # Đồng bộ hóa cycle ban đầu với slot hiện tại nếu cần
 
         self.network = Network.TESTNET
 
@@ -197,41 +201,36 @@ class ValidatorNode:
         logger.info(f"Cardano Network: {self.settings.CARDANO_NETWORK}")
 
     def _load_last_cycle(self) -> int:
-        """Tải chu kỳ cuối cùng từ file trạng thái."""
+        """Tải chu kỳ cuối cùng đã hoàn thành từ file trạng thái."""
         try:
             if os.path.exists(self.state_file):
                 with open(self.state_file, "r") as f:
                     state_data = json.load(f)
-                    last_cycle = state_data.get("last_completed_cycle", -1)
-                    logger.info(
-                        f"Loaded last completed cycle {last_cycle} from {self.state_file}"
-                    )
-                    # Chu kỳ hiện tại sẽ là chu kỳ tiếp theo
-                    return last_cycle + 1
+                    last_completed_cycle = state_data.get("last_completed_cycle", -1)
+                    # Trả về chu kỳ *tiếp theo* cần chạy
+                    return last_completed_cycle + 1
             else:
                 logger.warning(
                     f"State file {self.state_file} not found. Starting from cycle 0."
                 )
-                return 0
+                return 0  # Bắt đầu từ cycle 0
         except Exception as e:
             logger.error(
                 f"Error loading state file {self.state_file}: {e}. Starting from cycle 0."
             )
             return 0
 
-    def _save_current_cycle(self):
+    def _save_current_cycle(self, completed_cycle: int):
         """Lưu chu kỳ *vừa hoàn thành* vào file trạng thái."""
-        # Chu kỳ vừa hoàn thành là self.current_cycle - 1 (sau khi run_cycle tăng lên)
-        cycle_to_save = self.current_cycle - 1
-        if cycle_to_save < 0:
+        if completed_cycle < 0:
             return  # Chưa hoàn thành chu kỳ nào
 
-        state_data = {"last_completed_cycle": cycle_to_save}
+        state_data = {"last_completed_cycle": completed_cycle}
         try:
             with open(self.state_file, "w") as f:
                 json.dump(state_data, f)
             logger.debug(
-                f"Saved last completed cycle {cycle_to_save} to {self.state_file}"
+                f"Saved last completed cycle {completed_cycle} to {self.state_file}"
             )
         except Exception as e:
             logger.error(f"Error saving state file {self.state_file}: {e}")
@@ -1193,6 +1192,61 @@ class ValidatorNode:
         # raise NotImplementedError("Subclasses must implement _score_individual_result")
         return 0.0
 
+    async def _get_current_slot(self) -> Optional[int]:
+        """Lấy số slot hiện tại từ context Cardano."""
+        retries = 3
+        for attempt in range(retries):
+            try:
+                # Revert to using last_block_slot property
+                current_slot = await asyncio.to_thread(
+                    lambda: self.context.last_block_slot
+                )
+                if current_slot is None:
+                    logger.warning(
+                        f"Attempt {attempt + 1}: self.context.last_block_slot returned None."
+                    )
+                else:
+                    return current_slot  # Return successfully fetched slot
+            except Exception as e:
+                logger.warning(
+                    f"Attempt {attempt + 1}: Error fetching latest slot via last_block_slot: {e}"
+                )
+            if attempt < retries - 1:
+                await asyncio.sleep(2)  # Chờ 2 giây trước khi thử lại
+        logger.error("Failed to get current slot after multiple retries.")
+        return None
+
+    async def wait_until_slot(self, target_slot: int):
+        """Chờ cho đến khi số slot hiện tại của blockchain đạt hoặc vượt qua target_slot."""
+        if target_slot <= 0:
+            logger.warning(
+                f"wait_until_slot called with invalid target_slot: {target_slot}"
+            )
+            return
+
+        logger.debug(f"Waiting until slot {target_slot}...")
+        while True:
+            current_slot = await self._get_current_slot()
+            if current_slot is None:
+                logger.warning(
+                    "Failed to get current slot during wait, retrying in 5s..."
+                )
+                await asyncio.sleep(5)
+                continue
+
+            if current_slot >= target_slot:
+                logger.info(
+                    f"Reached target slot {target_slot} (Current: {current_slot}). Proceeding."
+                )
+                break
+
+            wait_interval = self.settings.CONSENSUS_SLOT_QUERY_INTERVAL_SECONDS
+            logger.log(
+                logging.DEBUG - 1,
+                f"Current slot: {current_slot}, Target: {target_slot}. Waiting {wait_interval:.1f}s...",
+            )
+            await asyncio.sleep(wait_interval)
+
     async def _send_task_via_network_async(
         self, miner_endpoint: str, task: TaskModel
     ) -> bool:
@@ -1816,376 +1870,354 @@ class ValidatorNode:
 
     async def run_cycle(self):
         """
-        Thực hiện một chu kỳ đồng thuận hoàn chỉnh (async) theo logic:
-        Miner Tự Cập Nhật + Phạt Ngầm Định Validator.
+        Thực hiện một chu kỳ đồng thuận hoàn chỉnh (async) đồng bộ hóa bằng Slot Number.
+        Giai đoạn giao task cũng được giới hạn bởi slot number.
         """
+        # === A. Khởi đầu Chu kỳ & Tính toán Slot ===
         logger.info(
-            f"\n--- Starting Cycle {self.current_cycle} (Miner Self-Update + Implicit Penalty) for Validator {self.info.uid} ---"
+            f"\n--- Starting Cycle {self.current_cycle} (Slot-Based Sync) for Validator {self.info.uid} ---"
         )
-        cycle_start_time = time.time()
 
-        # === 0. Reset State Chu Kỳ ===
+        # --- Lấy slot hiện tại và tính toán các mốc ---
+        current_slot_start = await self._get_current_slot()
+        if current_slot_start is None:
+            logger.error(
+                f"Failed to get current slot at cycle start. Skipping cycle {self.current_cycle}."
+            )
+            await asyncio.sleep(60)  # Chờ 1 phút trước khi thử lại chu kỳ sau
+            return
+
+        slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH
+        # Đồng bộ hóa current_cycle nếu cần
+        current_cycle_num_from_slot = current_slot_start // slot_length
+        if current_cycle_num_from_slot >= self.current_cycle:
+            logger.warning(
+                f"Current slot {current_slot_start} suggests cycle {current_cycle_num_from_slot} or later, but node is processing cycle {self.current_cycle}. Adjusting current_cycle."
+            )
+            self.current_cycle = current_cycle_num_from_slot + 1
+            # QUAN TRỌNG: Cần reset state chu kỳ lại nếu số cycle bị nhảy
+            # (Gọi lại phần reset bên dưới hoặc reset ngay đây)
+
+        target_end_slot = self.current_cycle * slot_length - 1
+        logger.info(
+            f"Cycle {self.current_cycle}: Current Slot ~{current_slot_start}, Target End Slot: {target_end_slot}"
+        )
+
+        # Tính các mốc slot quan trọng
+        try:
+            tasking_end_target_slot = (
+                target_end_slot - self.settings.CONSENSUS_TASKING_END_SLOTS_OFFSET
+            )
+            broadcast_target_slot = (
+                target_end_slot - self.settings.CONSENSUS_BROADCAST_SLOTS_OFFSET
+            )
+            consensus_wait_end_slot = (
+                target_end_slot - self.settings.CONSENSUS_TIMEOUT_SLOTS_OFFSET
+            )
+            commit_target_slot = (
+                target_end_slot - self.settings.CONSENSUS_COMMIT_SLOTS_OFFSET
+            )
+
+            # Kiểm tra thứ tự logic
+            if not (
+                current_slot_start
+                < tasking_end_target_slot
+                < broadcast_target_slot
+                < consensus_wait_end_slot
+                < commit_target_slot
+                < target_end_slot
+            ):
+                logger.error(
+                    f"Slot timing configuration illogical. Check offsets. Current: {current_slot_start}, TaskEnd: {tasking_end_target_slot}, Broadcast: {broadcast_target_slot}, ConsensusEnd: {consensus_wait_end_slot}, Commit: {commit_target_slot}, CycleEnd: {target_end_slot}"
+                )
+                # Quyết định dừng hoặc chạy với lỗi? Tạm thời dừng.
+                return
+            logger.info(
+                f" - Target Slots: TaskingEnd <= {tasking_end_target_slot}, Broadcast >= {broadcast_target_slot}, ConsensusWaitEnd >= {consensus_wait_end_slot}, Commit >= {commit_target_slot}"
+            )
+
+        except AttributeError as e:
+            logger.error(f"Missing slot offset configuration: {e}")
+            return
+        except Exception as e:
+            logger.exception(f"Slot timing calculation error: {e}")
+            return
+
+        # === B. Reset State ===
+        logger.debug(f"Cycle {self.current_cycle}: Resetting cycle state...")
         self.cycle_scores = defaultdict(list)
         self.miner_is_busy = set()
-        # Xóa điểm P2P đã nhận cho chu kỳ *sắp tới* nếu có (tránh dùng dữ liệu cũ)
         async with self.received_scores_lock:
             if self.current_cycle in self.received_validator_scores:
                 del self.received_validator_scores[self.current_cycle]
             self.received_validator_scores[self.current_cycle] = defaultdict(dict)
-        # Xóa buffer kết quả miner
         async with self.results_buffer_lock:
             self.results_buffer.clear()
-        self.tasks_sent.clear()  # Xóa task đã gửi từ chu kỳ trước
-        logger.debug(f"Cycle {self.current_cycle}: State reset for new cycle.")
+        self.tasks_sent.clear()
+        self.miners_selected_for_cycle = set()  # Reset danh sách miner đã chọn
+        logger.debug(f"Cycle {self.current_cycle}: State reset complete.")
 
-        # === 1. Tính Toán Thời Gian ===
-        try:
-            interval_seconds = (
-                self.settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
-            )
-            tasking_ratio = self.settings.CONSENSUS_TASKING_PHASE_RATIO
-            send_offset_seconds = self.settings.CONSENSUS_SEND_SCORE_OFFSET_MINUTES * 60
-            consensus_offset_seconds = (
-                self.settings.CONSENSUS_CONSENSUS_TIMEOUT_OFFSET_MINUTES * 60
-            )
-            commit_offset_seconds = self.settings.CONSENSUS_COMMIT_OFFSET_SECONDS
-            mini_batch_wait_seconds = self.settings.CONSENSUS_MINI_BATCH_WAIT_SECONDS
-            mini_batch_size = self.settings.CONSENSUS_MINI_BATCH_SIZE
-            mini_batch_interval_seconds = (
-                self.settings.CONSENSUS_MINI_BATCH_INTERVAL_SECONDS
-            )
-
-            metagraph_update_time = cycle_start_time + interval_seconds
-            end_batching_time = cycle_start_time + (interval_seconds * tasking_ratio)
-            send_score_time = metagraph_update_time - send_offset_seconds
-            consensus_timeout_time = metagraph_update_time - consensus_offset_seconds
-            commit_time = metagraph_update_time - commit_offset_seconds
-
-            # Kiểm tra logic thời gian
-            if not (
-                cycle_start_time
-                < end_batching_time
-                < send_score_time
-                < consensus_timeout_time
-                < commit_time
-                < metagraph_update_time
-            ):
-                logger.error(
-                    "Cycle timing configuration is illogical. Check offsets and interval."
-                )
-                # Có thể dừng hoặc điều chỉnh lại thời gian ở đây
-                return  # Dừng chu kỳ nếu thời gian lỗi
-            logger.info(
-                f"Cycle {self.current_cycle} Timings Calculated: EndBatching={time.strftime('%T', time.localtime(end_batching_time))}, SendScore={time.strftime('%T', time.localtime(send_score_time))}, ConsensusTimeout={time.strftime('%T', time.localtime(consensus_timeout_time))}, Commit={time.strftime('%T', time.localtime(commit_time))}"
-            )
-
-        except AttributeError as e:
-            logger.error(
-                f"Missing timing configuration in settings: {e}. Cannot run cycle."
-            )
-            return
-        except Exception as e:
-            logger.exception(f"Error calculating cycle timings: {e}")
-            return
-
-        # Khởi tạo biến kết quả cho chu kỳ này
+        # Khởi tạo biến kết quả
         final_miner_scores: Dict[str, float] = {}
         calculated_validator_states: Dict[str, Any] = {}
-        validator_self_update: Dict[str, ValidatorDatum] = {}  # Chỉ chứa self update
+        validator_self_update: Dict[str, ValidatorDatum] = {}
 
         try:
-            # === BƯỚC 2: KIỂM TRA & PHẠT VALIDATOR (Cập nhật IN-MEMORY) ===
-            logger.info(
-                "Step 2: Verifying previous cycle validator updates (In-Memory Penalty)..."
-            )
-            # Hàm này giờ chỉ cập nhật self.validators_info, không trả về datum commit
+            # === C. Verify/Penalize Chu kỳ Trước ===
+            logger.info("Step 1: Verifying previous cycle validator updates...")
             await self.verify_and_penalize_validators()
+            logger.info("Step 1: Verification/Penalization check completed.")
+
+            # === D. Load Metagraph ===
+            logger.info("Step 2: Loading Metagraph data...")
+            await self.load_metagraph_data()
             logger.info(
-                "Step 2: Verification/Penalization check completed (In-Memory state updated)."
+                f"Step 2: Metagraph loaded. Miners: {len(self.miners_info)}, Validators: {len(self.validators_info)}"
             )
 
-            # === BƯỚC 3: TẢI DỮ LIỆU METAGRAPH ===
-            logger.info("Step 3: Loading Metagraph data...")
-            await self.load_metagraph_data()  # Load lại với trạng thái validator có thể đã bị phạt
-            logger.info(
-                f"Step 3: Metagraph loaded. Miners: {len(self.miners_info)}, Validators: {len(self.validators_info)}"
-            )
-
-            # === BƯỚC 4-7: VÒNG LẶP MINI-BATCH (Giao Task & Chấm Điểm Cục Bộ) ===
+            # === E. Giai đoạn Giao Task (Mini-Batch, giới hạn bởi Slot) ===
             if not self.miners_info:
-                logger.warning("Step 4-7: No miners found. Skipping tasking phase.")
+                logger.warning("Step 3 (Tasking): No miners found. Skipping.")
             else:
-                logger.info("Step 4-7: Entering Mini-Batch Tasking Phase...")
+                logger.info(
+                    f"Step 3: Entering Mini-Batch Tasking Phase (until slot ~{tasking_end_target_slot})..."
+                )
                 batch_num = 0
                 tasks_sent_this_cycle = 0
-                while time.time() < end_batching_time:
-                    batch_start_time = time.time()
-                    batch_num += 1
-                    logger.debug(f"--- Starting Mini-Batch {batch_num} ---")
+                while True:
+                    current_slot_in_tasking = await self._get_current_slot()
+                    if current_slot_in_tasking is None:
+                        logger.warning(
+                            "Tasking phase: Failed to get current slot, pausing briefly."
+                        )
+                        await asyncio.sleep(
+                            self.settings.CONSENSUS_MINI_BATCH_INTERVAL_SECONDS
+                        )
+                        continue  # Thử lại ở lần lặp sau
 
-                    # 4a. Chọn miners khả dụng
-                    selected_miners = self._select_available_miners_for_batch(
-                        mini_batch_size
+                    # Điều kiện dừng chính của giai đoạn tasking
+                    if current_slot_in_tasking >= tasking_end_target_slot:
+                        logger.info(
+                            f"Reached tasking end slot ({tasking_end_target_slot} vs current {current_slot_in_tasking}). Ending tasking phase."
+                        )
+                        break  # Thoát vòng lặp
+
+                    # --- Logic mini-batch ---
+                    batch_num += 1
+                    logger.debug(
+                        f"--- Starting Mini-Batch {batch_num} at slot {current_slot_in_tasking} ---"
                     )
 
+                    # Chọn miners (logic cũ)
+                    selected_miners = self._select_available_miners_for_batch(
+                        self.settings.CONSENSUS_MINI_BATCH_SIZE
+                    )
                     if not selected_miners:
                         logger.debug(
                             f"Batch {batch_num}: No available miners. Waiting..."
                         )
-                        await asyncio.sleep(mini_batch_interval_seconds)
-                        if time.time() >= end_batching_time:
-                            break  # Hết giờ
-                        continue
+                        # Chờ ngắn trước khi kiểm tra lại slot ở vòng lặp sau
+                        await asyncio.sleep(
+                            self.settings.CONSENSUS_MINI_BATCH_INTERVAL_SECONDS
+                        )
+                        continue  # Bỏ qua batch này, kiểm tra lại slot
 
-                    # 4b. Gửi lô task
+                    # Gửi task (logic cũ)
                     batch_assignments = await self._send_task_batch(
                         selected_miners, batch_num
                     )
-                    tasks_sent_this_cycle += len(batch_assignments)
-
                     if not batch_assignments:
                         logger.warning(f"Batch {batch_num}: Failed to send any tasks.")
-                        # Gỡ busy cho miner nếu send fail toàn bộ
-                        for m in selected_miners:
-                            self.miner_is_busy.discard(m.uid)
+                        # Gỡ busy cho miner nếu send fail toàn bộ (logic này đã có trong _send_task_batch)
+                    else:
+                        tasks_sent_this_cycle += len(batch_assignments)
+                        # Thêm miner đã chọn vào set của cycle
+                        for assign in batch_assignments.values():
+                            self.miners_selected_for_cycle.add(assign.miner_uid)
 
-                    # 4c. Chờ kết quả lô
-                    wait_duration = min(
-                        mini_batch_wait_seconds,
-                        max(0, end_batching_time - time.time() - 1),
-                    )  # Chờ hoặc đến hết giờ tasking
+                    # Chờ kết quả batch (fixed seconds)
+                    batch_wait_seconds = self.settings.CONSENSUS_MINI_BATCH_WAIT_SECONDS
                     logger.debug(
-                        f"Batch {batch_num}: Waiting {wait_duration:.1f}s for results..."
+                        f"Batch {batch_num}: Waiting {batch_wait_seconds:.1f}s for results..."
                     )
-                    if wait_duration > 0:
-                        await asyncio.sleep(wait_duration)
+                    await asyncio.sleep(batch_wait_seconds)
                     logger.debug(f"Batch {batch_num}: Finished waiting period.")
 
-                    # 4d. Chấm điểm lô hiện tại (gồm cả timeout)
+                    # Chấm điểm batch (logic cũ)
                     await self._score_current_batch(batch_assignments)
 
-                    # Chờ giữa các lô
-                    if time.time() < end_batching_time:
-                        await asyncio.sleep(mini_batch_interval_seconds)
-                    else:
-                        break  # Hết giờ
+                    # Không cần sleep interval cố định ở đây nữa vì vòng lặp sẽ kiểm tra slot
 
                 logger.info(
-                    f"Step 4-7: Mini-Batch Tasking Phase Finished. Tasks sent: {tasks_sent_this_cycle}"
+                    f"Step 3: Mini-Batch Tasking Phase Finished. Total tasks sent: {tasks_sent_this_cycle}"
                 )
 
-            # === BƯỚC 8: BROADCAST ĐIỂM CỤC BỘ ===
-            wait_before_broadcast_time = send_score_time - time.time()
-            if wait_before_broadcast_time > 0:
-                logger.info(
-                    f"Step 8: Waiting {wait_before_broadcast_time:.1f}s until P2P score broadcast time..."
-                )
-                await asyncio.sleep(wait_before_broadcast_time)
+            # === F. Broadcast Điểm (Chờ đến Slot) ===
+            logger.info(
+                f"Step 4: Waiting until slot {broadcast_target_slot} to broadcast local scores..."
+            )
+            await self.wait_until_slot(broadcast_target_slot)
             accumulated_scores_count = sum(len(v) for v in self.cycle_scores.values())
             logger.info(
-                f"Step 8: Broadcasting {accumulated_scores_count} accumulated local scores..."
+                f"Step 4: Broadcasting {accumulated_scores_count} accumulated local scores..."
             )
-            await self.broadcast_scores(
-                self.cycle_scores
-            )  # Truyền dict điểm đã tích lũy
+            # Đảm bảo broadcast_scores sử dụng self.cycle_scores hiện tại
+            await self.broadcast_scores(self.cycle_scores)  # Truyền điểm đã tích lũy
 
-            # === BƯỚC 9: CHỜ NHẬN ĐIỂM P2P ===
-            wait_for_scores_timeout = consensus_timeout_time - time.time()
-            consensus_possible = False
-            if wait_for_scores_timeout > 0:
-                logger.info(
-                    f"Step 9: Waiting up to {wait_for_scores_timeout:.1f}s for P2P scores..."
-                )
-                consensus_possible = await self.wait_for_consensus_scores(
-                    wait_for_scores_timeout
-                )
-                logger.info(
-                    f"Step 9: Consensus possible based on received P2P scores: {consensus_possible}"
-                )
-            else:
-                logger.warning(
-                    f"Step 9: Not enough time left ({wait_for_scores_timeout:.1f}s) to wait."
-                )
-                # Kiểm tra lần cuối
-                async with self.received_scores_lock:
-                    active_validators = await self._get_active_validators()
-                    total_active = len(active_validators)
-                    min_validators_needed = (
-                        self.settings.CONSENSUS_MIN_VALIDATORS_FOR_CONSENSUS
-                    )
-                    scores_received_count = 0
-                    if self.current_cycle in self.received_validator_scores:
-                        unique_senders = set(val_dict.keys() for task_dict in self.received_validator_scores[self.current_cycle].values() for val_dict in task_dict)  # type: ignore
-                        if self.cycle_scores:
-                            unique_senders.add(self.info.uid)
-                        scores_received_count = len(unique_senders)
-                    if scores_received_count >= min_validators_needed:
-                        consensus_possible = True
-                        logger.info(
-                            f"Sufficient unique validators ({scores_received_count}) sent scores despite timeout."
-                        )
-                    else:
-                        logger.warning(
-                            f"Insufficient unique validators ({scores_received_count} < {min_validators_needed}) after timeout."
-                        )
-
-            # === BƯỚC 10: CHẠY ĐỒNG THUẬN & TÍNH TOÁN TRẠNG THÁI ===
+            # === G. Chờ Điểm P2P (Chờ đến Slot) ===
             logger.info(
-                "Step 10: Running final consensus calculations (using potentially penalized state)..."
+                f"Step 5: Waiting until slot {consensus_wait_end_slot} for P2P scores..."
             )
-            # run_consensus_and_penalties sử dụng self.validators_info đã cập nhật ở Bước 2
+            await self.wait_until_slot(consensus_wait_end_slot)
+            logger.info(
+                f"Step 5: Consensus score waiting period ended (Reached slot {consensus_wait_end_slot})."
+            )
+            # Kiểm tra đủ điểm
+            async with self.received_scores_lock:
+                active_validators = await self._get_active_validators()
+                total_active = len(active_validators)
+                min_validators_needed = (
+                    self.settings.CONSENSUS_MIN_VALIDATORS_FOR_CONSENSUS
+                )
+                unique_senders = set()
+                if self.current_cycle in self.received_validator_scores:
+                    for task_scores in self.received_validator_scores[
+                        self.current_cycle
+                    ].values():
+                        unique_senders.update(task_scores.keys())
+                if self.cycle_scores:
+                    unique_senders.add(self.info.uid)
+                scores_received_count = len(unique_senders)
+            consensus_possible = scores_received_count >= min_validators_needed
+            logger.info(
+                f"Step 5: Consensus possible based on received P2P scores: {consensus_possible} ({scores_received_count}/{min_validators_needed} active validators needed)"
+            )
+
+            # === H. Chạy Đồng thuận & Tính toán ===
+            logger.info("Step 6: Running final consensus calculations...")
             final_miner_scores, calculated_validator_states = (
                 self.run_consensus_and_penalties(
                     consensus_possible=consensus_possible,
                     self_validator_uid=self.info.uid,
                 )
             )
-            # Lưu kết quả dự kiến cho chu kỳ sau
+            # Lưu kết quả dự kiến cho chu kỳ sau (logic cũ)
             self.previous_cycle_results["calculated_validator_states"] = (
                 calculated_validator_states.copy()
             )
             self.previous_cycle_results["final_miner_scores"] = (
                 final_miner_scores.copy()
             )
-            logger.info(
-                f"Step 10: Consensus calculation finished. Final miner scores: {len(final_miner_scores)}, Validator states: {len(calculated_validator_states)}"
-            )
+            logger.info(f"Step 6: Consensus calculation finished.")
 
-            # === BƯỚC 11: CÔNG BỐ KẾT QUẢ ĐỒNG THUẬN CHO MINER ===
+            # === I. Publish Kết quả cho Miner ===
             logger.info(
-                "Step 11: Calculating Miner incentives and Publishing/Caching consensus results..."
+                "Step 7: Calculating Miner incentives and Publishing/Caching consensus results..."
             )
-
-            # 11a. Tính toán phần thưởng (incentive) cho từng miner dựa trên kết quả đồng thuận
+            # Tính rewards (logic như cũ)
             calculated_miner_rewards: Dict[str, float] = {}
-            if final_miner_scores:  # Chỉ tính nếu có điểm miner cuối cùng
-                # Tính tổng giá trị hệ thống (dùng để chuẩn hóa incentive)
-                # Tổng trọng số (W) * hiệu suất đồng thuận (P_adj) của các miner *đang hoạt động*
+            if final_miner_scores:
+                # ... logic tính incentive dựa trên final_miner_scores và miners_info ...
                 total_weighted_perf = sum(
                     getattr(minfo, "weight", 0.0) * final_miner_scores.get(uid, 0.0)
                     for uid, minfo in self.miners_info.items()
-                    # Chỉ tính cho miner active tại thời điểm load metagraph đầu chu kỳ
                     if getattr(minfo, "status", STATUS_ACTIVE) == STATUS_ACTIVE
                 )
-                # Đặt giá trị tối thiểu để tránh chia cho 0 và incentive quá lớn khi mạng nhỏ
-                min_total_value = 1.0  # Có thể cấu hình qua settings
+                min_total_value = 1.0
                 total_system_value = max(min_total_value, total_weighted_perf)
                 logger.debug(
                     f"Calculated total_system_value for miner incentive: {total_system_value:.6f}"
                 )
-
-                # Lặp qua các miner có điểm đồng thuận để tính incentive
                 for miner_uid_hex, p_adj in final_miner_scores.items():
                     miner_info = self.miners_info.get(miner_uid_hex)
-                    # Chỉ tính incentive cho miner đang hoạt động
                     if (
                         miner_info
                         and getattr(miner_info, "status", STATUS_ACTIVE)
                         == STATUS_ACTIVE
                     ):
                         try:
-                            # Sử dụng trust score của miner *trước khi* cập nhật ở chu kỳ này
-                            # (Thường là trust score đã load từ đầu chu kỳ)
                             trust_for_incentive = getattr(
                                 miner_info, "trust_score", 0.0
                             )
                             weight_for_incentive = getattr(miner_info, "weight", 0.0)
-
                             incentive = calculate_miner_incentive(
                                 trust_score=trust_for_incentive,
                                 miner_weight=weight_for_incentive,
-                                # miner_performance_scores chỉ cần chứa P_adj
                                 miner_performance_scores=[p_adj],
                                 total_system_value=total_system_value,
-                                # Lấy các tham số sigmoid từ settings
                                 incentive_sigmoid_L=self.settings.CONSENSUS_PARAM_INCENTIVE_SIG_L,
                                 incentive_sigmoid_k=self.settings.CONSENSUS_PARAM_INCENTIVE_SIG_K,
                                 incentive_sigmoid_x0=self.settings.CONSENSUS_PARAM_INCENTIVE_SIG_X0,
                             )
                             calculated_miner_rewards[miner_uid_hex] = incentive
                             logger.debug(
-                                f"Calculated incentive for Miner {miner_uid_hex}: {incentive:.8f} (Trust={trust_for_incentive:.4f}, Weight={weight_for_incentive:.4f}, P_adj={p_adj:.4f})"
+                                f"Calculated incentive for Miner {miner_uid_hex}: {incentive:.8f}"
                             )
                         except Exception as e:
                             logger.error(
                                 f"Error calculating incentive for Miner {miner_uid_hex}: {e}"
                             )
-                            calculated_miner_rewards[miner_uid_hex] = (
-                                0.0  # Gán 0 nếu lỗi
-                            )
+                            calculated_miner_rewards[miner_uid_hex] = 0.0
                     else:
-                        # Miner không hoạt động hoặc không tìm thấy thông tin
-                        if miner_info:
-                            logger.debug(
-                                f"Miner {miner_uid_hex} is not active (status={getattr(miner_info, 'status', 'N/A')}). Skipping incentive calculation."
-                            )
-                        else:
-                            logger.warning(
-                                f"MinerInfo not found for {miner_uid_hex} when calculating incentive. Skipping."
-                            )
                         calculated_miner_rewards[miner_uid_hex] = 0.0
 
-            # 11b. Gọi hàm để lưu/công bố kết quả (lưu vào cache cho API)
             await self._publish_consensus_results(
                 cycle=self.current_cycle,
                 final_miner_scores=final_miner_scores,
-                calculated_rewards=calculated_miner_rewards,  # Truyền phần thưởng đã tính
+                calculated_rewards=calculated_miner_rewards,
             )
-            logger.info(
-                f"Step 11: Consensus results (P_adj + Incentives) cached/published for {len(final_miner_scores)} miners."
-            )
+            logger.info("Step 7: Consensus results cached/published.")
 
-            # === BƯỚC 12: CHUẨN BỊ CẬP NHẬT VALIDATOR DATUM (CHO CHÍNH MÌNH) ===
-            logger.info("Step 12: Preparing self validator datum update...")
-            # prepare_validator_updates đọc trust/status hiện tại từ self.info
+            # === J. Chuẩn bị Self-Update Datum ===
+            logger.info("Step 8: Preparing self validator datum update...")
             validator_self_update = await self.prepare_validator_updates(
                 calculated_validator_states
             )
             logger.info(
-                f"Step 12: Prepared {len(validator_self_update)} self validator datums."
+                f"Step 8: Prepared {len(validator_self_update)} self validator datums."
             )
 
-            # === BƯỚC 13: CHỜ COMMIT ===
-            wait_before_commit = commit_time - time.time()
-            if wait_before_commit > 0:
-                logger.info(
-                    f"Step 13: Waiting {wait_before_commit:.1f}s before committing self-update..."
-                )
-                await asyncio.sleep(wait_before_commit)
-            else:
-                logger.warning(
-                    f"Step 13: Commit time already passed by {-wait_before_commit:.1f}s! Committing immediately."
-                )
+            # === K. Chờ Commit (Chờ đến Slot) ===
+            logger.info(
+                f"Step 9: Waiting until slot {commit_target_slot} to commit self-update..."
+            )
+            await self.wait_until_slot(commit_target_slot)
 
-            # === BƯỚC 14: COMMIT LÊN BLOCKCHAIN (Chỉ Validator Self-Update) ===
-            logger.info("Step 14: Committing SELF validator update to blockchain...")
+            # === L. Commit Self-Update ===
+            logger.info("Step 10: Committing SELF validator update to blockchain...")
             await self.commit_updates_to_blockchain(
-                validator_updates=validator_self_update,  # Chỉ có self-update
+                validator_updates=validator_self_update,  # Chỉ commit self-update
             )
-            logger.info("Step 14: Commit process for self-validator initiated.")
+            logger.info("Step 10: Commit process for self-validator initiated.")
 
         except Exception as e:
             logger.exception(f"Error during consensus cycle {self.current_cycle}: {e}")
 
         finally:
-            # === DỌN DẸP CUỐI CHU KỲ ===
-            cycle_end_time = time.time()
+            # === M. Chờ Kết thúc Chu kỳ (Chờ đến Slot) & Dọn dẹp ===
+            cycle_end_time_actual = time.time()
+            # ... log duration ...
+
+            next_cycle_start_slot = target_end_slot + 1
             logger.info(
-                f"--- Cycle {self.current_cycle} Finished (Miner Self-Update + Implicit Penalty) (Duration: {cycle_end_time - cycle_start_time:.1f}s) ---"
+                f"Waiting until slot {next_cycle_start_slot} to finalize cycle {self.current_cycle}..."
             )
-            self.current_cycle += 1
-            self._save_current_cycle()
+            await self.wait_until_slot(next_cycle_start_slot)
+
+            # --- Cập nhật và Lưu trạng thái ---
+            completed_cycle = self.current_cycle  # Lưu lại số chu kỳ vừa hoàn thành
+            self._save_current_cycle(completed_cycle)  # Lưu chu kỳ đã hoàn thành
+            self.current_cycle += 1  # Tăng lên cho chu kỳ tiếp theo
+
             # Dọn dẹp P2P scores cũ
-            cleanup_cycle = self.current_cycle - 3
+            cleanup_cycle = completed_cycle - 2  # Giữ lại dữ liệu 2 chu kỳ trước
             async with self.received_scores_lock:
                 if cleanup_cycle in self.received_validator_scores:
                     try:
                         del self.received_validator_scores[cleanup_cycle]
-                        logger.info(
-                            f"Cleaned up received P2P scores for cycle {cleanup_cycle}"
-                        )
                     except KeyError:
                         pass
+            logger.info(f"--- End of Cycle {completed_cycle} ---")
 
 
 # --- Hàm chạy chính (Đã cập nhật) ---

@@ -168,35 +168,31 @@ class ValidatorRunner:
         # Include API routes từ SDK
         self.app.include_router(api_router)
 
-    async def _run_main_node_loop(self):
+
+    async def _run_main_node_loop(
+        self,
+    ):  # Hoặc async def run_main_node_loop(node: ValidatorNode):
         """Chạy vòng lặp đồng thuận chính trong background."""
-        if not self.validator_node_instance:
+        node = self.validator_node_instance  # Hoặc dùng node từ tham số
+        if not node:
             logger.error("Runner: Validator node instance not available for main loop.")
             return
 
-        node = self.validator_node_instance
-        node_settings = getattr(
-            node, "settings", sdk_settings
-        )  # Lấy settings từ node hoặc SDK
+        node_settings = getattr(node, "settings", sdk_settings)
 
         try:
-            await asyncio.sleep(5)  # Chờ API sẵn sàng
+            await asyncio.sleep(5)  # Chờ API sẵn sàng (có thể giữ lại)
             while True:
-                cycle_start_time = time.time()
-                await node.run_cycle()
-                cycle_duration = time.time() - cycle_start_time
-                cycle_interval_minutes = getattr(
-                    node_settings, "CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES", 60
-                )
-                cycle_interval_seconds = cycle_interval_minutes * 60
-                min_wait = getattr(
-                    node_settings, "CONSENSUS_CYCLE_MIN_WAIT_SECONDS", 10
-                )
-                wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
-                logger.info(
-                    f"Cycle {node.current_cycle -1} duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle..."
-                )
-                await asyncio.sleep(wait_time)
+                # >>> BỎ PHẦN TÍNH TOÁN THỜI GIAN VÀ SLEEP Ở ĐÂY <<<
+                # cycle_start_time = time.time()
+                await node.run_cycle()  # Chỉ cần gọi run_cycle
+                # cycle_duration = time.time() - cycle_start_time
+                # cycle_interval_minutes = getattr(...)
+                # cycle_interval_seconds = ...
+                # min_wait = getattr(...)
+                # wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
+                # logger.info(f"Cycle {node.current_cycle -1} duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle...")
+                # await asyncio.sleep(wait_time) # <<< BỎ DÒNG NÀY >>>
         except asyncio.CancelledError:
             logger.info("Runner: Main node loop cancelled.")
         except Exception as e:

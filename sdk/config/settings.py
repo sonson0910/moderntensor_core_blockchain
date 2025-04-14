@@ -68,6 +68,59 @@ class Settings(BaseSettings):
 
     # --- Cấu hình Đồng thuận (Consensus) - Tham số & Hằng số ---
 
+    # === Slot-Based Cycle Timing ===
+    CONSENSUS_CYCLE_SLOT_LENGTH: int = Field(
+        default=7200,  # Ví dụ: 7200 slots = 2 giờ (nếu 1 slot = 1 giây)
+        alias="CONSENSUS_CYCLE_SLOT_LENGTH",
+        description="Độ dài của một chu kỳ đồng thuận tính bằng số slot Cardano.",
+    )
+    CONSENSUS_SLOT_QUERY_INTERVAL_SECONDS: float = Field(
+        default=0.5,
+        alias="CONSENSUS_SLOT_QUERY_INTERVAL_SECONDS",
+        description="Khoảng thời gian (giây) giữa các lần kiểm tra slot hiện tại khi chờ đợi.",
+    )
+
+    # Các offset tính bằng SỐ SLOT tính từ **cuối** chu kỳ mục tiêu
+    # Ví dụ: Nếu chu kỳ dài 7200 slot, kết thúc ở slot X.
+    # Commit xảy ra ở slot X - CONSENSUS_COMMIT_SLOTS_OFFSET
+    CONSENSUS_COMMIT_SLOTS_OFFSET: int = Field(
+        default=30,  # Ví dụ: Commit 30 slot trước khi kết thúc chu kỳ
+        alias="CONSENSUS_COMMIT_SLOTS_OFFSET",
+        description="Số slot trước khi kết thúc chu kỳ để bắt đầu commit.",
+    )
+    CONSENSUS_TIMEOUT_SLOTS_OFFSET: int = Field(
+        default=60,  # Ví dụ: Chờ điểm P2P đến 60 slot trước khi kết thúc
+        alias="CONSENSUS_TIMEOUT_SLOTS_OFFSET",
+        description="Số slot trước khi kết thúc chu kỳ để dừng chờ điểm P2P.",
+    )
+    CONSENSUS_BROADCAST_SLOTS_OFFSET: int = Field(
+        default=120,  # Ví dụ: Broadcast điểm 120 slot trước khi kết thúc
+        alias="CONSENSUS_BROADCAST_SLOTS_OFFSET",
+        description="Số slot trước khi kết thúc chu kỳ để broadcast điểm cục bộ.",
+    )
+
+    # Tỉ lệ thời gian cho giai đoạn Tasking (vẫn giữ dựa trên thời gian thực tương đối)
+    CONSENSUS_TASKING_PHASE_RATIO: float = Field(
+        default=0.85,  # Giữ nguyên hoặc điều chỉnh
+        alias="CONSENSUS_TASKING_PHASE_RATIO",
+        description="Tỷ lệ *thời gian thực* của chu kỳ dành cho việc gửi task và nhận kết quả (mini-batches).",
+    )
+    CONSENSUS_MINI_BATCH_WAIT_SECONDS: int = Field(
+        default=30,  # Giữ nguyên hoặc điều chỉnh
+        alias="CONSENSUS_MINI_BATCH_WAIT_SECONDS",
+        description="Timeout (giây) chờ kết quả trong một mini-batch.",
+    )
+    CONSENSUS_MINI_BATCH_INTERVAL_SECONDS: int = Field(
+        default=5,  # Giữ nguyên hoặc điều chỉnh
+        alias="CONSENSUS_MINI_BATCH_INTERVAL_SECONDS",
+        description="Delay (giây) giữa các mini-batch.",
+    )
+    CONSENSUS_TASKING_END_SLOTS_OFFSET: int = Field(
+        default=500,  # Ví dụ: Tasking kết thúc 500 slot trước khi hết chu kỳ
+        alias="CONSENSUS_TASKING_END_SLOTS_OFFSET",
+        description="Số slot trước khi kết thúc chu kỳ để dừng giai đoạn giao task.",
+    )
+
     # --- Timing ---
     CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES: int = Field(
         60,
@@ -286,7 +339,6 @@ class Settings(BaseSettings):
         gt=0.0,
         description="Khoảng thời gian tham chiếu (giây) cho bonus thời gian DAO (ví dụ: 1 năm).",
     )  # Đổi sang giây
-
 
     # Giữ nguyên validator của bạn
     @field_validator("CARDANO_NETWORK", mode="before")

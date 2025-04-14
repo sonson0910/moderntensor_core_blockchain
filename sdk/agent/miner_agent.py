@@ -50,13 +50,13 @@ class MinerAgent:
 
     def __init__(
         self,
-        miner_uid_hex: str,
+        miner_uid_hex: bytes,
         config: Settings,
         miner_skey: ExtendedSigningKey,
         miner_stake_skey: Optional[ExtendedSigningKey] = None,
     ):
         self.miner_uid_hex = miner_uid_hex
-        self.miner_uid_bytes = bytes.fromhex(miner_uid_hex)
+        self.miner_uid_bytes = miner_uid_hex
         self.config = config
         self.signing_key = miner_skey
         self.stake_signing_key = miner_stake_skey
