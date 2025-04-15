@@ -2342,18 +2342,18 @@ async def main_validator_loop():
         # Chờ một chút để các dịch vụ khác (như FastAPI) có thể khởi động nếu cần
         await asyncio.sleep(5)
         while True:
-            cycle_start_time = time.time()
+            # cycle_start_time = time.time()
             await validator_node.run_cycle()
-            cycle_duration = time.time() - cycle_start_time
-            cycle_interval_seconds = (
-                settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
-            )
-            min_wait = settings.CONSENSUS_CYCLE_MIN_WAIT_SECONDS
-            wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
-            logger.info(
-                f"Cycle duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle..."
-            )
-            await asyncio.sleep(wait_time)
+            # cycle_duration = time.time() - cycle_start_time
+            # cycle_interval_seconds = (
+            #     settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
+            # )
+            # min_wait = settings.CONSENSUS_CYCLE_MIN_WAIT_SECONDS
+            # wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
+            # logger.info(
+            #     f"Cycle duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle..."
+            # )
+            # await asyncio.sleep(wait_time)
     except asyncio.CancelledError:
         logger.info("Main node loop cancelled.")
     except Exception as e:

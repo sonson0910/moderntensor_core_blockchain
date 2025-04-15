@@ -4,10 +4,51 @@ import logging
 import math
 import os
 from typing import Optional
+import coloredlogs
+import re
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pycardano import Network
+
+# ANSI color codes
+RED = "\033[91m"
+RESET = "\033[0m"
+
+
+class HighlightScoreFormatter(coloredlogs.ColoredFormatter):
+    """Custom formatter to highlight 'score' in log messages."""
+
+    def format(self, record):
+        # Format the message using the base class
+        formatted_message = super().format(record)
+        try:
+            original_msg = record.getMessage()
+            # Check if 'score' is in the original message (case-insensitive)
+            if re.search(r"Scored", original_msg, re.IGNORECASE):
+                # Replace 'score' (case-insensitive) with red 'score'
+                # Using word boundaries \b to avoid coloring parts of words
+                colored_msg = re.sub(
+                    r"(\bScored\b)",
+                    f"{RED}\1{RESET}",
+                    original_msg,
+                    flags=re.IGNORECASE,
+                )
+                # Replace the original message part in the fully formatted string
+                # This might fail if the format string drastically changes the message structure
+                if original_msg in formatted_message:
+                    formatted_message = formatted_message.replace(
+                        original_msg, colored_msg
+                    )
+                else:
+                    # Fallback if simple replacement doesn't work: color the whole line
+                    # Check if already colored to avoid nested colors
+                    if not formatted_message.startswith(RED):
+                        formatted_message = f"{RED}{formatted_message}{RESET}"
+        except Exception:
+            # In case of any error during custom formatting, return the original formatted message
+            pass  # Keep the original formatted_message
+        return formatted_message
 
 
 class Settings(BaseSettings):
@@ -70,7 +111,7 @@ class Settings(BaseSettings):
 
     # === Slot-Based Cycle Timing ===
     CONSENSUS_CYCLE_SLOT_LENGTH: int = Field(
-        default=1800,  # Ví dụ: 7200 slots = 2 giờ (nếu 1 slot = 1 giây)
+        default=600,  # Ví dụ: 7200 slots = 2 giờ (nếu 1 slot = 1 giây)
         alias="CONSENSUS_CYCLE_SLOT_LENGTH",
         description="Độ dài của một chu kỳ đồng thuận tính bằng số slot Cardano.",
     )
@@ -84,17 +125,17 @@ class Settings(BaseSettings):
     # Ví dụ: Nếu chu kỳ dài 7200 slot, kết thúc ở slot X.
     # Commit xảy ra ở slot X - CONSENSUS_COMMIT_SLOTS_OFFSET
     CONSENSUS_COMMIT_SLOTS_OFFSET: int = Field(
-        default=60,  # Ví dụ: Commit 30 slot trước khi kết thúc chu kỳ
+        default=30,  # Ví dụ: Commit 30 slot trước khi kết thúc chu kỳ
         alias="CONSENSUS_COMMIT_SLOTS_OFFSET",
         description="Số slot trước khi kết thúc chu kỳ để bắt đầu commit.",
     )
     CONSENSUS_TIMEOUT_SLOTS_OFFSET: int = Field(
-        default=180,  # Ví dụ: Chờ điểm P2P đến 60 slot trước khi kết thúc
+        default=60,  # Ví dụ: Chờ điểm P2P đến 60 slot trước khi kết thúc
         alias="CONSENSUS_TIMEOUT_SLOTS_OFFSET",
         description="Số slot trước khi kết thúc chu kỳ để dừng chờ điểm P2P.",
     )
     CONSENSUS_BROADCAST_SLOTS_OFFSET: int = Field(
-        default=300,  # Ví dụ: Broadcast điểm 120 slot trước khi kết thúc
+        default=90,  # Ví dụ: Broadcast điểm 120 slot trước khi kết thúc
         alias="CONSENSUS_BROADCAST_SLOTS_OFFSET",
         description="Số slot trước khi kết thúc chu kỳ để broadcast điểm cục bộ.",
     )
@@ -116,7 +157,7 @@ class Settings(BaseSettings):
         description="Delay (giây) giữa các mini-batch.",
     )
     CONSENSUS_TASKING_END_SLOTS_OFFSET: int = Field(
-        default=600,  # Ví dụ: Tasking kết thúc 500 slot trước khi hết chu kỳ
+        default=120,  # Ví dụ: Tasking kết thúc 500 slot trước khi hết chu kỳ
         alias="CONSENSUS_TASKING_END_SLOTS_OFFSET",
         description="Số slot trước khi kết thúc chu kỳ để dừng giai đoạn giao task.",
     )
@@ -391,14 +432,39 @@ except Exception as log_e:
     print(f"Warning: Error processing LOG_LEVEL setting: {log_e}. Defaulting to INFO.")
     LOG_LEVEL_CONFIG = logging.INFO
 
+# Define styles once
+DEFAULT_LEVEL_STYLES = {
+    "debug": {"color": "green"},
+    "info": {"color": "cyan"},
+    "warning": {"color": "yellow"},
+    "error": {"color": "red"},
+    "critical": {"bold": True, "color": "red"},
+}
+DEFAULT_FIELD_STYLES = {
+    "asctime": {"color": "magenta"},
+    "levelname": {"bold": True, "color": "blue"},
+    "name": {"color": "white"},
+}
+DEFAULT_FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 # Cấu hình basicConfig ngay tại đây
-logging.basicConfig(
-    level=LOG_LEVEL_CONFIG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler()],
-    force=True,  # Đảm bảo ghi đè cấu hình mặc định nếu có
+# logging.basicConfig(...)
+# coloredlogs.install(...)
+
+# Instantiate the custom formatter
+formatter = HighlightScoreFormatter(
+    fmt=DEFAULT_FMT,
+    level_styles=DEFAULT_LEVEL_STYLES,
+    field_styles=DEFAULT_FIELD_STYLES,
 )
+
+# Install coloredlogs using the custom formatter
+coloredlogs.install(
+    level=LOG_LEVEL_CONFIG,
+    formatter=formatter,
+    # fmt, level_styles, field_styles are now handled by the formatter instance
+)
+
 # Lấy logger và ghi log ban đầu
 logger = logging.getLogger(__name__)
 logger.info(
