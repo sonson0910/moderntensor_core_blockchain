@@ -4,19 +4,24 @@ Logic chấm điểm kết quả từ miners.
 """
 import dataclasses
 import logging
-from typing import List, Dict, Any, Optional
-from pycardano import PaymentSigningKey, ExtendedSigningKey
+from typing import List, Dict, Any, Optional, Union, cast
+from pycardano import (
+    PaymentSigningKey,
+    ExtendedSigningKey,
+    PaymentVerificationKey,
+    ExtendedVerificationKey,
+)
 import binascii
 import asyncio
 import httpx  # Đảm bảo đã import httpx
 import json
+import nacl.signing
 
 from sdk.core.datatypes import (
     MinerResult,
     TaskAssignment,
     ValidatorScore,
     ValidatorInfo,
-    PaymentVerificationKey,
     ScoreSubmissionPayload,
 )
 from sdk.metagraph.metagraph_datum import STATUS_ACTIVE, STATUS_INACTIVE
@@ -36,39 +41,26 @@ logger = logging.getLogger(__name__)
 
 # --- Helper function for canonical serialization (Sửa lỗi) ---
 def canonical_json_serialize(data: Any) -> str:
-    """
-    Serialize dữ liệu thành chuỗi JSON một cách ổn định (sắp xếp key).
-    Handles nested dataclasses and basic types.
-    """
+    """Serialize dữ liệu thành chuỗi JSON ổn định (sắp xếp key)."""
 
-    # Helper function to convert dataclasses to dicts recursively
     def convert_to_dict(obj):
         if dataclasses.is_dataclass(obj):
-            # Convert dataclass to dict, recursively converting fields
-            # Chỉ lấy các trường được định nghĩa trong dataclass
             result = {}
             for f in dataclasses.fields(obj):
                 value = getattr(obj, f.name)
                 result[f.name] = convert_to_dict(value)
             return result
-            # Hoặc dùng asdict đơn giản nếu không có nested dataclass phức tạp cần tùy chỉnh
-            # return dataclasses.asdict(obj)
         elif isinstance(obj, list):
-            # Recursively convert items in a list
             return [convert_to_dict(item) for item in obj]
         elif isinstance(obj, dict):
-            # Recursively convert values in a dict
             return {k: convert_to_dict(v) for k, v in obj.items()}
+        # Thêm xử lý bytes -> hex string để JSON serialize được
+        elif isinstance(obj, bytes):
+            return obj.hex()
         else:
-            # Return basic types as is (int, float, str, bool, None)
-            # Cần cẩn thận nếu có các kiểu dữ liệu khác (ví dụ: bytes, datetime)
-            # Có thể cần xử lý thêm ở đây nếu cần
             return obj
 
-    # Convert the entire input data structure to dicts
     data_to_serialize = convert_to_dict(data)
-
-    # Dump the resulting dict structure to JSON, ensuring keys are sorted
     return json.dumps(data_to_serialize, sort_keys=True, separators=(",", ":"))
 
 
@@ -163,239 +155,215 @@ def score_results_logic(
 
 
 async def broadcast_scores_logic(
-    validator_node: "ValidatorNode",  # <<< Giữ lại
-    local_scores: List["ValidatorScore"],  # <<< Giữ lại
-    # --- >>> XÓA CÁC THAM SỐ KHÁC KHỎI ĐÂY <<< ---
-    # self_validator_info: "ValidatorInfo",
-    # signing_key: ExtendedSigningKey,
-    # active_validators: List["ValidatorInfo"],
-    # current_cycle: int,
-    # http_client: httpx.AsyncClient,
+    validator_node: "ValidatorNode",
+    # <<< SỬA ĐỔI: Nhận dict điểm từ node, sẽ flatten sau >>>
+    cycle_scores_dict: Dict[str, List["ValidatorScore"]],
 ):
     """
-    Gửi điểm số cục bộ (local_scores) đến các validator khác, có ký dữ liệu.
+    Gửi điểm số cục bộ (local_scores) đến các validator khác (peers), có ký dữ liệu.
+    Đã sửa đổi để chỉ gửi đến các validator hợp lệ và bỏ qua chính mình.
     """
-
-    # --- Lấy các giá trị cần thiết từ validator_node ---
-    # Sử dụng try-except hoặc getattr để an toàn hơn
     try:
+        # Lấy thông tin cần thiết từ validator_node
         self_validator_info = validator_node.info
-        signing_key = validator_node.signing_key  # Đảm bảo node có thuộc tính này
-        active_validators = (
-            await validator_node._get_active_validators()
-        )  # Đảm bảo node có phương thức này
+        # Cần ExtendedSigningKey để ký (hoặc PaymentSigningKey nếu node chỉ lưu key đó)
+        signing_key: Union[ExtendedSigningKey, PaymentSigningKey] = validator_node.signing_key  # type: ignore
+        # Lấy danh sách validator *active* từ node
+        active_validator_peers = await validator_node._get_active_validators()
         current_cycle = validator_node.current_cycle
-        http_client = validator_node.http_client  # Đảm bảo node có thuộc tính này
-        settings = validator_node.settings  # Lấy settings từ node
+        http_client = validator_node.http_client
+        settings = validator_node.settings
+        self_uid = self_validator_info.uid  # UID của node hiện tại (dạng hex string)
     except AttributeError as e:
         logger.error(
             f"Missing required attribute/method on validator_node for broadcasting: {e}"
         )
         return
-    # --------------------------------------------------
-
-    if not local_scores:
-        logger.debug(f"[V:{self_validator_info.uid}] No local scores to broadcast.")
+    except Exception as e:
+        logger.error(f"Error getting attributes from validator_node: {e}")
         return
 
-    if not signing_key:
-        logger.error(
-            f"[V:{self_validator_info.uid}] Missing signing key, cannot sign and broadcast scores."
+    # --- Flatten và Lọc điểm cần gửi ---
+    local_scores_list: List[ValidatorScore] = []
+    for task_id, scores in cycle_scores_dict.items():
+        for score in scores:
+            # Chỉ gửi điểm do chính validator này tạo ra
+            if score.validator_uid == self_uid:
+                local_scores_list.append(score)
+
+    if not local_scores_list:
+        logger.debug(
+            f"[V:{self_uid}] No local scores generated by self in cycle {current_cycle} to broadcast."
         )
         return
-
-    if not http_client:
-        logger.error(
-            f"[V:{self_validator_info.uid}] Missing http_client, cannot broadcast scores."
-        )
-        return
-    self_uid = self_validator_info.uid
-    logger.info(
-        f"[V:{self_uid}] Broadcasting local scores for cycle {current_cycle}..."
-    )
-
-    # 1. Lọc danh sách điểm số cần gửi (do chính validator này tạo)
-    self_uid = self_validator_info.uid
-    local_scores_to_broadcast = [
-        score for score in local_scores if score.validator_uid == self_uid
-    ]
-
-    # Kiểm tra xem có điểm nào để gửi không
-    if not local_scores_to_broadcast:  # <<< Dùng biến đúng
-        logger.info(
-            f"[V:{self_uid}] No local scores generated by self in this cycle to broadcast."
-        )
-        return  # Không có gì để gửi
 
     logger.info(
-        f"[V:{self_uid}] Preparing to broadcast {len(local_scores_to_broadcast)} score entries generated by self."  # <<< Dùng biến đúng
+        f"[V:{self_uid}] Preparing to broadcast {len(local_scores_list)} score entries generated by self for cycle {current_cycle}."
     )
 
-    # --- 2. Ký dữ liệu ---
+    # --- Ký Dữ liệu ---
     signature_hex: Optional[str] = None
     submitter_vkey_cbor_hex: Optional[str] = None
     try:
-        vkey = signing_key.to_verification_key()
-        submitter_vkey_cbor_hex = vkey.to_cbor_hex()
+        # Lấy verification key (cần xử lý cả Extended và Payment)
+        verification_key = signing_key.to_verification_key()
 
-        # Serialize danh sách điểm ĐÃ LỌC
+        # Chỉ lấy PaymentVerificationKey để gửi đi (vì chỉ cần payment hash để xác thực)
+        payment_vkey: PaymentVerificationKey
+        if isinstance(verification_key, ExtendedVerificationKey):
+            # Explicitly cast the result, as from_primitive might return a base Key type
+            primitive_key = verification_key.to_primitive()[:32]
+            payment_vkey = cast(
+                PaymentVerificationKey,
+                PaymentVerificationKey.from_primitive(primitive_key),
+            )
+        elif isinstance(verification_key, PaymentVerificationKey):
+            payment_vkey = verification_key
+        else:
+            raise TypeError(
+                f"Unexpected verification key type derived: {type(verification_key)}"
+            )
+
+        submitter_vkey_cbor_hex = payment_vkey.to_cbor_hex()
+
+        # Serialize list điểm ĐÃ LỌC VÀ FLATTEN
         data_to_sign_str = canonical_json_serialize(
-            local_scores_to_broadcast  # <<< Dùng biến đúng
-        )
+            local_scores_list
+        )  # <<<--- Dùng list đã flatten
         data_to_sign_bytes = data_to_sign_str.encode("utf-8")
 
-        signature_bytes = signing_key.sign(data_to_sign_bytes)
-        # Cần import binascii
-        import binascii
+        # Ký bằng signing_key (dùng to_primitive nếu là Extended)
+        sk_primitive = signing_key.to_primitive()
+        nacl_signing_key = nacl.signing.SigningKey(
+            sk_primitive[:32]
+        )  # Lấy 32 byte đầu làm seed cho PyNaCl sk
+        signed_pynacl = nacl_signing_key.sign(data_to_sign_bytes)
+        signature_bytes = signed_pynacl.signature  # Lấy phần signature bytes
 
+        # signature_bytes = signing_key.sign(data_to_sign_bytes) # Cách cũ nếu dùng pycardano sign
         signature_hex = binascii.hexlify(signature_bytes).decode("utf-8")
+        logger.debug(f"[V:{self_uid}] Payload signed successfully.")
     except Exception as sign_e:
-        logger.error(f"Failed to sign broadcast payload: {sign_e}")
+        logger.exception(f"[V:{self_uid}] Failed to sign broadcast payload: {sign_e}")
         return
 
-    # --- 3. Tạo Payload ---
-    # Giả sử ScoreSubmissionPayload đã được import ở đầu file p2p.py
-    # from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
-
-    if "ScoreSubmissionPayload" not in globals() or not callable(
-        ScoreSubmissionPayload
-    ):
-        logger.error("ScoreSubmissionPayload model is not available. Cannot broadcast.")
-        return
-
+    # --- Tạo Payload ---
     try:
+        # Chuyển đổi list ValidatorScore thành list dict để Pydantic xử lý
+        # scores_as_dicts = [dataclasses.asdict(s) for s in local_scores_list] # Removed this line
+
         payload = ScoreSubmissionPayload(
-            scores=local_scores_to_broadcast,  # <<< Dùng biến đúng
-            submitter_validator_uid=self_uid,  # Đã lấy self_uid ở trên
+            scores=local_scores_list,  # <<< Pass the list of objects directly
+            submitter_validator_uid=self_uid,
             cycle=current_cycle,
             submitter_vkey_cbor_hex=submitter_vkey_cbor_hex,
             signature=signature_hex,
         )
-        payload_dict = payload.model_dump(mode="json")
+        payload_dict = payload.model_dump(
+            mode="json"
+        )  # Dùng model_dump cho Pydantic v2
     except Exception as pydantic_e:
         logger.exception(
-            f"Failed to create or serialize ScoreSubmissionPayload: {pydantic_e}"
+            f"[V:{self_uid}] Failed to create or serialize ScoreSubmissionPayload: {pydantic_e}"
         )
         return
-    # --- >>> Kết thúc sửa <<< ---
 
-    # --- 4. Gửi Payload đến các Peers ---
-    tasks = []
-    for validator in active_validators:
-        if validator.uid == self_uid:
-            continue  # Bỏ qua chính mình
-        if not validator.api_endpoint:
-            logger.warning(
-                f"Validator {validator.uid} has no API endpoint. Skipping broadcast."
-            )
-            continue
-
-        peer_url = f"{validator.api_endpoint.rstrip('/')}/v1/consensus/receive_scores"
-        try:
-            # Tạo task gửi request POST
-            task = asyncio.create_task(
-                http_client.post(
-                    peer_url, json=payload_dict
-                )  # Gửi payload_dict dạng JSON
-            )
-            tasks.append(task)
-        except Exception as req_e:
-            logger.error(f"Error creating broadcast task for {peer_url}: {req_e}")
-
-    if tasks:
-        logger.info(f"Broadcasting scores to {len(tasks)} peers...")
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        # Xử lý kết quả gửi (ví dụ: log lỗi nếu có)
-        for i, res in enumerate(results):
-            if isinstance(res, Exception):
-                peer_info = (
-                    active_validators[i + 1]
-                    if active_validators[0].uid == self_uid
-                    else active_validators[i]
-                )  # Lấy đúng peer
-                logger.warning(
-                    f"Failed to broadcast scores to validator {peer_info.uid} at {peer_info.api_endpoint}: {res}"
-                )
-            # elif res.status_code >= 300: # Kiểm tra status code nếu cần
-            #      peer_info = ...
-            #      logger.warning(f"Received status {res.status_code} broadcasting scores to {peer_info.uid}...")
-
-    logger.info(f"Finished broadcasting scores for cycle {current_cycle}.")
-
-    # 4. Gửi request đến các validator khác
-    # ... (logic gửi request giữ nguyên) ...
-    # 4. Gửi request đến các validator khác
+    # --- Gửi Payload đến các Peers Hợp Lệ ---
     broadcast_tasks = []
-    sent_to_validators: List[ValidatorInfo] = []  # Giữ list để khớp với results
+    sent_to_validators_info: List[ValidatorInfo] = []
 
-    # Duyệt qua danh sách active_validators được truyền vào
-    for validator in active_validators:
-        # Bỏ qua chính mình
-        if validator.uid == self_uid:
+    # Lặp qua danh sách validator peers đã được lọc bởi _get_active_validators
+    for peer_info in active_validator_peers:
+        # >>> Bỏ qua chính mình <<<
+        if peer_info.uid == self_uid:
             continue
-        # Bỏ qua nếu không có endpoint hợp lệ
-        if not validator.api_endpoint or not validator.api_endpoint.startswith(
+        # >>> Bỏ qua nếu không có endpoint hoặc không active (dù _get_active_validators thường đã lọc) <<<
+        if not peer_info.api_endpoint or not peer_info.api_endpoint.startswith(
             ("http://", "https://")
         ):
             logger.warning(
-                f"Validator {validator.uid} has invalid API endpoint: '{validator.api_endpoint}'. Skipping broadcast."
+                f"[V:{self_uid}] Peer V:{peer_info.uid} has invalid API endpoint '{peer_info.api_endpoint}'. Skipping broadcast."
             )
             continue
-        # === THÊM KIỂM TRA STATUS ===
-        if getattr(validator, "status", STATUS_INACTIVE) != STATUS_ACTIVE:
+        if getattr(peer_info, "status", STATUS_INACTIVE) != STATUS_ACTIVE:
             logger.debug(
-                f"Validator {validator.uid} is not active (status={getattr(validator, 'status', 'N/A')}). Skipping broadcast."
+                f"[V:{self_uid}] Peer V:{peer_info.uid} is not active (status={getattr(peer_info, 'status', 'N/A')}). Skipping broadcast."
             )
             continue
-        # ============================
 
-        target_url = f"{validator.api_endpoint}/v1/consensus/receive_scores"
-        logger.debug(f"Preparing to send scores to V:{validator.uid} at {target_url}")
+        # >>> Chỉ gửi cho VALIDATOR <<< (Không cần kiểm tra thêm vì active_validator_peers chỉ chứa validator)
+
+        target_url = f"{peer_info.api_endpoint.rstrip('/')}/v1/consensus/receive_scores"
+        logger.debug(
+            f"[V:{self_uid}] Preparing to send scores to V:{peer_info.uid} at {target_url}"
+        )
 
         try:
-            # Thêm task gửi request vào list
-            broadcast_tasks.append(http_client.post(target_url, json=payload_dict))
-            # Thêm validator tương ứng vào list để xử lý kết quả sau này
-            sent_to_validators.append(validator)
-        except Exception as post_err:
+            request_timeout = getattr(
+                settings, "CONSENSUS_NETWORK_TIMEOUT_SECONDS", 10.0
+            )
+            task = asyncio.create_task(
+                http_client.post(target_url, json=payload_dict, timeout=request_timeout)
+            )
+            broadcast_tasks.append(task)
+            sent_to_validators_info.append(peer_info)
+        except Exception as req_e:
             logger.error(
-                f"Error initiating post request to V:{validator.uid} at {target_url}: {post_err}"
+                f"[V:{self_uid}] Error creating broadcast task for {target_url} (Peer: V:{peer_info.uid}): {req_e}"
             )
 
     if not broadcast_tasks:
-        logger.info("No valid target validators found to broadcast scores to.")
+        logger.info(
+            f"[V:{self_uid}] No valid target validators found to broadcast scores to."
+        )
         return
 
-    logger.info(f"Sending scores concurrently to {len(broadcast_tasks)} validators...")
+    logger.info(
+        f"[V:{self_uid}] Sending scores concurrently to {len(broadcast_tasks)} validators..."
+    )
     results = await asyncio.gather(*broadcast_tasks, return_exceptions=True)
 
-    # 5. Xử lý kết quả gửi
-    # ... (logic xử lý kết quả giữ nguyên) ...
+    # --- Xử lý kết quả gửi (Giữ nguyên logic log chi tiết đã sửa) ---
     success_count = 0
     for i, res in enumerate(results):
-        target_validator = sent_to_validators[i]
-        target_val_uid = target_validator.uid
+        if i < len(sent_to_validators_info):
+            target_validator = sent_to_validators_info[i]
+            target_val_uid = target_validator.uid
+            target_endpoint = target_validator.api_endpoint
 
-        if isinstance(res, httpx.Response):
-            if 200 <= res.status_code < 300:
-                success_count += 1
-                logger.debug(
-                    f"Successfully sent scores to V:{target_val_uid} (Status: {res.status_code})"
-                )
+            if isinstance(res, httpx.Response):
+                if 200 <= res.status_code < 300:
+                    success_count += 1
+                    logger.debug(
+                        f"[V:{self_uid}] Successfully sent scores to V:{target_val_uid} (Status: {res.status_code})"
+                    )
+                else:
+                    response_text = res.text[:200]
+                    logger.warning(
+                        f"[V:{self_uid}] Failed to send scores to V:{target_val_uid} at {target_endpoint}. Status: {res.status_code}, Response: '{response_text}'"
+                    )
+            elif isinstance(res, Exception):
+                if isinstance(res, httpx.TimeoutException):
+                    logger.warning(
+                        f"[V:{self_uid}] Timeout broadcasting to V:{target_val_uid} at {target_endpoint}: {res}"
+                    )
+                elif isinstance(res, httpx.RequestError):
+                    logger.error(
+                        f"[V:{self_uid}] Network error broadcasting to V:{target_val_uid} at {target_endpoint}: {type(res).__name__} - {res}"
+                    )
+                else:
+                    logger.error(
+                        f"[V:{self_uid}] Unexpected error broadcasting to V:{target_val_uid} at {target_endpoint}: {type(res).__name__} - {res}"
+                    )
             else:
-                response_text = res.text[:200]
-                logger.warning(
-                    f"Failed to send scores to V:{target_val_uid}. Status: {res.status_code}, Response: '{response_text}'"
+                logger.error(
+                    f"[V:{self_uid}] Unknown result type ({type(res)}) when broadcasting to V:{target_val_uid}"
                 )
-        elif isinstance(res, Exception):
-            logger.error(
-                f"Error broadcasting scores to V:{target_val_uid}: {type(res).__name__} - {res}"
-            )
         else:
             logger.error(
-                f"Unknown result type ({type(res)}) when broadcasting to V:{target_val_uid}"
+                f"[V:{self_uid}] Result index mismatch during broadcast result processing. Index: {i}, Sent Count: {len(sent_to_validators_info)}"
             )
 
     logger.info(
-        f"Broadcast attempt finished for cycle {current_cycle}. Success: {success_count}/{len(broadcast_tasks)}."
+        f"[V:{self_uid}] Broadcast attempt finished for cycle {current_cycle}. Success: {success_count}/{len(broadcast_tasks)}."
     )

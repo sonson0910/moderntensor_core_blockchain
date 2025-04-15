@@ -1,139 +1,214 @@
-# sdk/network/app/api/v1/endpoints/consensus.py
-"""
-API endpoints cho việc trao đổi thông tin đồng thuận giữa các validator.
-"""
+# File: sdk/network/app/api/v1/endpoints/consensus.py
+
 import logging
 import asyncio
 import json
 import binascii
+import dataclasses  # <<<--- Thêm import dataclasses
 from typing import List, Annotated, Optional
 from fastapi import APIRouter, HTTPException, Depends, status
 
 from pydantic import BaseModel, Field, ValidationError
-from sdk.core.datatypes import ValidatorScore, ValidatorInfo, ScoreSubmissionPayload
 
-# Import các kiểu Cardano cần thiết
+# Import các kiểu dữ liệu và node từ SDK
+from sdk.core.datatypes import ValidatorScore, ValidatorInfo, ScoreSubmissionPayload
+from sdk.consensus.node import ValidatorNode
+from sdk.network.app.dependencies import get_validator_node
+
+# Import hàm serialize từ P2P
+from sdk.consensus.p2p import canonical_json_serialize
+
+# Import các kiểu PyCardano và PyNaCl
 from pycardano import (
     Address,
     VerificationKey,
     PaymentVerificationKey,
     VerificationKeyHash,
-)
-from sdk.consensus.node import ValidatorNode
-from sdk.network.app.dependencies import get_validator_node
-
-# Import hàm serialize từ p2p
-from sdk.consensus.p2p import canonical_json_serialize
-import nacl.signing  # <<< Thêm import
-import nacl.exceptions  # <<< Thêm import
-
+    Network,
+)  # <<<--- Thêm Network
+import nacl.signing
+import nacl.exceptions
 
 # --- Router ---
-router = APIRouter(
-    prefix="/consensus",
-    tags=["Consensus P2P"],
-)
-
+router = APIRouter(prefix="/consensus", tags=["Consensus P2P"])
 logger = logging.getLogger(__name__)
 
 
-# --- Hàm xác thực chữ ký (Placeholder - Cần Verification Key) ---
-# --- Hàm xác thực chữ ký (Triển khai thực tế) ---
+# --- Hàm xác thực chữ ký (Đã sửa đổi và thêm logging) ---
 async def verify_payload_signature(
-    submitter_info: ValidatorInfo, payload: ScoreSubmissionPayload
+    receiver_node: "ValidatorNode",  # Node đang nhận request
+    payload: ScoreSubmissionPayload,  # Dữ liệu nhận được
 ) -> bool:
+    """Xác minh chữ ký và VKey trong payload nhận được từ một peer."""
     signature_hex = payload.signature
-    submitter_vkey_hex = payload.submitter_vkey_cbor_hex
-    scores_data = payload.scores
+    submitter_vkey_cbor_hex = payload.submitter_vkey_cbor_hex
+    scores_list_dict = payload.scores  # Đây là list các dict
+    submitter_uid = payload.submitter_validator_uid  # UID của người gửi
 
-    if not signature_hex or not submitter_vkey_hex:
+    if not signature_hex or not submitter_vkey_cbor_hex:
         logger.warning(
-            f"SigVerifyFail ({submitter_info.uid}): Missing signature or VKey."
+            f"SigVerifyFail (Receiver: {receiver_node.info.uid}, Sender: {submitter_uid}): Missing signature or VKey in payload."
         )
         return False
 
-    logger.debug(f"Verifying signature for validator {submitter_info.uid}...")
+    logger.debug(f"Verifying signature for payload from validator {submitter_uid}...")
+
+    # --- Lấy thông tin người gửi đã biết từ state của node NHẬN ---
+    submitter_info = receiver_node.validators_info.get(submitter_uid)
+    if not submitter_info:
+        logger.warning(
+            f"SigVerifyFail (Receiver: {receiver_node.info.uid}): Submitter validator {submitter_uid} not found in local state."
+        )
+        # Có thể trả về False hoặc raise lỗi tùy thiết kế bảo mật
+        # Nếu không biết người gửi, không thể lấy địa chỉ để so sánh hash VKey
+        return False  # Từ chối nếu không biết người gửi
 
     try:
-        # 1. Lấy payment hash mong đợi từ địa chỉ người gửi
-        submitter_address = Address.from_primitive(submitter_info.address)
-        expected_payment_hash: VerificationKeyHash = submitter_address.payment_part  # type: ignore
-        logger.debug(
-            f"Expected payment hash: {expected_payment_hash.to_primitive().hex()}"
-        )
-
-        # 2. Load VKey từ payload (SỬA Ở ĐÂY)
+        # 1. Lấy Payment Key Hash dự kiến từ địa chỉ của người gửi đã biết
         try:
-            vkey_cbor_bytes = binascii.unhexlify(submitter_vkey_hex)
-            received_pycardano_vkey = PaymentVerificationKey.from_cbor(vkey_cbor_bytes)
-            received_vk_bytes = (
-                received_pycardano_vkey.to_primitive()
-            )  # <<< Lấy raw bytes
-        except (binascii.Error, ValueError, Exception) as key_load_e:
-            logger.error(
-                f"SigVerifyFail ({submitter_info.uid}): Failed to load VKey from CBOR hex or get primitive: {key_load_e}"
+            submitter_address = Address.from_primitive(submitter_info.address)
+            payment_part = submitter_address.payment_part
+            if isinstance(payment_part, VerificationKeyHash):
+                expected_payment_hash: Optional[VerificationKeyHash] = payment_part
+                expected_hash_hex = expected_payment_hash.to_primitive().hex()
+                logger.debug(
+                    f"Expected payment hash from known address: {expected_hash_hex}"
+                )
+            else:
+                logger.warning(
+                    f"SigVerifyFail (Sender: {submitter_uid}): Known address '{submitter_info.address}' is not a base address (payment part is {type(payment_part).__name__})."
+                )
+                return False  # Cannot verify VKey against non-base address
+        except Exception as addr_e:
+            logger.warning(
+                f"SigVerifyFail (Sender: {submitter_uid}): Error parsing known address '{submitter_info.address}': {addr_e}"
             )
             return False
 
-        # 3. Xác minh VKey: Hash của VKey nhận được phải khớp với hash từ địa chỉ
-        received_vkey_hash: VerificationKeyHash = received_pycardano_vkey.hash()  # type: ignore
-        logger.debug(f"Received VKey hash: {received_vkey_hash.to_primitive().hex()}")
+        # 2. Load Payment Verification Key gửi kèm trong payload
+        try:
+            vkey_cbor_bytes = binascii.unhexlify(submitter_vkey_cbor_hex)
+            received_payment_vkey = PaymentVerificationKey.from_cbor(vkey_cbor_bytes)
+            received_vk_bytes = received_payment_vkey.to_primitive()
+            if not isinstance(received_vk_bytes, bytes) or len(received_vk_bytes) != 32:
+                logger.warning(
+                    f"SigVerifyFail (Sender: {submitter_uid}): Decoded VKey primitive is not bytes or has unexpected length ({len(received_vk_bytes) if isinstance(received_vk_bytes, bytes) else type(received_vk_bytes).__name__})."
+                )
+                return False
+        except (binascii.Error, ValueError, TypeError) as key_load_e:
+            logger.error(
+                f"SigVerifyFail (Sender: {submitter_uid}): Failed to load/decode VKey from CBOR hex '{submitter_vkey_cbor_hex[:10]}...': {key_load_e}"
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                f"SigVerifyFail (Sender: {submitter_uid}): Unexpected error processing received VKey: {e}"
+            )
+            return False
+
+        # 3. Xác minh VKey: Hash của VKey nhận được phải khớp với hash từ địa chỉ đã biết
+        try:
+            received_vkey_hash: VerificationKeyHash = VerificationKeyHash(
+                received_vk_bytes
+            )
+            received_hash_hex = received_vkey_hash.to_primitive().hex()
+            logger.debug(f"Received VKey hash: {received_hash_hex}")
+        except Exception as hash_e:
+            logger.error(
+                f"SigVerifyFail (Sender: {submitter_uid}): Failed to hash received VKey: {hash_e}"
+            )
+            return False
 
         if received_vkey_hash != expected_payment_hash:
             logger.warning(
-                f"SigVerifyFail ({submitter_info.uid}): VKey hash mismatch! Expected {expected_payment_hash.to_primitive().hex()}, got {received_vkey_hash.to_primitive().hex()}."
+                f"SigVerifyFail (Sender: {submitter_uid}): VKey hash MISMATCH!"
+            )
+            logger.warning(
+                f" -> Receiver expected hash {expected_hash_hex} (derived from known address '{submitter_info.address}')"
+            )
+            logger.warning(f" -> Payload VKey hash is {received_hash_hex}")
+            logger.warning(
+                f" -> Ensure the address for {submitter_uid} is correct in the receiver's on-chain metagraph data."
             )
             return False
-        logger.debug(f"Submitter VKey matches address hash.")
+        logger.debug(
+            f"Submitter VKey hash matches expected hash derived from known address."
+        )
 
         # 4. Xác minh Chữ ký
-        data_str_from_payload = canonical_json_serialize(payload.scores)
-        data_to_verify_bytes = data_str_from_payload.encode("utf-8")
-        signature_bytes = binascii.unhexlify(signature_hex)
-
-        nacl_vk = nacl.signing.VerifyKey(received_vk_bytes)  # type: ignore # <<< Tạo VerifyKey của PyNaCl
         try:
-            nacl_vk.verify(
-                data_to_verify_bytes, signature_bytes
-            )  # <<< Gọi verify của PyNaCl
-            is_valid = True
-            logger.debug(
-                f"PyNaCl Signature verification successful for {submitter_info.uid}"
+            # >>> Use payload.scores directly, which is already List[ValidatorScore] <<<
+            scores_objects_from_payload = payload.scores
+
+            # Check if the list of scores is empty after Pydantic parsing
+            if not scores_objects_from_payload:
+                logger.warning(
+                    f"SigVerifyFail (Sender: {submitter_uid}): Payload contained no valid score objects after Pydantic parsing."
+                )
+                # Depending on policy, maybe allow empty lists?
+                # If empty lists are disallowed for signing, return False.
+                # return False
+
+            # Serialize lại list đối tượng scores để có dữ liệu gốc đã ký
+            # canonical_json_serialize handles dataclasses directly
+            data_str_from_payload = canonical_json_serialize(
+                scores_objects_from_payload  # Pass the list of objects
             )
+            data_to_verify_bytes = data_str_from_payload.encode("utf-8")
+            signature_bytes = binascii.unhexlify(signature_hex)
+
+            # Tạo đối tượng VerifyKey của PyNaCl từ raw bytes của PaymentVerificationKey
+            nacl_verify_key = nacl.signing.VerifyKey(received_vk_bytes)  # type: ignore
+
+            # Thực hiện xác minh
+            nacl_verify_key.verify(
+                data_to_verify_bytes, signature_bytes
+            )  # Ném BadSignatureError nếu sai
+
+            is_valid = True
+            logger.info(
+                f"Signature verification SUCCESSFUL for payload from {submitter_uid}"
+            )
+
         except nacl.exceptions.BadSignatureError:
             is_valid = False
             logger.warning(
-                f"SigVerifyFail ({submitter_info.uid}): Invalid signature (PyNaCl BadSignatureError)."
+                f"SigVerifyFail (Sender: {submitter_uid}): Invalid signature (PyNaCl BadSignatureError). Data or signature mismatch."
             )
+            logger.debug(
+                f" - Data used for verification: {data_str_from_payload[:200]}..."
+            )  # Log một phần dữ liệu
+            logger.debug(f" - Signature hex received: {signature_hex}")
+        except binascii.Error:
+            logger.error(
+                f"SigVerifyFail (Sender: {submitter_uid}): Invalid signature hex format."
+            )
+            is_valid = False
+        except Exception as verify_e:
+            logger.exception(
+                f"SigVerifyFail (Sender: {submitter_uid}): Error during signature verification step: {verify_e}"
+            )
+            is_valid = False
 
         return is_valid
 
-    except binascii.Error:
-        logger.error(
-            f"SigVerifyFail ({submitter_info.uid}): Invalid signature hex format."
-        )
-        return False
-    except Exception as e:
-        logger.error(
-            f"SigVerifyFail ({submitter_info.uid}): Error during verification: {e}",
-            exc_info=True,
+    except Exception as outer_e:
+        logger.exception(
+            f"SigVerifyFail (Sender: {submitter_uid}): Unexpected outer error during verification: {outer_e}"
         )
         return False
 
-
-# ---
 
 # --- API Endpoint ---
-
-
 @router.post(
     "/receive_scores",
     summary="Nhận điểm số từ Validator khác",
-    description="Endpoint để một Validator gửi danh sách điểm số (ValidatorScore) mà nó đã chấm cho các Miner trong một chu kỳ. Yêu cầu chữ ký hợp lệ.",
+    description="Endpoint để một Validator gửi danh sách điểm số (ValidatorScore) mà nó đã chấm. Yêu cầu chữ ký hợp lệ.",
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def receive_scores(
-    payload: ScoreSubmissionPayload,
+    payload: ScoreSubmissionPayload,  # Dữ liệu gửi lên từ peer
+    # Lấy instance ValidatorNode của node đang chạy API này
     node: Annotated[ValidatorNode, Depends(get_validator_node)],
 ):
     submitter_uid = payload.submitter_validator_uid
@@ -141,43 +216,62 @@ async def receive_scores(
     payload_cycle = payload.cycle
 
     logger.info(
-        f"API: Received scores from {submitter_uid} for cycle {payload_cycle} (Node cycle: {current_cycle})"
+        f"API: Received scores submission from V:{submitter_uid} for cycle {payload_cycle} (Node cycle: {current_cycle})"
     )
 
-    # Xác thực người gửi (logic như cũ)
-    submitter_info = node.validators_info.get(submitter_uid)
-    if not submitter_info or getattr(submitter_info, "status", 1) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown/inactive submitter: {submitter_uid}",
-        )
+    # --- Bỏ qua chính mình (dù broadcast logic đã lọc) ---
+    if submitter_uid == node.info.uid:
+        logger.debug(f"API: Received scores from self ({submitter_uid}). Ignoring.")
+        # Trả về thành công giả để tránh client báo lỗi không cần thiết
+        return {"message": "Accepted scores from self (ignored)."}
 
-    # Kiểm tra chu kỳ (chỉ chấp nhận chu kỳ hiện tại)
-    if payload_cycle != current_cycle:
+    # --- Kiểm tra chu kỳ ---
+    # Cho phép nhận điểm cho chu kỳ hiện tại hoặc chu kỳ trước đó một chút (đề phòng trễ mạng)
+    if not (current_cycle - 1 <= payload_cycle <= current_cycle):
+        logger.warning(
+            f"API: Received scores for invalid cycle {payload_cycle} from {submitter_uid}. Current: {current_cycle}. Rejecting."
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid cycle: {payload_cycle}. Current: {current_cycle}.",
         )
 
-    # Xác minh chữ ký (gọi hàm mới)
-    if not await verify_payload_signature(submitter_info, payload):
+    # --- Xác minh chữ ký và VKey ---
+    # Hàm verify_payload_signature đã lấy submitter_info từ state của node nhận (node)
+    if not await verify_payload_signature(node, payload):
         logger.warning(
-            f"Rejected scores from {submitter_uid} due to invalid signature/VKey."
+            f"API: Rejected scores from {submitter_uid} for cycle {payload_cycle} due to invalid signature/VKey."
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid signature or verification key.",
         )
-    logger.debug(f"Signature verified for scores from {submitter_uid}")
+    logger.debug(
+        f"API: Signature verified for scores from {submitter_uid} for cycle {payload_cycle}"
+    )
 
-    # Thêm điểm số đã xác minh (logic như cũ)
+    # --- Thêm điểm số đã xác minh vào state của node ---
     try:
-        await node.add_received_score(submitter_uid, payload_cycle, payload.scores)
+        # >>> Use payload.scores directly, which is already List[ValidatorScore] <<<
+        scores_objects = payload.scores
+
+        # Check if any scores were successfully parsed by Pydantic
+        if not scores_objects:
+            logger.info(
+                f"API: No valid score entries parsed from payload from {submitter_uid} to add."
+            )
+            # Return success but indicate nothing was added
+            return {
+                "message": f"Accepted payload from {submitter_uid} (no scores found/parsed)."
+            }
+
+        # Gọi phương thức của Node để thêm điểm (scores_objects is already List[ValidatorScore])
+        await node.add_received_score(submitter_uid, payload_cycle, scores_objects)
         logger.info(
-            f"Successfully processed {len(payload.scores)} scores from {submitter_uid}"
+            f"API: Successfully processed and stored {len(scores_objects)} scores from {submitter_uid} for cycle {payload_cycle}"
         )
         return {
-            "message": f"Accepted {len(payload.scores)} scores from {submitter_uid}."
+            "message": f"Accepted {len(scores_objects)} scores from {submitter_uid} for cycle {payload_cycle}."
         }
     except Exception as e:  # Bắt lỗi chung khi thêm điểm
         logger.exception(
@@ -185,5 +279,5 @@ async def receive_scores(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing scores: {e}",
+            detail=f"Internal server error processing scores: {e}",
         )

@@ -1639,7 +1639,7 @@ class ValidatorNode:
         try:
             await broadcast_scores_logic(
                 validator_node=self,  # Truyền self để lấy config, keys...
-                local_scores=flat_scores_list,  # Truyền list điểm
+                cycle_scores_dict=self.cycle_scores,  # <<< Pass the original dict with the correct parameter name
             )
         except Exception as e:
             logger.exception(f"Error during broadcast_scores_logic: {e}")
@@ -1986,6 +1986,7 @@ class ValidatorNode:
                 tasks_sent_this_cycle = 0
                 while True:
                     current_slot_in_tasking = await self._get_current_slot()
+
                     if current_slot_in_tasking is None:
                         logger.warning(
                             "Tasking phase: Failed to get current slot, pausing briefly."
