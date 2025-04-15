@@ -6,7 +6,10 @@ import logging
 import time
 import httpx
 import binascii  # <<<--- Import binascii
-from typing import Optional, Dict, Tuple, List
+import json  # <<<--- Thêm import json
+import os  # <<<--- Thêm import os
+from pathlib import Path  # <<<--- Thêm Path
+from typing import Optional, Dict, Tuple, List, Any
 
 # Import từ SDK
 from sdk.config.settings import Settings
@@ -16,6 +19,7 @@ from sdk.core.datatypes import MinerConsensusResult, CycleConsensusResults
 from sdk.metagraph.metagraph_datum import MinerDatum  # <<<--- Chỉ cần MinerDatum
 from sdk.formulas import update_trust_score  # Import hàm cập nhật trust
 from sdk.metagraph.hash.hash_datum import hash_data
+from sdk.metagraph.hash.verify_hash import verify_hash
 
 # Import các tiện ích tương tác Cardano
 from sdk.keymanager.decryption_utils import decode_hotkey_skey
@@ -152,10 +156,52 @@ class MinerAgent:
         self.last_processed_cycle = -1
         self.last_known_utxo: Optional[UTxO] = None  # Cache UTXO tìm được gần nhất
 
+        self.state_dir = Path(getattr(self.config, "AGENT_STATE_DIR", ".miner_agent_state"))
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.history_file = self.state_dir / f"history_{self.miner_uid_hex}.json"
+
         logger.info(f"MinerAgent initialized for Miner UID: {self.miner_uid_hex}")
         logger.info(f" - Wallet Address: {self.miner_wallet_address}")
         logger.info(f" - Contract Address: {self.contract_address}")
         logger.info(f" - UID Bytes Used for Search: {self.miner_uid_bytes.hex()}")
+
+    def _load_local_history(self) -> List[float]:
+        """Tải danh sách lịch sử hiệu suất từ file cục bộ."""
+        if self.history_file.exists():
+            try:
+                with open(self.history_file, "r") as f:
+                    history = json.load(f)
+                    if isinstance(history, list) and all(
+                        isinstance(x, (int, float)) for x in history
+                    ):
+                        logger.debug(
+                            f"Loaded {len(history)} performance scores from {self.history_file}"
+                        )
+                        return history
+                    else:
+                        logger.warning(
+                            f"Invalid data format in {self.history_file}. Resetting history."
+                        )
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(
+                    f"Error reading history file {self.history_file}: {e}. Resetting history."
+                )
+        else:
+            logger.debug(
+                f"History file {self.history_file} not found. Starting new history."
+            )
+        return []
+
+    def _save_local_history(self, history: List[float]):
+        """Lưu danh sách lịch sử hiệu suất vào file cục bộ."""
+        try:
+            with open(self.history_file, "w") as f:
+                json.dump(history, f)
+            logger.debug(
+                f"Saved {len(history)} performance scores to {self.history_file}"
+            )
+        except OSError as e:
+            logger.error(f"Error writing history file {self.history_file}: {e}")
 
     async def fetch_consensus_result(
         self, cycle_num: int, validator_api_url: str
@@ -256,7 +302,50 @@ class MinerAgent:
             # Lấy trạng thái cũ từ old_datum
             trust_score_old = old_datum.trust_score  # Property đã unscale
             rewards_old = old_datum.accumulated_rewards  # Đây là int đã scale
-            # TODO: Cần cơ chế decode history từ hash cũ nếu muốn giữ lại và append
+            on_chain_history_hash = old_datum.performance_history_hash
+            local_history_old = self._load_local_history()
+
+            # Xác minh local history với hash on-chain
+            history_verified = False
+            if on_chain_history_hash:
+                try:
+                    if verify_hash(local_history_old, on_chain_history_hash):
+                        history_verified = True
+                        logger.debug("Local performance history matches on-chain hash.")
+                    else:
+                        logger.warning("Local performance history MISMATCH with on-chain hash! Resetting local history.")
+                        local_history_old = [] # Reset nếu hash không khớp
+                except Exception as e:
+                    logger.error(f"Error verifying history hash: {e}. Assuming mismatch and resetting.")
+                    local_history_old = []
+            elif local_history_old:
+                logger.warning("Local performance history exists but no on-chain hash found. Using local history.")
+                # Có thể coi là hợp lệ nếu không có hash cũ để so sánh
+                history_verified = True # Hoặc đặt là False và reset tùy logic mong muốn
+            else:
+                # Không có local history và không có hash on-chain -> Bắt đầu mới
+                history_verified = True
+
+            # Tạo history mới
+            # Nếu history cũ không hợp lệ (không khớp hash), bắt đầu lại chỉ với điểm mới
+            if not history_verified:
+                history_for_new_datum = [p_adj] if p_adj is not None else []
+            else:
+                history_for_new_datum = local_history_old
+                if p_adj is not None: # Chỉ thêm nếu p_adj hợp lệ
+                    history_for_new_datum.append(p_adj)
+
+            # Cắt bớt history và tính hash mới
+            history_for_new_datum = history_for_new_datum[-self.config.CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN:]
+            try:
+                new_perf_history_hash = hash_data(history_for_new_datum) if history_for_new_datum else on_chain_history_hash # Giữ hash cũ nếu history mới rỗng? Hoặc hash list rỗng?
+            except Exception as e:
+                logger.error(f"Failed to hash new performance history: {e}. Keeping old hash.")
+                new_perf_history_hash = on_chain_history_hash
+
+            # Lưu history mới vào file cục bộ (chỉ khi hash thành công?)
+            if new_perf_history_hash != on_chain_history_hash or not self.history_file.exists() or not history_verified:
+                self._save_local_history(history_for_new_datum)
             history_old = []  # Tạm thời coi như bắt đầu lại history mỗi lần tính
 
             # --- Tính Trust Score mới ---
