@@ -2,6 +2,7 @@ from typing import Optional
 from pycardano import (
     ExtendedSigningKey,
     ScriptHash,
+    Address,
     PlutusV3Script,
     BlockFrostChainContext,
     Network,
@@ -23,7 +24,7 @@ def register_key(
     script: PlutusV3Script,
     context: BlockFrostChainContext,
     network: Optional[Network] = None,
-    contract_address: Optional[ScriptHash] = None,
+    contract_address: Optional[Address] = None,
     redeemer: Optional[Redeemer] = None,
 ) -> str:
     """
@@ -40,7 +41,8 @@ def register_key(
         script (PlutusV3Script): The Plutus script of the smart contract.
         context (BlockFrostChainContext): Blockchain context for interacting with the Cardano network.
         network (Optional[Network]): The Cardano network (mainnet or testnet). Defaults to settings.CARDANO_NETWORK.
-        contract_address (Optional[ScriptHash]): The address of the smart contract. Defaults to settings.TEST_CONTRACT_ADDRESS.
+        contract_address (Optional[Address]): The address object of the smart contract.
+                                            Defaults to an Address derived from settings.TEST_CONTRACT_ADDRESS (ScriptHash).
         redeemer (Optional[Redeemer]): The redeemer used for script validation. Defaults to Redeemer(0).
 
     Returns:
@@ -49,13 +51,44 @@ def register_key(
     Raises:
         ValueError: If no UTxO is found at the contract address.
     """
-    # Use default values from settings if not provided
-    network = network or settings.CARDANO_NETWORK # type: ignore
-    contract_address = contract_address or settings.TEST_CONTRACT_ADDRESS # type: ignore
+    # Determine the network, ensuring it's not None
+    resolved_network: Network
+    if network:
+        resolved_network = network
+    elif settings.CARDANO_NETWORK:
+        network_setting_str = str(settings.CARDANO_NETWORK).lower()
+        if network_setting_str == "testnet":
+            resolved_network = Network.TESTNET
+        elif network_setting_str == "mainnet":
+            resolved_network = Network.MAINNET
+        else:
+            raise ValueError(
+                f"Invalid network string in settings: '{settings.CARDANO_NETWORK}'"
+            )
+    else:
+        raise ValueError(
+            "Cardano network could not be determined from arguments or settings."
+        )
 
-    # Find the UTxO with the lowest incentive
-    lowest_utxo: UTxO = get_utxo_with_lowest_performance(
-        contract_address=contract_address, # type: ignore
+    # Determine the final contract address object
+    final_contract_address: Address
+    if contract_address:
+        final_contract_address = contract_address
+    else:
+        default_script_hash_hex = settings.TEST_CONTRACT_ADDRESS
+        if not default_script_hash_hex:
+            raise ValueError(
+                "Default contract address (script hash) not set in settings."
+            )
+        default_script_hash = ScriptHash(bytes.fromhex(default_script_hash_hex))
+        # Use resolved_network which is guaranteed to be a Network object
+        final_contract_address = Address(
+            payment_part=default_script_hash, network=resolved_network
+        )
+
+    # Find the UTxO with the lowest incentive (can be None)
+    lowest_utxo: Optional[UTxO] = get_utxo_with_lowest_performance(
+        contract_address=final_contract_address,
         datumclass=MinerDatum,  # Assumes MinerDatum is the correct datum class
         context=context,
     )
@@ -71,7 +104,7 @@ def register_key(
         new_datum=new_datum,
         script=script,
         context=context,
-        network=network,
+        network=resolved_network,
         redeemer=redeemer or Redeemer(0),
     )
 

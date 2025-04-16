@@ -55,14 +55,16 @@ class WalletManager:
 
     def load_coldkey(self, name: str, password: str):
         """
-        Load a previously created coldkey by decrypting its mnemonic.enc file.
+        Load an existing coldkey, derive its keys, and return key information.
 
         Args:
             name (str): Name of the coldkey to load.
             password (str): Password used to decrypt the mnemonic.
 
         Returns:
-            None: Updates self.ck_manager.coldkeys with the loaded coldkey data.
+            dict | None: A dictionary containing key information (like 'payment_xsk',
+                         'stake_xsk', 'payment_address') returned by ColdKeyManager,
+                         or None if loading fails.
         """
         return self.ck_manager.load_coldkey(name, password)
 

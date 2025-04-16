@@ -7,6 +7,9 @@ import os  # Import os for path operations
 import traceback  # Import traceback for detailed error logging
 import hashlib  # Import the standard hashlib library
 from typing import Optional  # Import Optional
+from rich.panel import Panel
+from rich.table import Table
+from collections import defaultdict
 
 # --- Move settings import near the top ---
 # This ensures logging is configured before other modules get loggers
@@ -17,10 +20,14 @@ from pycardano import (
     PlutusV3Script,
     ScriptHash,
     Address,
-    PaymentSigningKey,
-    StakeSigningKey,
+    ExtendedSigningKey,
     plutus_script_hash,
     hash,
+    Asset,
+    BlockFrostChainContext,
+    UTxO,
+    TransactionOutput,
+    Value,
 )
 import cbor2
 from sdk.keymanager.wallet_manager import WalletManager
@@ -463,18 +470,29 @@ def register_hotkey_cmd(
         # --- Load Keys ---
         console.print(f"⏳ Loading coldkey [magenta]'{coldkey}'[/magenta]...")
         coldkey_data = wm.load_coldkey(coldkey, password)
+
+        # <<< Add Debug Print Here >>>
+        if coldkey_data:
+            console.print(
+                f"[cyan]DEBUG:[/cyan] Keys in returned coldkey_data: {list(coldkey_data.keys())}"
+            )
+        else:
+            console.print("[cyan]DEBUG:[/cyan] coldkey_data is None or empty.")
+        # <<< End Debug Print >>>
+
+        # Check if the returned data actually contains the required keys
         if (
             not coldkey_data
-            or not coldkey_data.get("payment_skey")
+            or not coldkey_data.get("payment_xsk")
             or not coldkey_data.get("payment_address")
         ):
             console.print(
                 f"[bold red]Error:[/bold red] Failed to load coldkey '{coldkey}' or its signing key/address."
             )
             return
-        cold_payment_skey: PaymentSigningKey = coldkey_data["payment_skey"]
+        cold_payment_xsk: ExtendedSigningKey = coldkey_data["payment_xsk"]
         cold_address: Address = coldkey_data["payment_address"]
-        cold_stake_skey: Optional[StakeSigningKey] = coldkey_data.get("stake_skey")
+        cold_stake_xsk: Optional[ExtendedSigningKey] = coldkey_data.get("stake_xsk")
         console.print(
             f":key: Coldkey '{coldkey}' loaded (Address: [dim]{cold_address}[/dim])."
         )
@@ -509,15 +527,16 @@ def register_hotkey_cmd(
             validator_details = read_validator()
             if (
                 not validator_details
-                or "script" not in validator_details
+                or "script_bytes" not in validator_details
                 or "script_hash" not in validator_details
             ):
                 console.print(
                     "[bold red]Error:[/bold red] Failed to load valid script details (script or hash missing) using read_validator."
                 )
                 return
-            script: PlutusV3Script = validator_details["script"]
+            script: PlutusV3Script = validator_details["script_bytes"]
             script_hash: ScriptHash = validator_details["script_hash"]
+            # Re-derive the Address object from the script hash
             contract_address_obj = Address(payment_part=script_hash, network=net)
             console.print(
                 f":scroll: Script details loaded. Script Hash: [yellow]{script_hash.to_primitive()}[/yellow]"
@@ -603,12 +622,8 @@ def register_hotkey_cmd(
         )
         try:
             tx_id = register_key(
-                payment_xsk=cold_payment_skey.to_extended_signing_key(),
-                stake_xsk=(
-                    cold_stake_skey.to_extended_signing_key()
-                    if cold_stake_skey
-                    else None
-                ),
+                payment_xsk=cold_payment_xsk,
+                stake_xsk=(cold_stake_xsk if cold_stake_xsk else None),
                 script_hash=script_hash,
                 new_datum=new_datum,
                 script=script,
@@ -655,3 +670,338 @@ def register_hotkey_cmd(
             f"[bold red]Error:[/bold red] An overall unexpected error occurred in register_hotkey_cmd: {e}"
         )
         console.print_exception(show_locals=True)
+
+
+# ------------------------------------------------------------------------------
+# 7) SHOW HOTKEY INFO (INCLUDING ON-CHAIN BALANCE)
+# ------------------------------------------------------------------------------
+@wallet_cli.command("show-hotkey")
+@click.option("--coldkey", required=True, help="Name of the parent Coldkey.")
+@click.option("--hotkey", required=True, help="Name of the Hotkey to display.")
+@click.option(
+    "--base-dir",
+    default=lambda: settings.HOTKEY_BASE_DIR,
+    help="Base directory where the coldkey resides.",
+)
+@click.option(
+    "--network",
+    default=lambda: (
+        "mainnet" if settings.CARDANO_NETWORK == Network.MAINNET else "testnet"
+    ),
+    type=click.Choice(["testnet", "mainnet"]),
+    help="Select Cardano network to query.",
+)
+def show_hotkey_cmd(coldkey, hotkey, base_dir, network):
+    """
+    🔍 Display details for a specific Hotkey, including its on-chain balance.
+    Reads basic info from hotkeys.json and queries the blockchain for balance.
+    """
+    console = Console()
+    net = Network.TESTNET if network == "testnet" else Network.MAINNET
+    wm = WalletManager(network=net, base_dir=base_dir)  # Pass network to WM
+
+    console.print(
+        f"🔍 Fetching info for hotkey [cyan]'{hotkey}'[/cyan] under [magenta]'{coldkey}'[/magenta]..."
+    )
+
+    try:
+        # 1. Get Hotkey Info (especially address) from local file
+        hotkey_info = wm.get_hotkey_info(coldkey, hotkey)
+        if not hotkey_info or not hotkey_info.get("address"):
+            # Error message already printed by get_hotkey_info if not found
+            console.print(
+                f":cross_mark: [bold red]Error:[/bold red] Could not retrieve address for hotkey '{hotkey}'."
+            )
+            return
+
+        hotkey_address_str = hotkey_info["address"]
+        console.print(f"  Hotkey Address: [blue]{hotkey_address_str}[/blue]")
+
+        # 2. Initialize Chain Context
+        console.print(
+            f"⏳ Initializing Cardano context for [yellow]{network.upper()}[/yellow]..."
+        )
+        context: BlockFrostChainContext = get_chain_context(method="blockfrost")
+        if not context:
+            console.print(
+                "[bold red]Error:[/bold red] Could not initialize Cardano chain context."
+            )
+            return
+        console.print("  Context initialized.")
+
+        # 3. Query UTxOs for the hotkey address
+        console.print(f"⏳ Querying Blockfrost for UTxOs at the hotkey address...")
+        utxos: list[UTxO] = context.utxos(str(hotkey_address_str))
+        console.print(f"✅ Found {len(utxos)} UTxO(s) for the hotkey address.")
+
+        # 4. Aggregate balances
+        total_lovelace = 0
+        asset_balances = defaultdict(int)
+        if utxos:
+            for utxo in utxos:
+                output: TransactionOutput = utxo.output
+                total_lovelace += output.amount.coin
+                if output.amount.multi_asset:
+                    for policy_id, assets_dict in output.amount.multi_asset.items():
+                        for asset_name_bytes, quantity in assets_dict.items():
+                            unit = (
+                                policy_id.payload.hex() + bytes(asset_name_bytes).hex()
+                            )
+                            asset_balances[unit] += quantity
+
+        # 5. Prepare content for display
+        panel_content = f"[bold]Name:[/bold] [cyan]{hotkey}[/cyan]\n"
+        panel_content += f"[bold]Address:[/bold] [blue]{hotkey_address_str}[/blue]\n\n"
+        panel_content += f"[bold]ADA Balance:[/bold] [green]{total_lovelace / 1000000:,.6f} ADA[/green] ({total_lovelace:,} Lovelace)\n"
+
+        if asset_balances:
+            panel_content += "\n[bold]Other Assets:[/bold]\n"
+            asset_table = Table(
+                show_header=True, header_style="bold cyan", box=None, padding=(0, 1)
+            )
+            asset_table.add_column("Asset Name", style="yellow", no_wrap=True)
+            asset_table.add_column("Quantity", style="magenta", justify="right")
+            # asset_table.add_column("Full Unit", style="dim") # Optional: show full unit
+
+            for unit, quantity in asset_balances.items():
+                try:
+                    policy_id_hex = unit[:56]
+                    asset_name_hex = unit[56:]
+                    asset_name_decoded = bytes.fromhex(asset_name_hex).decode(
+                        "utf-8", errors="replace"
+                    )
+                    display_name = f"{asset_name_decoded} ({policy_id_hex[:6]}...)"
+                except Exception:
+                    display_name = f"Unit: {unit[:20]}..."
+                asset_table.add_row(display_name, f"{quantity:,}")  # , unit)
+
+            # Convert table to string to embed in Panel (or print separately)
+            # This requires capturing console output, might be complex.
+            # Alternative: Print table separately after the panel.
+            # For simplicity here, let's just list them in the panel content.
+            asset_lines = []
+            for unit, quantity in asset_balances.items():
+                try:
+                    policy_id_hex = unit[:56]
+                    asset_name_hex = unit[56:]
+                    asset_name_decoded = bytes.fromhex(asset_name_hex).decode(
+                        "utf-8", errors="replace"
+                    )
+                    display_name = f"{asset_name_decoded} ({policy_id_hex[:6]}...)"
+                except Exception:
+                    display_name = f"Unit: {unit[:20]}..."
+                asset_lines.append(f"  - {display_name}: {quantity:,}")
+            panel_content += "\n".join(asset_lines)
+
+        else:
+            panel_content += "\nNo other tokens or NFTs found."
+
+        # 6. Display Panel
+        console.print(
+            Panel(
+                panel_content,
+                title=f":key: Hotkey Details & Balance for [cyan]'{hotkey}'[/cyan] ([magenta]'{coldkey}'[/magenta])",
+                expand=False,
+                border_style="yellow",
+            )
+        )
+
+    except Exception as e:
+        console.print(f":cross_mark: [bold red]An error occurred:[/bold red] {e}")
+        # console.print_exception(show_locals=True)
+
+
+# ------------------------------------------------------------------------------
+# 8) LIST HOTKEYS FOR A COLDKEY
+# ------------------------------------------------------------------------------
+@wallet_cli.command("list-hotkeys")
+@click.option(
+    "--coldkey", required=True, help="Name of the Coldkey whose hotkeys to list."
+)
+@click.option(
+    "--base-dir",
+    default=lambda: settings.HOTKEY_BASE_DIR,
+    help="Base directory where the coldkey resides.",
+)
+def list_hotkeys_cmd(coldkey, base_dir):
+    """
+    📄 List all Hotkeys (Name and Address) associated with a specific Coldkey.
+    Reads information from the coldkey's hotkeys.json file.
+    """
+    console = Console()
+    wm = WalletManager(base_dir=base_dir)
+
+    try:
+        # Use load_all_wallets and filter for the specific coldkey
+        all_wallets = wm.load_all_wallets()
+        target_wallet_data = None
+        for w_data in all_wallets:
+            if w_data.get("name") == coldkey:
+                target_wallet_data = w_data
+                break
+
+        if target_wallet_data and target_wallet_data.get("hotkeys"):
+            hotkeys = target_wallet_data["hotkeys"]
+            table = Table(
+                title=f":clipboard: Hotkeys for Coldkey [magenta]'{coldkey}'[/magenta]",
+                show_header=True,
+                header_style="bold magenta",
+            )
+            table.add_column("Hotkey Name", style="cyan", no_wrap=True)
+            table.add_column("Address", style="blue")
+
+            for hk in hotkeys:
+                table.add_row(hk.get("name", "N/A"), hk.get("address", "N/A"))
+
+            if not hotkeys:
+                console.print(
+                    f":information_source: No hotkeys found for coldkey '[magenta]{coldkey}[/magenta]'."
+                )
+            else:
+                console.print(table)
+
+        elif target_wallet_data:
+            console.print(
+                f":information_source: No hotkeys found for coldkey '[magenta]{coldkey}[/magenta]'."
+            )
+        else:
+            console.print(
+                f":cross_mark: [bold red]Error:[/bold red] Coldkey '[magenta]{coldkey}[/magenta]' not found in base directory '[blue]{base_dir}[/blue]'."
+            )
+
+    except Exception as e:
+        console.print(f":cross_mark: [bold red]Error listing hotkeys:[/bold red] {e}")
+
+
+# ------------------------------------------------------------------------------
+# 9) QUERY ADDRESS INFO (ON-CHAIN)
+# ------------------------------------------------------------------------------
+@wallet_cli.command("query-address")
+@click.option(
+    "--coldkey", required=True, help="Name of the Coldkey whose address to query."
+)
+@click.option(
+    "--password",
+    prompt=True,
+    hide_input=True,
+    help="Password for the Coldkey.",
+)
+@click.option(
+    "--base-dir",
+    default=lambda: settings.HOTKEY_BASE_DIR,
+    help="Base directory where the coldkey resides.",
+)
+@click.option(
+    "--network",
+    default=lambda: (
+        "mainnet" if settings.CARDANO_NETWORK == Network.MAINNET else "testnet"
+    ),
+    type=click.Choice(["testnet", "mainnet"]),
+    help="Select Cardano network.",
+)
+def query_address_cmd(coldkey, password, base_dir, network):
+    """
+    📊 Query on-chain information (ADA balance, Tokens) for a Coldkey's primary address.
+    Connects to the specified Cardano network via Blockfrost.
+    """
+    console = Console()
+    console.print(
+        f"🔍 Querying address info for coldkey [magenta]'{coldkey}'[/magenta]..."
+    )
+
+    try:
+        # 1. Load coldkey to get the address
+        net = Network.TESTNET if network == "testnet" else Network.MAINNET
+        wm = WalletManager(network=net, base_dir=base_dir)
+
+        coldkey_data = wm.load_coldkey(coldkey, password)
+        if not coldkey_data or not coldkey_data.get("payment_address"):
+            console.print(
+                f":cross_mark: [bold red]Error:[/bold red] Could not load coldkey '{coldkey}' or retrieve its address."
+            )
+            return
+
+        target_address: Address = coldkey_data["payment_address"]
+        console.print(f"  Target Address: [blue]{target_address}[/blue]")
+
+        # 2. Initialize Chain Context
+        console.print(
+            f"⏳ Initializing Cardano context for [yellow]{network.upper()}[/yellow]..."
+        )
+        # Remove network param if get_chain_context doesn't accept it
+        context: BlockFrostChainContext = get_chain_context(method="blockfrost")
+        if not context:
+            console.print(
+                "[bold red]Error:[/bold red] Could not initialize Cardano chain context."
+            )
+            return
+        console.print("  Context initialized.")
+
+        # 3. Query UTxOs for the address
+        console.print(f"⏳ Querying Blockfrost for UTxOs at the address...")
+        utxos: list[UTxO] = context.utxos(str(target_address))
+        console.print(f"✅ Found {len(utxos)} UTxO(s).")
+
+        # 4. Aggregate balances from UTxOs
+        total_lovelace = 0
+        # Use defaultdict to easily sum asset quantities
+        asset_balances = defaultdict(int)
+
+        if not utxos:
+            console.print(":information_source: No UTxOs found at this address.")
+        else:
+            for utxo in utxos:
+                output: TransactionOutput = utxo.output
+                # Add ADA
+                total_lovelace += output.amount.coin
+                # Add other assets (multi_asset)
+                if output.amount.multi_asset:
+                    for policy_id, assets_dict in output.amount.multi_asset.items():
+                        for asset_name_bytes, quantity in assets_dict.items():
+                            # Create a unique unit string: policy_id_hex + asset_name_hex
+                            # Use bytes(asset_name_bytes) to get the bytes before calling .hex()
+                            unit = (
+                                policy_id.payload.hex() + bytes(asset_name_bytes).hex()
+                            )
+                            asset_balances[unit] += quantity
+
+            # 5. Display Information
+            console.print(
+                f"  [bold green]ADA Balance:[/bold green] {total_lovelace / 1000000:,.6f} ADA ({total_lovelace:,} Lovelace)"
+            )
+
+            # Display other assets in a table
+            if asset_balances:
+                asset_table = Table(
+                    title="Tokens / NFTs", show_header=True, header_style="bold cyan"
+                )
+                asset_table.add_column("Asset Name", style="yellow", no_wrap=True)
+                asset_table.add_column("Quantity", style="magenta", justify="right")
+                asset_table.add_column("Full Unit (PolicyID + NameHex)", style="dim")
+
+                for unit, quantity in asset_balances.items():
+                    # Attempt to decode asset name
+                    try:
+                        policy_id_hex = unit[:56]
+                        asset_name_hex = unit[56:]
+                        asset_name_decoded = bytes.fromhex(asset_name_hex).decode(
+                            "utf-8", errors="replace"
+                        )
+                        display_name = f"{asset_name_decoded} ({policy_id_hex[:6]}...)"
+                    except Exception:
+                        display_name = f"Unit: {unit}"
+
+                    asset_table.add_row(display_name, f"{quantity:,}", unit)
+
+                console.print(asset_table)
+            else:
+                console.print("  No other tokens or NFTs found at this address.")
+
+    except FileNotFoundError:
+        console.print(
+            f":cross_mark: [bold red]Error:[/bold red] Coldkey '{coldkey}' directory not found."
+        )
+    except Exception as e:
+        console.print(f":cross_mark: [bold red]An error occurred:[/bold red] {e}")
+        # Optionally print traceback for debugging unexpected errors
+        # console.print_exception(show_locals=True)

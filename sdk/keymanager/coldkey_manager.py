@@ -7,7 +7,13 @@ from bip_utils import (
     Bip39Languages,
 )
 from cryptography.fernet import InvalidToken
-from pycardano import HDWallet, Address, PaymentVerificationKey, StakeVerificationKey
+from pycardano import (
+    HDWallet,
+    Address,
+    Network,
+    ExtendedSigningKey,
+    ExtendedVerificationKey,
+)
 from rich.console import Console
 from typing import cast
 
@@ -150,76 +156,125 @@ class ColdKeyManager:
 
     def load_coldkey(self, name: str, password: str):
         """
-        Load an existing coldkey from disk, decrypt its mnemonic, and store
-        the HDWallet in memory.
+        Load an existing coldkey, derive its keys, and return key information.
+        Uses Extended Keys based on HotKeyManager pattern.
 
         Steps:
-          1. Reads 'mnemonic.enc', 'salt.bin', and 'hotkeys.json' from the coldkey directory.
+          1. Reads 'mnemonic.enc', 'salt.bin'.
           2. Decrypts the mnemonic using the provided password.
           3. Initializes an HDWallet from the mnemonic.
-          4. Loads any existing hotkeys from 'hotkeys.json' into memory.
+          4. Derives standard payment and stake *extended* key pairs (account 0, index 0).
+          5. Derives the standard base address using the *extended* verification key hashes.
+          6. Returns a dictionary containing essential extended keys and address.
 
         Args:
             name (str): The coldkey name (folder) to load.
             password (str): Password used to decrypt the mnemonic.
 
-        Raises:
-            FileNotFoundError: If 'mnemonic.enc' is missing.
-            Exception: If the mnemonic decryption fails (invalid password).
+        Returns:
+            dict: A dictionary containing 'mnemonic', 'payment_xsk', 'stake_xsk',
+                  'payment_address', 'cipher_suite'.
+                  Returns None if loading or decryption fails.
         """
         console = Console()
-        # Construct the path to the coldkey folder
         coldkey_dir = os.path.join(self.base_dir, name)
-        # The encrypted mnemonic
         mnemonic_path = os.path.join(coldkey_dir, "mnemonic.enc")
-        # The hotkeys.json file
-        hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
+        # hotkey_path seems unused in this revised logic, only for internal state update?
+        # hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
 
-        # Check if the mnemonic file exists
         if not os.path.exists(mnemonic_path):
-            # Use console for error message
             console.print(
                 f":cross_mark: [bold red]Error:[/bold red] mnemonic.enc not found for Cold Key '{name}'."
             )
-            raise FileNotFoundError(f"mnemonic.enc not found for Cold Key '{name}'.")
+            return None
 
-        # Create the Fernet cipher suite (password + salt)
-        cipher_suite = get_cipher_suite(password, coldkey_dir)
-
-        # Read the encrypted mnemonic
-        with open(mnemonic_path, "rb") as f:
-            encrypted_mnemonic = f.read()
-
-        # Decrypt the mnemonic
         try:
+            cipher_suite = get_cipher_suite(password, coldkey_dir)
+            with open(mnemonic_path, "rb") as f:
+                encrypted_mnemonic = f.read()
             mnemonic = cipher_suite.decrypt(encrypted_mnemonic).decode("utf-8")
+
+            hdwallet = HDWallet.from_mnemonic(mnemonic)
+
+            # --- Derive standard extended keys (Account 0, Address 0) ---
+            payment_path = "m/1852'/1815'/0'/0/0"
+            payment_child_wallet = hdwallet.derive_from_path(payment_path)
+            payment_xsk = ExtendedSigningKey.from_hdwallet(payment_child_wallet)
+            payment_xvk = payment_xsk.to_verification_key()
+
+            stake_path = "m/1852'/1815'/0'/2/0"
+            stake_child_wallet = hdwallet.derive_from_path(stake_path)
+            stake_xsk = ExtendedSigningKey.from_hdwallet(stake_child_wallet)
+            stake_xvk = stake_xsk.to_verification_key()
+
+            # --- Derive the base address using extended verification key hashes ---
+            network_obj = settings.CARDANO_NETWORK
+            if not isinstance(network_obj, Network):
+                if isinstance(network_obj, str) and network_obj.lower() == "testnet":
+                    network_obj = Network.TESTNET
+                elif isinstance(network_obj, str) and network_obj.lower() == "mainnet":
+                    network_obj = Network.MAINNET
+                else:
+                    logger.warning(
+                        f"Invalid network type in settings: {network_obj}. Defaulting to TESTNET."
+                    )
+                    network_obj = Network.TESTNET
+
+            payment_address = Address(
+                payment_part=payment_xvk.hash(),  # Use .hash() on XVK
+                staking_part=stake_xvk.hash(),  # Use .hash() on XVK
+                network=network_obj,
+            )
+            # --- End Derivation ---
+
+            # Update internal state (Optional - Load hotkeys if needed for other methods)
+            hotkeys_data = {}
+            hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
+            if os.path.exists(hotkey_path):
+                try:
+                    with open(hotkey_path, "r") as f:
+                        hotkeys_data = json.load(f)
+                    if "hotkeys" not in hotkeys_data:
+                        hotkeys_data["hotkeys"] = {}
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"Could not decode hotkeys.json for {name}, initializing empty."
+                    )
+                    hotkeys_data["hotkeys"] = {}
+            else:
+                hotkeys_data["hotkeys"] = {}
+
+            self.coldkeys[name] = {
+                "wallet": hdwallet,
+                "cipher_suite": cipher_suite,
+                "hotkeys": hotkeys_data.get("hotkeys", {}),
+            }
+
+            logger.info(
+                f":key: [bold blue]Cold Key '{name}' loaded and keys derived successfully.[/bold blue]"
+            )
+
+            # --- Return the derived extended keys and address ---
+            return {
+                "mnemonic": mnemonic,
+                "payment_xsk": payment_xsk,
+                "stake_xsk": stake_xsk,
+                "payment_address": payment_address,
+                "cipher_suite": cipher_suite,
+            }
+            # --- End Return ---
+
         except InvalidToken:
-            # Use console for error message
             console.print(
                 ":cross_mark: [bold red]Error:[/bold red] Invalid password: failed to decrypt mnemonic."
             )
-            raise Exception("Invalid password: failed to decrypt mnemonic.")
-
-        # Recreate the HDWallet from the decrypted mnemonic
-        hdwallet = HDWallet.from_mnemonic(mnemonic)
-
-        # Read and parse "hotkeys.json"
-        with open(hotkey_path, "r") as f:
-            hotkeys_data = json.load(f)
-        if "hotkeys" not in hotkeys_data:
-            hotkeys_data["hotkeys"] = {}
-
-        # Store the loaded coldkey data in memory
-        self.coldkeys[name] = {
-            "wallet": hdwallet,
-            "cipher_suite": cipher_suite,
-            "hotkeys": hotkeys_data["hotkeys"],
-        }
-
-        # Use rich markup for success log message
-        logger.info(
-            f":key: [bold blue]Cold Key '{name}' loaded successfully.[/bold blue]"
-        )
+            return None
+        except Exception as e:
+            logger.error(
+                f":cross_mark: [bold red]Error loading coldkey '{name}': {e}[/bold red]"
+            )
+            console.print_exception(show_locals=False)
+            return None
 
     def restore_coldkey_from_mnemonic(
         self, name: str, mnemonic: str, new_password: str, force: bool = False
