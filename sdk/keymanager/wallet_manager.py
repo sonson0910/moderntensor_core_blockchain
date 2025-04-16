@@ -2,6 +2,8 @@
 
 import os
 import json
+from rich.console import Console
+from typing import Optional
 
 from sdk.config.settings import settings, logger
 from sdk.keymanager.coldkey_manager import ColdKeyManager
@@ -101,6 +103,66 @@ class WalletManager:
             coldkey_name, encrypted_hotkey, hotkey_name, overwrite
         )
 
+    def restore_coldkey_from_mnemonic(
+        self, name: str, mnemonic: str, new_password: str, force: bool = False
+    ):
+        """
+        Restores a coldkey from a mnemonic phrase, sets a new password,
+        and saves the encrypted data.
+
+        Delegates the actual restoration logic to ColdKeyManager.
+
+        Args:
+            name (str): Name for the coldkey.
+            mnemonic (str): The mnemonic phrase.
+            new_password (str): The new password to encrypt the mnemonic.
+            force (bool): Overwrite if the coldkey directory exists.
+
+        Returns:
+            None: Writes files to disk and updates internal state.
+
+        Raises:
+            FileExistsError: If the coldkey directory exists and force is False.
+            Exception: If mnemonic validation or other errors occur during restoration.
+        """
+        return self.ck_manager.restore_coldkey_from_mnemonic(
+            name, mnemonic, new_password, force
+        )
+
+    def regenerate_hotkey(
+        self,
+        coldkey_name: str,
+        hotkey_name: str,
+        index: int,
+        force: bool = False,
+    ):
+        """
+        Regenerates a hotkey's data from the parent coldkey and index.
+
+        Delegates the actual regeneration logic to HotKeyManager.
+
+        Args:
+            coldkey_name (str): Name of the parent coldkey (must be loaded).
+            hotkey_name (str): Name to assign to the regenerated hotkey.
+            index (int): The derivation index used originally.
+            force (bool): Overwrite if the hotkey entry already exists.
+
+        Returns:
+            None: Writes to hotkeys.json and potentially updates internal state.
+
+        Raises:
+            ValueError: If coldkey is not loaded or index is invalid.
+            Exception: If regeneration fails.
+        """
+        # Ensure coldkey is loaded before calling hotkey manager
+        if coldkey_name not in self.ck_manager.coldkeys:
+            raise ValueError(f"Coldkey '{coldkey_name}' is not loaded. Load it first.")
+
+        # Call the corresponding method in HotKeyManager
+        return self.hk_manager.regenerate_hotkey(
+            coldkey_name, hotkey_name, index, force
+        )
+
     def load_all_wallets(self):
         """
         Scan the base directory for coldkey folders, read their hotkeys.json files,
@@ -123,7 +185,9 @@ class WalletManager:
         wallets = []
 
         if not os.path.isdir(self.base_dir):
-            logger.warning(f"Base directory '{self.base_dir}' does not exist.")
+            logger.warning(
+                f":warning: [yellow]Base directory '{self.base_dir}' does not exist.[/yellow]"
+            )
             return wallets
 
         for entry in os.scandir(self.base_dir):
@@ -179,7 +243,7 @@ class WalletManager:
 
         if not os.path.isfile(hotkeys_json_path):
             logger.error(
-                f"Hotkey file not found for coldkey '{coldkey_name}': {hotkeys_json_path}"
+                f":cross_mark: [red]Hotkey file not found for coldkey '{coldkey_name}':[/red] {hotkeys_json_path}"
             )
             return None
 
@@ -193,14 +257,16 @@ class WalletManager:
                 return hotkey_data
             else:
                 logger.error(
-                    f"Hotkey '{hotkey_name}' not found under coldkey '{coldkey_name}'."
+                    f":cross_mark: [red]Hotkey '{hotkey_name}' not found under coldkey '{coldkey_name}'.[/red]"
                 )
                 return None
         except json.JSONDecodeError:
-            logger.exception(f"Error decoding JSON from {hotkeys_json_path}")
+            logger.exception(
+                f":exclamation: [bold red]Error decoding JSON from[/bold red] {hotkeys_json_path}"
+            )
             return None
         except Exception as e:
             logger.exception(
-                f"An unexpected error occurred while getting hotkey info: {e}"
+                f":exclamation: [bold red]An unexpected error occurred while getting hotkey info:[/bold red] {e}"
             )
             return None

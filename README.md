@@ -1,69 +1,132 @@
-# ModernTensor SDK
+# ModernTensor ✨
 
-ModernTensor is a project focused on building a command-line interface (CLI) tool to support programming and deploying tensor models in modern applications. The project is currently in its early development stage and there are still many areas that need to be completed.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) <!-- Or Apache 2.0, depending on your choice -->
+
+**ModernTensor** is a decentralized machine intelligence network built on the Cardano blockchain, inspired by the architecture and vision of Bittensor. The project aims to create an open marketplace for AI/ML services, where models compete and are rewarded based on their performance and contribution value to the network, leveraging Cardano's unique features like the EUTXO model and native assets.
 
 ![moderntensor.png](https://github.com/sonson0910/moderntensor/blob/main/moderntensor.png)
 
-## Existing Features
+## 🚀 Introduction
 
-- **Convenient CLI**: Provides concise commands for easy interaction.
-- **Scalability**: Supports the integration of additional libraries and tools in the future.
-- **Flexible design**: Allows customization and configuration through setup files (config).
+In the ModernTensor ecosystem:
 
-## Development Roadmap
+*   **Miners:** Provide AI/ML services/models via API endpoints. They register their hotkey (representing the miner's identifier - UID) onto the network.
+*   **Validators:** (Future) Evaluate the quality and performance of Miners, contributing to the consensus mechanism and reward distribution.
+*   **Cardano Blockchain:** Serves as the secure and decentralized foundation layer to record the network state (miner registrations, stake, rewards, etc.) through smart contracts (Plutus).
 
-1. **Alpha Version**  
-   - Complete basic operations and the structure of the CLI.  
-   - Provide initial usage documentation.
+This project includes an SDK toolkit and a command-line interface (CLI) for interacting with the network.
 
-2. **Beta Version**  
-   - Optimize performance and support cross-platform usage.  
-   - Add additional libraries and plugins.
+## 📋 Current Features
 
-3. **Stable Release**  
-   - Improve stability and enhance security.  
-   - Provide deeper support for machine learning models and algorithms.
+*   **Wallet Management CLI (`mtcli w`):**
+    *   Create Coldkey (`create-coldkey`): Generates a secure mnemonic phrase and encrypts it for storing the root key.
+    *   Restore Coldkey (`restore-coldkey`): Recreates a coldkey from a saved mnemonic phrase.
+    *   Generate Hotkey (`generate-hotkey`): Generates child keys (hotkeys) from the coldkey using standard HD derivation, used for Miner identification and signing operational transactions.
+    *   Import Hotkey (`import-hotkey`): Imports an encrypted hotkey from an external source.
+    *   Regenerate Hotkey (`regen-hotkey`): Recovers hotkey information if the `hotkeys.json` file is lost, requiring only the coldkey and the derivation index.
+    *   List Wallets (`list`): Displays a list of coldkeys and their corresponding hotkeys.
+    *   Register Hotkey (`register-hotkey`): Registers a hotkey as a Miner on the ModernTensor network, creating/updating a UTxO at the smart contract address with Miner information (UID, stake, API endpoint,...).
 
-## Installation Requirements
+## 🏗️ Architecture (Preliminary)
 
-- **Python** (version 3.9 or higher)
-- Virtual environment **virtualenv** or **conda** (recommended)
-- **Git** (for cloning the project)
+*   `sdk/`: Core toolkit (Python SDK)
+    *   `keymanager/`: Logic for managing coldkeys, hotkeys, encryption, derivation.
+    *   `cli/`: Command-line interface (`mtcli`).
+    *   `service/`: High-level interaction services (e.g., key registration).
+    *   `smartcontract/`: Interaction with Plutus scripts (reading, transaction building).
+    *   `metagraph/`: Logic related to network state (datum, hashing,...).
+    *   `config/`: Project configuration.
+    *   `consensus/`, `agent/`: (Potential) Components related to consensus and agent behavior.
+*   `contracts/`: (Potential) Location for Plutus script source code.
+*   `README.md`: This documentation.
+*   `requirements.txt`: List of required Python libraries.
+*   `.env`, `settings.toml`: (Potential) Environment configuration files.
 
-## Installation Guide
+## ⚙️ Installation
 
-1. Clone the source code from the repository:
-   ```bash
-   git clone https://github.com/sonson0910/moderntensor.git
-   cd moderntensor
-   ```
+1.  **Requirements:**
+    *   Python 3.9+
+    *   pip
 
-2. Create a virtual environment (optional but recommended):
-   ```bash
+2.  **Clone Repository:**
+    ```bash
+    git clone <your_repository_url>
+    cd moderntensor
+    ```
+
+3.  **Create Virtual Environment (Recommended):**
+    ```bash
     python -m venv venv
-    source venv/bin/activate  # For Linux/Mac
-    .\venv\Scripts\activate   # For Windows
-   ```
+    source venv/bin/activate  # On Linux/macOS
+    # venv\Scripts\activate   # On Windows
+    ```
 
-3. Install the dependencies:
-   ```bash
+4.  **Install Dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+    *(Note: Ensure you have a complete `requirements.txt` file with libraries like `click`, `rich`, `pycardano`, `blockfrost-python`, `cbor2`, `cryptography`, etc...)*
+
+5.  **(Optional) Install in Editable Mode:** If you want the `mtcli` CLI to be runnable from anywhere and reflect code changes immediately. Requires a suitable `setup.py` or `pyproject.toml` file.
+    ```bash
     pip install -e .
-   ```
+    ```
 
-## Usage
+## 💡 Using the CLI (`mtcli`)
 
-After successfully installing, you can use the `mtcli` command in your terminal:
+The main command-line tool is `mtcli`. The `w` (`wallet`) subcommand is used for wallet management.
+
+**Help:**
 ```bash
 mtcli --help
+mtcli w --help
+mtcli w <command_name> --help # Example: mtcli w create-coldkey --help
 ```
 
-## Contributing
+**Examples:**
 
-ModernTensor welcomes contributions from the community:
-* Create **Issues** or **Pull Requests** on the GitHub repository.
-* Participate in discussions, contribute ideas, and suggest new features.
+```bash
+# 1. Create a new coldkey named 'my_main_coldkey'
+mtcli w create-coldkey --name my_main_coldkey
 
-## Contact
+# 2. Generate a new hotkey named 'miner_hk1' from the coldkey above
+# (You will be prompted for the coldkey password)
+mtcli w generate-hotkey --coldkey my_main_coldkey --hotkey-name miner_hk1
 
-* Email: `sonlearn155@gmail.com`
-* Github: [son](https://github.com/sonson0910)
+# 3. List all wallets
+mtcli w list
+
+# 4. Register hotkey 'miner_hk1' as a miner on subnet 1
+# (You will be prompted for the coldkey password)
+mtcli w register-hotkey \
+    --coldkey my_main_coldkey \
+    --hotkey miner_hk1 \
+    --subnet-uid 1 \
+    --initial-stake 5000000 \
+    --api-endpoint "http://123.45.67.89:8080" \
+    --network testnet # or mainnet
+
+# 5. Restore a coldkey from mnemonic (if needed)
+mtcli w restore-coldkey --name recovered_coldkey --mnemonic "word1 word2 ... word24"
+
+# 6. Regenerate hotkey 'miner_hk1' if hotkeys.json is lost (knowing the index is 0)
+mtcli w regen-hotkey --coldkey my_main_coldkey --hotkey-name miner_hk1 --index 0
+```
+
+## 🤝 Contributing
+
+We welcome contributions from the community! Please refer to `CONTRIBUTING.md` (if available) or follow standard procedures:
+
+1.  Fork the repository.
+2.  Create a new branch (`git checkout -b feature/AmazingFeature`).
+3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
+4.  Push to the branch (`git push origin feature/AmazingFeature`).
+5.  Open a Pull Request.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the `LICENSE` file (if available) for details. (Or change to your chosen license, e.g., Apache 2.0)
+
+## 📞 Contact
+
+(Optional: Add contact information, Discord links, Twitter, etc.)

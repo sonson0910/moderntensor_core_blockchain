@@ -3,6 +3,15 @@
 import click
 from rich.tree import Tree
 from rich.console import Console
+import os  # Import os for path operations
+import traceback  # Import traceback for detailed error logging
+import hashlib  # Import the standard hashlib library
+from typing import Optional  # Import Optional
+
+# --- Move settings import near the top ---
+# This ensures logging is configured before other modules get loggers
+from sdk.config.settings import settings  # Load settings for defaults
+
 from pycardano import (
     Network,
     PlutusV3Script,
@@ -14,12 +23,9 @@ from pycardano import (
     hash,
 )
 import cbor2
-import os  # Import os for path operations
 from sdk.keymanager.wallet_manager import WalletManager
-from typing import Optional  # Import Optional
 from sdk.service.register_key import register_key
 from sdk.service.context import get_chain_context  # Needed for context
-from sdk.config.settings import settings  # Load settings for defaults
 
 # Import function to read validator details
 from sdk.smartcontract.validator import read_validator
@@ -31,14 +37,13 @@ from sdk.metagraph.metagraph_datum import MinerDatum, STATUS_ACTIVE
 # from sdk.utils.cardano_utils import get_current_slot # Assume this exists
 # Import hash_data for empty history hash
 from sdk.metagraph.hash.hash_datum import hash_data
-import traceback  # Import traceback for detailed error logging
 import hashlib  # Import the standard hashlib library
 
 
 @click.group()
 def wallet_cli():
     """
-    CLI command group for Wallet Management (Coldkey & Hotkey).
+    ✨ CLI for managing ModernTensor wallets (Coldkeys & Hotkeys). ✨
     """
     pass
 
@@ -60,47 +65,100 @@ def wallet_cli():
 )
 @click.option(
     "--network",
-    default="testnet",
+    default=lambda: (
+        "mainnet" if settings.CARDANO_NETWORK == Network.MAINNET else "testnet"
+    ),
     type=click.Choice(["testnet", "mainnet"]),
     help="Select Cardano network.",
 )
 def create_coldkey_cmd(name, password, base_dir, network):
     """
-    Generate coldkey (mnemonic), encrypt and save to folder.
+    🔑 Generate a new Coldkey mnemonic, encrypt it with a password,
+    and save it to the specified base directory.
+    Displays the mnemonic phrase upon creation - store it securely!
     """
     net = Network.TESTNET if network == "testnet" else Network.MAINNET
     wm = WalletManager(network=net, base_dir=base_dir)
     wm.create_coldkey(name, password)
     console = Console()
     console.print(
-        f":heavy_check_mark: [bold green]Coldkey '{name}' created in directory '{base_dir}'.[/bold green]"
+        f":heavy_check_mark: [bold green]Coldkey[/bold green] [magenta]'{name}'[/magenta] [bold green]created in directory[/bold green] '[blue]{base_dir}[/blue]'[bold green].[/bold green]"
     )
 
 
 # ------------------------------------------------------------------------------
-# 2) LOAD COLDKEY
+# 2) LOAD COLDKEY -> RESTORE COLDKEY
 # ------------------------------------------------------------------------------
-@wallet_cli.command("load-coldkey")
-@click.option("--name", required=True, help="Coldkey name.")
-@click.option("--password", prompt=True, hide_input=True, help="Password.")
-@click.option("--base-dir", default="moderntensor", help="Base directory.")
+@wallet_cli.command("restore-coldkey")
+@click.option("--name", required=True, help="Name for the restored coldkey.")
+@click.option(
+    "--mnemonic",
+    prompt="Enter the mnemonic phrase (words separated by spaces)",
+    help="The 12/15/18/21/24 word mnemonic phrase.",
+)
+@click.option(
+    "--new-password",
+    prompt="Set a new password for this coldkey",
+    hide_input=True,
+    confirmation_prompt=True,
+    help="New password to encrypt the restored mnemonic.",
+)
+@click.option(
+    "--base-dir",
+    default=lambda: settings.HOTKEY_BASE_DIR,
+    help="Base directory to restore the coldkey into (e.g., ./moderntensor).",
+)
 @click.option(
     "--network",
-    default="testnet",
+    default=lambda: (
+        "mainnet" if settings.CARDANO_NETWORK == Network.MAINNET else "testnet"
+    ),
     type=click.Choice(["testnet", "mainnet"]),
-    help="Network.",
+    help="Select Cardano network.",
 )
-def load_coldkey_cmd(name, password, base_dir, network):
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite existing coldkey folder and its contents if it exists.",
+)
+def restore_coldkey_cmd(name, mnemonic, new_password, base_dir, network, force):
     """
-    Load coldkey into memory.
+    Restore a coldkey from its 12/15/18/21/24 word mnemonic phrase.
+
+    This command recreates the coldkey's encrypted mnemonic file (`mnemonic.enc`)
+    using a NEW password you provide. It also generates the associated salt file
+    and an empty hotkeys file (`hotkeys.json`). Useful for recovery if you only
+    have the mnemonic phrase.
     """
-    net = Network.TESTNET if network == "testnet" else Network.MAINNET
-    wm = WalletManager(network=net, base_dir=base_dir)
-    wm.load_coldkey(name, password)
+    print(f"DEBUG MNEMONIC RECEIVED: {mnemonic!r}")
     console = Console()
     console.print(
-        f":key: [bold blue]Coldkey '{name}' loaded from '{base_dir}'.[/bold blue]"
+        f":recycle: Attempting to restore coldkey [magenta]'{name}'[/magenta] from mnemonic..."
     )
+
+    try:
+        net = Network.TESTNET if network == "testnet" else Network.MAINNET
+        wm = WalletManager(network=net, base_dir=base_dir)
+
+        # Validate mnemonic basic format (simple check)
+        if not mnemonic or len(mnemonic.split()) not in [12, 15, 18, 21, 24]:
+            console.print(
+                ":cross_mark: [bold red]Error:[/bold red] Invalid mnemonic phrase format. Please provide words separated by spaces."
+            )
+            return
+
+        # Call the new restore method (to be implemented in WalletManager/ColdKeyManager)
+        wm.restore_coldkey_from_mnemonic(name, mnemonic, new_password, force)
+
+        # Confirmation message handled by the manager method now
+        # console.print(f":heavy_check_mark: [bold green]Coldkey '{name}' restored successfully in '{base_dir}'.[/bold green]")
+
+    except FileExistsError as e:
+        console.print(f":stop_sign: [bold red]Error:[/bold red] {e}")
+        console.print("Use the --force flag to overwrite.")
+    except Exception as e:
+        console.print(f":cross_mark: [bold red]Error restoring coldkey:[/bold red] {e}")
+        console.print_exception(show_locals=True)
 
 
 # ------------------------------------------------------------------------------
@@ -112,13 +170,23 @@ def load_coldkey_cmd(name, password, base_dir, network):
 @click.option("--base-dir", default="moderntensor", help="Base directory.")
 @click.option(
     "--network",
-    default="testnet",
+    default=lambda: (
+        "mainnet" if settings.CARDANO_NETWORK == Network.MAINNET else "testnet"
+    ),
     type=click.Choice(["testnet", "mainnet"]),
     help="Network.",
 )
 def generate_hotkey_cmd(coldkey, hotkey_name, base_dir, network):
     """
-    Create hotkey (public key) and save it to hotkeys.json
+    Create a new Hotkey derived from a loaded Coldkey.
+
+    Derives a new payment/stake key pair using the next available HD wallet
+    derivation index for the specified coldkey. It encrypts the signing keys
+    and saves the hotkey info (name, address, encrypted data) to the
+    `hotkeys.json` file within the coldkey's directory.
+
+    The derivation index used will be printed upon successful creation.
+    Make sure to save this index for potential recovery using `regen-hotkey`.
     """
     net = Network.TESTNET if network == "testnet" else Network.MAINNET
     wm = WalletManager(network=net, base_dir=base_dir)
@@ -128,7 +196,7 @@ def generate_hotkey_cmd(coldkey, hotkey_name, base_dir, network):
     encrypted_data = wm.generate_hotkey(coldkey, hotkey_name)
     console = Console()
     console.print(
-        f":sparkles: [bold green]Hotkey '{hotkey_name}' created.[/bold green]"
+        f":sparkles: [bold green]Hotkey[/bold green] [cyan]'{hotkey_name}'[/cyan] [bold green]created for coldkey[/bold green] [magenta]'{coldkey}'[/magenta][bold green].[/bold green]"
     )
 
 
@@ -137,26 +205,42 @@ def generate_hotkey_cmd(coldkey, hotkey_name, base_dir, network):
 # ------------------------------------------------------------------------------
 @wallet_cli.command("import-hotkey")
 @click.option("--coldkey", required=True, help="Coldkey name.")
-@click.option("--encrypted-hotkey", required=True, help="Encrypted hotkey string.")
-@click.option("--hotkey-name", required=True, help="Hotkey name.")
+@click.option(
+    "--encrypted-hotkey",
+    required=True,
+    help="The exported encrypted hotkey data string (base64 format).",
+)
+@click.option(
+    "--hotkey-name", required=True, help="Name to assign to the imported Hotkey."
+)
 @click.option(
     "--overwrite",
     is_flag=True,
     default=False,
-    help="Overwrite the old hotkey if the name is the same.",
+    help="Overwrite the existing hotkey entry if a key with the same name exists.",
 )
-@click.option("--base-dir", default="moderntensor", help="Base directory.")
+@click.option(
+    "--base-dir",
+    default="moderntensor",
+    help="Base directory where the parent coldkey resides.",
+)
 @click.option(
     "--network",
-    default="testnet",
+    default=lambda: (
+        "mainnet" if settings.CARDANO_NETWORK == Network.MAINNET else "testnet"
+    ),
     type=click.Choice(["testnet", "mainnet"]),
-    help="Network.",
+    help="Select the Cardano network (testnet/mainnet).",
 )
 def import_hotkey_cmd(
     coldkey, encrypted_hotkey, hotkey_name, overwrite, base_dir, network
 ):
     """
-    Import an encrypted hotkey from a string.
+    Import an exported/generated encrypted hotkey string.
+
+    This decrypts the provided string using the coldkey's password to verify it,
+    then saves the entry (name, address, original encrypted data) into the
+    coldkey's `hotkeys.json` file.
     """
     net = Network.TESTNET if network == "testnet" else Network.MAINNET
     wm = WalletManager(network=net, base_dir=base_dir)
@@ -167,8 +251,93 @@ def import_hotkey_cmd(
     wm.import_hotkey(coldkey, encrypted_hotkey, hotkey_name, overwrite=overwrite)
     console = Console()
     console.print(
-        f":inbox_tray: [bold green]Hotkey '{hotkey_name}' imported.[/bold green]"
+        f":inbox_tray: [bold green]Hotkey[/bold green] [cyan]'{hotkey_name}'[/cyan] [bold green]imported successfully for coldkey[/bold green] [magenta]'{coldkey}'[/magenta][bold green].[/bold green]"
     )
+
+
+# ------------------------------------------------------------------------------
+# 4.5) REGENERATE HOTKEY (from index)
+# ------------------------------------------------------------------------------
+@wallet_cli.command("regen-hotkey")
+@click.option("--coldkey", required=True, help="Name of the parent Coldkey.")
+@click.option(
+    "--hotkey-name",
+    required=True,
+    help="Name to assign/find for the regenerated hotkey.",
+)
+@click.option(
+    "--index",
+    required=True,
+    type=int,
+    help="The derivation index (e.g., 0, 1, 2...) used when the hotkey was originally generated.",
+)
+@click.option(
+    "--password",
+    prompt=True,
+    hide_input=True,
+    help="Password for the parent Coldkey.",
+)
+@click.option(
+    "--base-dir",
+    default=lambda: settings.HOTKEY_BASE_DIR,
+    help="Base directory where the parent coldkey resides.",
+)
+@click.option(
+    "--network",
+    default=lambda: (
+        "mainnet" if settings.CARDANO_NETWORK == Network.MAINNET else "testnet"
+    ),
+    type=click.Choice(["testnet", "mainnet"]),
+    help="Overwrite existing hotkey entry in hotkeys.json if it exists.",
+)
+@click.option(
+    "--force", is_flag=True, help="Overwrite existing hotkey entry if it exists."
+)
+def regen_hotkey_cmd(coldkey, hotkey_name, index, password, base_dir, network, force):
+    """
+    Regenerate a hotkey's data (keys, address, encrypted entry) from its parent
+    coldkey and derivation index. Useful for recovery if hotkeys.json is lost
+    or to ensure consistency.
+    """
+    console = Console()
+    console.print(
+        f":repeat: Attempting to regenerate hotkey [cyan]'{hotkey_name}'[/cyan] from coldkey [magenta]'{coldkey}'[/magenta] at index [yellow]{index}[/yellow]..."
+    )
+
+    if index < 0:
+        console.print(
+            ":cross_mark: [bold red]Error:[/bold red] Derivation index must be a non-negative integer."
+        )
+        return
+
+    try:
+        net = Network.TESTNET if network == "testnet" else Network.MAINNET
+        wm = WalletManager(network=net, base_dir=base_dir)
+
+        # Load the necessary coldkey first
+        console.print(f"⏳ Loading parent coldkey [magenta]'{coldkey}'[/magenta]...")
+        wm.load_coldkey(coldkey, password)
+
+        # Call the new regenerate method
+        wm.regenerate_hotkey(coldkey, hotkey_name, index, force)
+
+        # Success message is handled within the manager method
+
+    except FileNotFoundError as e:
+        console.print(
+            f":cross_mark: [bold red]Error:[/bold red] Coldkey '{coldkey}' or its files not found: {e}"
+        )
+    except KeyError as e:
+        console.print(
+            f":cross_mark: [bold red]Error:[/bold red] Coldkey '{coldkey}' not loaded or issue with its data: {e}"
+        )
+    except ValueError as e:
+        console.print(f":cross_mark: [bold red]Error:[/bold red] {e}")
+    except Exception as e:
+        console.print(
+            f":cross_mark: [bold red]Error regenerating hotkey:[/bold red] {e}"
+        )
+        console.print_exception(show_locals=True)
 
 
 # ------------------------------------------------------------------------------
@@ -179,7 +348,8 @@ def import_hotkey_cmd(
 @wallet_cli.command(name="list")
 def list_coldkeys():
     """
-    List all Coldkeys and their Hotkeys in tree structure (using Rich).
+    List all Coldkeys found in the base directory and their associated Hotkeys
+    (names and addresses from `hotkeys.json`).
     """
     manager = WalletManager()
     wallets = manager.load_all_wallets()
@@ -214,16 +384,25 @@ def list_coldkeys():
 # 6) REGISTER HOTKEY (via Smart Contract Update)
 # ------------------------------------------------------------------------------
 @wallet_cli.command("register-hotkey")
-@click.option("--coldkey", required=True, help="Coldkey name controlling the hotkey.")
-@click.option("--hotkey", required=True, help="Hotkey name to register (used as UID).")
+@click.option(
+    "--coldkey", required=True, help="Name of the Coldkey controlling the Hotkey."
+)
+@click.option(
+    "--hotkey",
+    required=True,
+    help="Name of the Hotkey to register (will be used as UID).",
+)
 @click.option(
     "--password",
     prompt=True,
     hide_input=True,
-    help="Password for the coldkey.",
+    help="Password for the controlling Coldkey.",
 )
 @click.option(
-    "--subnet-uid", required=True, type=int, help="UID of the subnet to register on."
+    "--subnet-uid",
+    required=True,
+    type=int,
+    help="Base directory where the keys reside.",
 )
 @click.option(
     "--initial-stake",
@@ -244,15 +423,15 @@ def list_coldkeys():
 @click.option(
     "--network",
     default=lambda: (
-        str(settings.CARDANO_NETWORK).lower() if settings.CARDANO_NETWORK else "testnet"
-    ),  # Get from settings safely
+        "mainnet" if settings.CARDANO_NETWORK == Network.MAINNET else "testnet"
+    ),
     type=click.Choice(["testnet", "mainnet"]),
     help="Select Cardano network.",
 )
 @click.option(
     "--yes",
     is_flag=True,
-    help="Skip confirmation prompt before submitting transaction.",
+    help="Skip the final confirmation prompt before submitting.",
 )
 def register_hotkey_cmd(
     coldkey,
@@ -266,8 +445,11 @@ def register_hotkey_cmd(
     yes,
 ):
     """
-    Register a hotkey as a Miner by updating the smart contract datum.
-    Finds the UTxO with the lowest incentive and updates its datum.
+    Register a specific Hotkey as a Miner on the ModernTensor network.
+
+    This involves creating/updating a UTxO at the validator contract address.
+    The UTxO's datum will contain the Miner's information (UID, stake, API endpoint, etc.).
+    Requires the Coldkey's password to access the necessary signing keys.
     """
     console = Console()
     console.print(
@@ -318,7 +500,7 @@ def register_hotkey_cmd(
             )
             return
         console.print(
-            f":globe_with_meridians: Cardano context initialized (Network: {net})."
+            f":globe_with_meridians: Cardano context initialized (Network: [yellow]{net}[/yellow])."
         )
 
         # --- Load Script --- (Moved after context init)
@@ -360,7 +542,9 @@ def register_hotkey_cmd(
                     "[yellow]Warning:[/yellow] context.last_block_slot returned None."
                 )
                 current_slot = 0
-            console.print(f":clock1: Using current slot: {current_slot}")
+            console.print(
+                f":clock1: Using current slot: [yellow]{current_slot}[/yellow]"
+            )
         except Exception as slot_err:
             console.print(
                 f"[yellow]Warning:[/yellow] Could not get current slot from context: {slot_err}. Using 0."
@@ -397,10 +581,14 @@ def register_hotkey_cmd(
             api_endpoint=api_endpoint_bytes,
         )
         console.print(":clipboard: New Miner Datum prepared:")
-        click.echo(f"  UID: {hotkey}")
-        click.echo(f"  Subnet UID: {subnet_uid}")
-        click.echo(f"  Stake: {initial_stake}")
-        click.echo(f"  API Endpoint: {api_endpoint}")
+        console.print(f"  UID:            [cyan]{hotkey}[/cyan]")
+        console.print(f"  Subnet UID:     [yellow]{subnet_uid}[/yellow]")
+        console.print(
+            f"  Stake:          [bright_blue]{initial_stake} Lovelace[/bright_blue]"
+        )
+        console.print(f"  API Endpoint:   [link={api_endpoint}]{api_endpoint}[/link]")
+        console.print(f"  Status:         [green]ACTIVE[/green]")
+        console.print(f"  Reg/Update Slot:[yellow]{current_slot}[/yellow]")
 
         # Confirm before proceeding
         if not yes:
@@ -433,7 +621,7 @@ def register_hotkey_cmd(
                 console.print(
                     f":heavy_check_mark: [bold green]Miner registration transaction submitted.[/bold green]"
                 )
-                console.print(f"Transaction ID: [bold blue]{tx_id}[/bold blue]")
+                console.print(f"  Transaction ID: [bold blue]{tx_id}[/bold blue]")
                 console.print(
                     ":hourglass_flowing_sand: Please wait for blockchain confirmation."
                 )

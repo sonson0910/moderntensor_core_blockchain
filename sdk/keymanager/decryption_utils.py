@@ -5,12 +5,15 @@ import json
 import binascii
 from cryptography.fernet import Fernet
 from pycardano import ExtendedSigningKey
+from rich.console import Console
+from typing import cast
 
 from sdk.keymanager.encryption_utils import get_or_create_salt, generate_encryption_key
 from sdk.config.settings import settings, logger
 
+
 def decode_hotkey_skey(
-    base_dir: str = None,
+    base_dir: str = None,  # type: ignore
     coldkey_name: str = "",
     hotkey_name: str = "",
     password: str = "",
@@ -18,7 +21,7 @@ def decode_hotkey_skey(
     """
     Decrypt the hotkey extended signing keys (payment & stake) from hotkeys.json.
 
-    This function reads and decrypts the 'encrypted_data' field in hotkeys.json 
+    This function reads and decrypts the 'encrypted_data' field in hotkeys.json
     for a particular hotkey, reconstructing the ExtendedSigningKey objects.
 
     If no base_dir is provided, it defaults to settings.HOTKEY_BASE_DIR.
@@ -42,8 +45,23 @@ def decode_hotkey_skey(
     # ----------------------------------------------------------------
     # 1) Determine the base directory (use settings if not provided)
     # ----------------------------------------------------------------
-    base_dir = base_dir or settings.HOTKEY_BASE_DIR
-    coldkey_dir = os.path.join(base_dir, coldkey_name)
+    final_base_dir: str
+    if base_dir is not None:
+        final_base_dir = base_dir
+    else:
+        resolved_settings_dir = settings.HOTKEY_BASE_DIR
+        if resolved_settings_dir:
+            final_base_dir = resolved_settings_dir
+        else:
+            logger.error(
+                ":stop_sign: [bold red]CRITICAL: base_dir is None and settings.HOTKEY_BASE_DIR is not set.[/bold red]"
+            )
+            raise ValueError(
+                "Could not determine the base directory for decoding hotkey."
+            )
+
+    # Use cast here for os.path.join
+    coldkey_dir = os.path.join(cast(str, final_base_dir), coldkey_name)
 
     # ----------------------------------------------------------------
     # 2) Retrieve or create the salt for this coldkey directory
