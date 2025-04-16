@@ -124,4 +124,12 @@ def get_cipher_suite(password: str, coldkey_dir: str = None) -> Fernet:  # type:
     logger.debug(
         f":shield: [dim]Created Fernet cipher suite for directory:[/dim] {final_coldkey_dir}"
     )
+
+    # --- DEBUGGING START ---
+    # print(
+    #     f"\n[DEBUG] Attempting to read salt file at: {os.path.abspath(os.path.join(final_coldkey_dir, 'salt.bin'))}"
+    # )
+    # print(f"[DEBUG] Successfully read salt (bytes): {salt}")
+    # --- DEBUGGING END ---
+
     return cipher

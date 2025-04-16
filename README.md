@@ -27,6 +27,106 @@ This project includes an SDK toolkit and a command-line interface (CLI) for inte
     *   List Wallets (`list`): Displays a list of coldkeys and their corresponding hotkeys.
     *   Register Hotkey (`register-hotkey`): Registers a hotkey as a Miner on the ModernTensor network, creating/updating a UTxO at the smart contract address with Miner information (UID, stake, API endpoint,...).
 
+## 💡 Using the CLI (`mtcli`)
+
+The main command-line tool is `mtcli`. The `w` (`wallet`) subcommand is used for wallet management, `tx` for transactions, and `query` for blockchain information.
+
+**Help:**
+```bash
+mtcli --help
+mtcli w --help
+mtcli tx --help
+mtcli query --help
+mtcli w <command_name> --help # Example: mtcli w create-coldkey --help
+mtcli query <command_name> --help # Example: mtcli query address --help
+```
+
+### Wallet Commands (`mtcli w`)
+
+**Examples:**
+
+```bash
+# 1. Create a new coldkey named 'my_main_coldkey'
+mtcli w create-coldkey --name my_main_coldkey
+
+# 2. Generate a new hotkey named 'miner_hk1' from the coldkey above
+# (You will be prompted for the coldkey password)
+mtcli w generate-hotkey --coldkey my_main_coldkey --hotkey-name miner_hk1
+
+# 3. List all wallets
+mtcli w list
+
+# 4. Register hotkey 'miner_hk1' as a miner on subnet 1
+# (You will be prompted for the coldkey password)
+mtcli w register-hotkey \
+    --coldkey my_main_coldkey \
+    --hotkey miner_hk1 \
+    --subnet-uid 1 \
+    --initial-stake 5000000 \
+    --api-endpoint "http://123.45.67.89:8080" \
+    --network testnet # or mainnet
+
+# 5. Restore a coldkey from mnemonic (if needed)
+mtcli w restore-coldkey --name recovered_coldkey --mnemonic "word1 word2 ... word24"
+
+# 6. Regenerate hotkey 'miner_hk1' if hotkeys.json is lost (knowing the index is 0)
+mtcli w regen-hotkey --coldkey my_main_coldkey --hotkey-name miner_hk1 --index 0
+
+# 7. Show the derived address for a hotkey
+# (You will be prompted for the coldkey password)
+mtcli w show-address --coldkey my_main_coldkey --hotkey miner_hk1
+```
+
+### Transaction Commands (`mtcli tx`)
+
+**Examples:**
+
+```bash
+# Send 5 ADA from kickoff/hk1 to another address on testnet
+# (You will be prompted for the coldkey password)
+mtcli tx send \
+    --coldkey kickoff \
+    --hotkey hk1 \
+    --to <recipient_address> \
+    --amount 5000000 \
+    --network testnet
+
+# Send 100 units of a specific token from kickoff/hk1 to wallet2/hk2 on testnet
+# (You will be prompted for the coldkey password)
+mtcli tx send \
+    --coldkey kickoff \
+    --hotkey hk1 \
+    --to wallet2/hk2 \
+    --amount 100 \
+    --token <policy_id_hex>.<asset_name_hex> \
+    --network testnet
+```
+
+### Query Commands (`mtcli query`)
+
+**Examples:**
+
+```bash
+# 1. Get detailed info (ADA, tokens, UTxO count) for a specific Cardano address
+mtcli query address <cardano_address>
+
+# 2. Get the balance (ADA, tokens) for a specific hotkey
+# (You will be prompted for the coldkey password)
+mtcli query balance --coldkey <coldkey_name> --hotkey <hotkey_name>
+
+# 3. List the UTxOs held by a specific hotkey address
+# (You will be prompted for the coldkey password)
+mtcli query utxos --coldkey <coldkey_name> --hotkey <hotkey_name>
+
+# 4. (Advanced) Find a specific UTxO at a smart contract address using its UID (hex)
+# This assumes the datum format is MinerDatum
+mtcli query contract-utxo --contract-address <contract_address> --uid <miner_uid_hex>
+
+# 5. (Advanced) Find the UTxO with the lowest performance score at a smart contract address
+# This assumes the datum format is MinerDatum
+mtcli query lowest-performance --contract-address <contract_address>
+```
+
 ## 🏗️ Architecture (Preliminary)
 
 *   `sdk/`: Core toolkit (Python SDK)
@@ -71,47 +171,6 @@ This project includes an SDK toolkit and a command-line interface (CLI) for inte
     ```bash
     pip install -e .
     ```
-
-## 💡 Using the CLI (`mtcli`)
-
-The main command-line tool is `mtcli`. The `w` (`wallet`) subcommand is used for wallet management.
-
-**Help:**
-```bash
-mtcli --help
-mtcli w --help
-mtcli w <command_name> --help # Example: mtcli w create-coldkey --help
-```
-
-**Examples:**
-
-```bash
-# 1. Create a new coldkey named 'my_main_coldkey'
-mtcli w create-coldkey --name my_main_coldkey
-
-# 2. Generate a new hotkey named 'miner_hk1' from the coldkey above
-# (You will be prompted for the coldkey password)
-mtcli w generate-hotkey --coldkey my_main_coldkey --hotkey-name miner_hk1
-
-# 3. List all wallets
-mtcli w list
-
-# 4. Register hotkey 'miner_hk1' as a miner on subnet 1
-# (You will be prompted for the coldkey password)
-mtcli w register-hotkey \
-    --coldkey my_main_coldkey \
-    --hotkey miner_hk1 \
-    --subnet-uid 1 \
-    --initial-stake 5000000 \
-    --api-endpoint "http://123.45.67.89:8080" \
-    --network testnet # or mainnet
-
-# 5. Restore a coldkey from mnemonic (if needed)
-mtcli w restore-coldkey --name recovered_coldkey --mnemonic "word1 word2 ... word24"
-
-# 6. Regenerate hotkey 'miner_hk1' if hotkeys.json is lost (knowing the index is 0)
-mtcli w regen-hotkey --coldkey my_main_coldkey --hotkey-name miner_hk1 --index 0
-```
 
 ## 🤝 Contributing
 

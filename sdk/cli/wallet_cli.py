@@ -6,14 +6,14 @@ from rich.console import Console
 import os  # Import os for path operations
 import traceback  # Import traceback for detailed error logging
 import hashlib  # Import the standard hashlib library
-from typing import Optional  # Import Optional
+from typing import Optional, cast  # Import Optional and cast
 from rich.panel import Panel
 from rich.table import Table
 from collections import defaultdict
 
 # --- Move settings import near the top ---
 # This ensures logging is configured before other modules get loggers
-from sdk.config.settings import settings  # Load settings for defaults
+from sdk.config.settings import settings, logger  # Load settings for defaults
 
 from pycardano import (
     Network,
@@ -44,7 +44,9 @@ from sdk.metagraph.metagraph_datum import MinerDatum, STATUS_ACTIVE
 # from sdk.utils.cardano_utils import get_current_slot # Assume this exists
 # Import hash_data for empty history hash
 from sdk.metagraph.hash.hash_datum import hash_data
-import hashlib  # Import the standard hashlib library
+
+from sdk.service.address import get_addr  # Import get_addr service
+from sdk.keymanager.decryption_utils import decode_hotkey_skey  # Import decoder
 
 
 @click.group()
@@ -1005,3 +1007,74 @@ def query_address_cmd(coldkey, password, base_dir, network):
         console.print(f":cross_mark: [bold red]An error occurred:[/bold red] {e}")
         # Optionally print traceback for debugging unexpected errors
         # console.print_exception(show_locals=True)
+
+
+# ------------------------------------------------------------------------------
+# SHOW HOTKEY ADDRESS COMMAND
+# ------------------------------------------------------------------------------
+@wallet_cli.command("show-address")
+@click.option("--coldkey", required=True, help="Coldkey name.")
+@click.option("--hotkey", required=True, help="Hotkey name.")
+@click.option(
+    "--password",
+    prompt=True,
+    hide_input=True,
+    help="Coldkey password (to derive address).",
+)
+@click.option(
+    "--network",
+    default=lambda: (
+        "mainnet" if str(settings.CARDANO_NETWORK).lower() == "mainnet" else "testnet"
+    ),
+    type=click.Choice(["testnet", "mainnet"]),
+    help="Select Cardano network for address generation.",
+)
+@click.option(
+    "--base-dir",
+    default=lambda: settings.HOTKEY_BASE_DIR,
+    help="Base directory where wallets reside.",
+)
+def show_address_cmd(coldkey, hotkey, password, network, base_dir):
+    """
+    📍 Show the derived Cardano address for a specific Hotkey.
+    """
+    console = Console()
+    net = Network.TESTNET if network == "testnet" else Network.MAINNET
+
+    console.print(
+        f"🔐 Deriving address for: [magenta]{coldkey}[/magenta] / [cyan]{hotkey}[/cyan] on [yellow]{network.upper()}[/yellow]..."
+    )
+
+    try:
+        # 1. Decode the keys using the password
+        payment_xsk_obj, stake_xsk_obj = decode_hotkey_skey(
+            base_dir=base_dir,
+            coldkey_name=coldkey,
+            hotkey_name=hotkey,
+            password=password,
+        )
+        # Cast the types for the linter
+        payment_xsk = cast(ExtendedSigningKey, payment_xsk_obj)
+        stake_xsk = cast(ExtendedSigningKey, stake_xsk_obj) if stake_xsk_obj else None
+
+        if not payment_xsk:
+            console.print(
+                f":cross_mark: [bold red]Error:[/bold red] Could not decode keys for hotkey '{hotkey}'. Check password or hotkey data."
+            )
+            return
+
+        # 2. Derive the address using the service function
+        derived_address = get_addr(
+            payment_xsk=payment_xsk, stake_xsk=stake_xsk, network=net
+        )
+
+        console.print(f"✅ Address derived successfully:")
+        console.print(f"  Address: [bold blue]{derived_address}[/bold blue]")
+
+    except FileNotFoundError as e:
+        console.print(
+            f":cross_mark: [bold red]Error:[/bold red] {e} (Ensure coldkey/hotkey exists)"
+        )
+    except Exception as e:
+        console.print(f":cross_mark: [bold red]Error deriving address:[/bold red] {e}")
+        logger.exception("Address derivation failed")

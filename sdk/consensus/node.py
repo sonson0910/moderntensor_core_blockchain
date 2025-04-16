@@ -122,22 +122,43 @@ class ValidatorNode:
             raise ValueError("PaymentSigningKey must be provided.")
 
         self.info = validator_info
+        # Define prefix early for use in initial logs
+        self.uid_prefix = f"[{self.info.uid}]"  # Base prefix with UID
+        init_prefix = f"[bold green][Init:{self.uid_prefix}][/bold green]"  # Specific prefix for init
+
         self.context = cardano_context
         self.signing_key = signing_key
         self.stake_signing_key = stake_signing_key
-        self.settings = settings  # Sử dụng instance settings đã import
-        self.state_file = state_file  # Lưu đường dẫn file
-        logger.debug(f"[Init:{self.info.uid}] State file set to: {self.state_file}")
+        self.settings = settings
+        self.state_file = state_file
+        # Use DEBUG for file path setting
+        logger.debug(
+            f"{init_prefix} :floppy_disk: State file set to: [blue]{self.state_file}[/blue]"
+        )
         self.miners_selected_for_cycle: Set[str] = set()
 
-        # Load cycle ban đầu
-        self.current_cycle = self._load_last_cycle()
+        # Load initial cycle
+        self.current_cycle = (
+            self._load_last_cycle()
+        )  # This method now uses its own prefix
         self.slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH
-        # Đồng bộ hóa cycle ban đầu với slot hiện tại nếu cần
 
-        self.network = Network.TESTNET
+        # Determine and log network (assuming settings.CARDANO_NETWORK is reliable)
+        if settings.CARDANO_NETWORK == Network.MAINNET:
+            self.network = Network.MAINNET
+            network_name = "[bold magenta]MAINNET[/bold magenta]"
+        elif settings.CARDANO_NETWORK == Network.TESTNET:
+            self.network = Network.TESTNET
+            network_name = "[bold yellow]TESTNET[/bold yellow]"
+        else:
+            # Fallback or raise error if setting is invalid type/value
+            logger.error(
+                f"{init_prefix} :stop_sign: Invalid CARDANO_NETWORK setting: {settings.CARDANO_NETWORK}. Defaulting to TESTNET."
+            )
+            self.network = Network.TESTNET
+            network_name = "[bold red]UNKNOWN (defaulting to TESTNET)[/bold red]"
 
-        # State variables
+        # State variables initialization (remains the same structurally)
         self.miners_info: Dict[str, MinerInfo] = {}
         self.validators_info: Dict[str, ValidatorInfo] = {}
         self.current_utxo_map: Dict[str, UTxO] = {}  # Map: uid_hex -> UTxO object
@@ -174,6 +195,7 @@ class ValidatorNode:
         self.http_client = httpx.AsyncClient(timeout=timeout)
 
         # Load script details once
+        logger.debug(f"{init_prefix} Loading validator script details...")
         try:
             validator_details = read_validator()
             if (
@@ -186,66 +208,102 @@ class ValidatorNode:
                 )
             self.script_hash: ScriptHash = validator_details["script_hash"]
             self.script_bytes = validator_details["script_bytes"]
-        except Exception as e:
-            logger.exception(
-                f"[Init:{self.info.uid}] Failed to read validator script details during node initialization."
+            logger.debug(
+                f"{init_prefix} :scroll: Script details loaded. Hash: [yellow]{self.script_hash.to_primitive()[:10]}...[/yellow]"
             )
+        except Exception as e:
+            # Log exception with error style
+            logger.exception(
+                f"{init_prefix} :stop_sign: [bold red]Failed to read validator script details during node initialization.[/bold red]"
+            )
+            # Re-raise a more informative error
             raise ValueError(
                 f"Could not initialize node due to script loading error: {e}"
             ) from e
 
-        # More informative initial log
-        logger.info(f"[Init:{self.info.uid}] ValidatorNode initialized.")
-        logger.info(f"[Init:{self.info.uid}] UID: {self.info.uid}")
-        logger.info(f"[Init:{self.info.uid}] API Endpoint: {self.info.api_endpoint}")
-        logger.info(f"[Init:{self.info.uid}] Wallet Address: {self.info.address}")
-        logger.info(f"[Init:{self.info.uid}] Contract Script Hash: {self.script_hash}")
+        # Final initialization logs with enhanced formatting
+        logger.info(f"{init_prefix} :rocket: ValidatorNode initialized successfully.")
+        logger.info(f"{init_prefix}   UID:             [cyan]{self.info.uid}[/cyan]")
         logger.info(
-            f"[Init:{self.info.uid}] Cardano Network: {self.settings.CARDANO_NETWORK}"
+            f"{init_prefix}   API Endpoint:    [link={self.info.api_endpoint}]{self.info.api_endpoint}[/link]"
         )
-        logger.info(f"[Init:{self.info.uid}] Starting from cycle: {self.current_cycle}")
+        logger.info(
+            f"{init_prefix}   Wallet Address:  [blue]{self.info.address}[/blue]"
+        )
+        logger.info(
+            f"{init_prefix}   Script Hash:     [yellow]{self.script_hash.to_primitive()}[/yellow]"
+        )
+        logger.info(
+            f"{init_prefix}   Cardano Network: {network_name}"
+        )  # Use resolved network name
+        logger.info(
+            f"{init_prefix}   Starting Cycle:  [yellow]{self.current_cycle}[/yellow]"
+        )
 
     def _load_last_cycle(self) -> int:
         """Tải chu kỳ cuối cùng đã hoàn thành từ file trạng thái."""
-        uid_prefix = f"[LoadState:{getattr(self, 'info', None) and self.info.uid or 'UnknownUID'}]"
+        # Use self.uid_prefix if self.info is already set, otherwise default
+        # Ensure self.info exists before accessing uid for the prefix
+        uid_val = "UnknownUID"
+        if hasattr(self, "info") and self.info and hasattr(self.info, "uid"):
+            uid_val = self.info.uid
+        prefix = f"[bold blue][LoadState:{uid_val}][/bold blue]"
         try:
             if os.path.exists(self.state_file):
                 with open(self.state_file, "r") as f:
                     state_data = json.load(f)
                     last_completed_cycle = state_data.get("last_completed_cycle", -1)
                     next_cycle = last_completed_cycle + 1
+                    # Use success icon and color
                     logger.info(
-                        f"{uid_prefix} Loaded state file {self.state_file}. Last completed cycle: {last_completed_cycle}. Starting next cycle: {next_cycle}"
+                        f"{prefix} :inbox_tray: Loaded state from [blue]{self.state_file}[/blue]. Last completed cycle: [yellow]{last_completed_cycle}[/yellow]. Starting next: [yellow]{next_cycle}[/yellow]"
                     )
                     return next_cycle
             else:
+                # Use warning icon and color
                 logger.warning(
-                    f"{uid_prefix} State file {self.state_file} not found. Starting from cycle 0."
+                    f"{prefix} :warning: State file [blue]{self.state_file}[/blue] not found. Starting from cycle 0."
                 )
-                return 0  # Bắt đầu từ cycle 0
+                return 0
         except Exception as e:
+            # Use error icon and color
             logger.error(
-                f"{uid_prefix} Error loading state file {self.state_file}: {e}. Starting from cycle 0."
+                f"{prefix} :x: Error loading state file [blue]{self.state_file}[/blue]: {e}. Starting from cycle 0."
             )
+            # Optionally log traceback for debugging
+            # logger.exception(f"{prefix} Traceback for state file loading error:")
             return 0
 
     def _save_current_cycle(self, completed_cycle: int):
         """Lưu chu kỳ *vừa hoàn thành* vào file trạng thái."""
-        uid_prefix = f"[SaveState:{getattr(self, 'info', None) and self.info.uid or 'UnknownUID'}]"
+        # Ensure self.info exists before accessing uid for the prefix
+        uid_val = "UnknownUID"
+        if hasattr(self, "info") and self.info and hasattr(self.info, "uid"):
+            uid_val = self.info.uid
+        prefix = f"[bold magenta][SaveState:{uid_val}][/bold magenta]"
         if completed_cycle < 0:
-            logger.debug(f"{uid_prefix} No cycle completed yet, skipping state save.")
+            logger.debug(
+                f"{prefix} No cycle completed yet ({completed_cycle}), skipping state save."
+            )
             return
 
         state_data = {"last_completed_cycle": completed_cycle}
         try:
+            # Ensure directory exists before writing
+            os.makedirs(os.path.dirname(self.state_file) or ".", exist_ok=True)
             with open(self.state_file, "w") as f:
-                json.dump(state_data, f)
-            # Change from debug to info for successful save
+                json.dump(state_data, f, indent=2)  # Add indent for readability
+            # Use success icon and green color
             logger.info(
-                f"{uid_prefix} Saved last completed cycle {completed_cycle} to {self.state_file}"
+                f"{prefix} :outbox_tray: Saved last completed cycle [yellow]{completed_cycle}[/yellow] to [blue]{self.state_file}[/blue]"
             )
         except Exception as e:
-            logger.error(f"{uid_prefix} Error saving state file {self.state_file}: {e}")
+            # Use error icon and red color
+            logger.error(
+                f"{prefix} :x: Error saving state to [blue]{self.state_file}[/blue]: {e}"
+            )
+            # Optionally log traceback for debugging
+            # logger.exception(f"{prefix} Traceback for state file saving error:")
 
     # --- Thêm phương thức mới để lấy kết quả từ cache ---
     async def get_consensus_results_for_cycle(

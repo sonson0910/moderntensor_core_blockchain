@@ -3,6 +3,8 @@
 import click
 import logging
 from .wallet_cli import wallet_cli
+from .tx_cli import tx_cli
+from .query_cli import query_cli
 
 # from .metagraph_cli import metagraph_cli  # If you have
 
@@ -17,7 +19,10 @@ def cli():
 
 # Thêm group con:
 cli.add_command(wallet_cli, name="w")
+cli.add_command(tx_cli, name="tx")
+cli.add_command(query_cli, name="query")
 # cli.add_command(metagraph_cli, name="metagraph")
+
 
 # If you want, you can place the original command here:
 @cli.command("version")
