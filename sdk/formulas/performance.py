@@ -1,6 +1,9 @@
 # sdk/formulas/performance.py
 import math
 from typing import List
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # --- Hàm tính Q_task hoặc P_miner cơ bản (Giữ nguyên logic) ---
@@ -132,7 +135,9 @@ def calculate_validator_performance(
     """
     # Đảm bảo tổng theta = 1 (có thể chuẩn hóa lại nếu cần)
     if not math.isclose(theta1 + theta2 + theta3, 1.0):
-        print("Warning: Tổng theta trong calculate_validator_performance không bằng 1.")
+        logger.warning(
+            f"Sum of thetas ({theta1}+{theta2}+{theta3}={theta1+theta2+theta3}) is not 1.0 in calculate_validator_performance. Normalization might be needed."
+        )
         # Có thể chuẩn hóa: total = theta1+theta2+theta3; theta1/=total; ...
 
     penalty_term_value = calculate_penalty_term(

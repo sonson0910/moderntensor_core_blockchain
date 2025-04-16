@@ -127,6 +127,7 @@ class ValidatorNode:
         self.stake_signing_key = stake_signing_key
         self.settings = settings  # Sử dụng instance settings đã import
         self.state_file = state_file  # Lưu đường dẫn file
+        logger.debug(f"[Init:{self.info.uid}] State file set to: {self.state_file}")
         self.miners_selected_for_cycle: Set[str] = set()
 
         # Load cycle ban đầu
@@ -187,53 +188,64 @@ class ValidatorNode:
             self.script_bytes = validator_details["script_bytes"]
         except Exception as e:
             logger.exception(
-                "Failed to read validator script details during node initialization."
+                f"[Init:{self.info.uid}] Failed to read validator script details during node initialization."
             )
             raise ValueError(
                 f"Could not initialize node due to script loading error: {e}"
             ) from e
 
-        logger.info(f"Initialized ValidatorNode {self.info.uid} with Mini-Batch Logic.")
+        # More informative initial log
+        logger.info(f"[Init:{self.info.uid}] ValidatorNode initialized.")
+        logger.info(f"[Init:{self.info.uid}] UID: {self.info.uid}")
+        logger.info(f"[Init:{self.info.uid}] API Endpoint: {self.info.api_endpoint}")
+        logger.info(f"[Init:{self.info.uid}] Wallet Address: {self.info.address}")
+        logger.info(f"[Init:{self.info.uid}] Contract Script Hash: {self.script_hash}")
         logger.info(
-            f"Initialized ValidatorNode {self.info.uid} using centralized settings."
+            f"[Init:{self.info.uid}] Cardano Network: {self.settings.CARDANO_NETWORK}"
         )
-        logger.info(f"Contract Script Hash: {self.script_hash}")
-        logger.info(f"Cardano Network: {self.settings.CARDANO_NETWORK}")
+        logger.info(f"[Init:{self.info.uid}] Starting from cycle: {self.current_cycle}")
 
     def _load_last_cycle(self) -> int:
         """Tải chu kỳ cuối cùng đã hoàn thành từ file trạng thái."""
+        uid_prefix = f"[LoadState:{getattr(self, 'info', None) and self.info.uid or 'UnknownUID'}]"
         try:
             if os.path.exists(self.state_file):
                 with open(self.state_file, "r") as f:
                     state_data = json.load(f)
                     last_completed_cycle = state_data.get("last_completed_cycle", -1)
-                    # Trả về chu kỳ *tiếp theo* cần chạy
-                    return last_completed_cycle + 1
+                    next_cycle = last_completed_cycle + 1
+                    logger.info(
+                        f"{uid_prefix} Loaded state file {self.state_file}. Last completed cycle: {last_completed_cycle}. Starting next cycle: {next_cycle}"
+                    )
+                    return next_cycle
             else:
                 logger.warning(
-                    f"State file {self.state_file} not found. Starting from cycle 0."
+                    f"{uid_prefix} State file {self.state_file} not found. Starting from cycle 0."
                 )
                 return 0  # Bắt đầu từ cycle 0
         except Exception as e:
             logger.error(
-                f"Error loading state file {self.state_file}: {e}. Starting from cycle 0."
+                f"{uid_prefix} Error loading state file {self.state_file}: {e}. Starting from cycle 0."
             )
             return 0
 
     def _save_current_cycle(self, completed_cycle: int):
         """Lưu chu kỳ *vừa hoàn thành* vào file trạng thái."""
+        uid_prefix = f"[SaveState:{getattr(self, 'info', None) and self.info.uid or 'UnknownUID'}]"
         if completed_cycle < 0:
-            return  # Chưa hoàn thành chu kỳ nào
+            logger.debug(f"{uid_prefix} No cycle completed yet, skipping state save.")
+            return
 
         state_data = {"last_completed_cycle": completed_cycle}
         try:
             with open(self.state_file, "w") as f:
                 json.dump(state_data, f)
-            logger.debug(
-                f"Saved last completed cycle {completed_cycle} to {self.state_file}"
+            # Change from debug to info for successful save
+            logger.info(
+                f"{uid_prefix} Saved last completed cycle {completed_cycle} to {self.state_file}"
             )
         except Exception as e:
-            logger.error(f"Error saving state file {self.state_file}: {e}")
+            logger.error(f"{uid_prefix} Error saving state file {self.state_file}: {e}")
 
     # --- Thêm phương thức mới để lấy kết quả từ cache ---
     async def get_consensus_results_for_cycle(
@@ -1875,8 +1887,9 @@ class ValidatorNode:
         """
         # === A. Khởi đầu Chu kỳ & Tính toán Slot ===
         logger.info(
-            f"\n--- Starting Cycle {self.current_cycle} (Slot-Based Sync) for Validator {self.info.uid} ---"
+            f"[Cycle:{self.current_cycle}] >>> Starting Consensus Cycle {self.current_cycle} <<<"
         )
+        cycle_start_time = time.time()
 
         # --- Lấy slot hiện tại và tính toán các mốc ---
         current_slot_start = await self._get_current_slot()
@@ -2219,6 +2232,11 @@ class ValidatorNode:
                     except KeyError:
                         pass
             logger.info(f"--- End of Cycle {completed_cycle} ---")
+
+        cycle_duration = time.time() - cycle_start_time
+        logger.info(
+            f"[Cycle:{self.current_cycle - 1}] >>> Completed Consensus Cycle {self.current_cycle - 1} in {cycle_duration:.2f}s <<<"
+        )
 
 
 # --- Hàm chạy chính (Đã cập nhật) ---

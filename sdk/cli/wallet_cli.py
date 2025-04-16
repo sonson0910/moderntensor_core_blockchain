@@ -21,11 +21,16 @@ from sdk.service.register_key import register_key
 from sdk.service.context import get_chain_context  # Needed for context
 from sdk.config.settings import settings  # Load settings for defaults
 
+# Import function to read validator details
+from sdk.smartcontract.validator import read_validator
+
 # Import Datum definition
 from sdk.metagraph.metagraph_datum import MinerDatum, STATUS_ACTIVE
 
 # Import helper to get current slot
 # from sdk.utils.cardano_utils import get_current_slot # Assume this exists
+# Import hash_data for empty history hash
+from sdk.metagraph.hash.hash_datum import hash_data
 import traceback  # Import traceback for detailed error logging
 import hashlib  # Import the standard hashlib library
 
@@ -66,7 +71,10 @@ def create_coldkey_cmd(name, password, base_dir, network):
     net = Network.TESTNET if network == "testnet" else Network.MAINNET
     wm = WalletManager(network=net, base_dir=base_dir)
     wm.create_coldkey(name, password)
-    click.echo(f"[OK] Coldkey '{name}' has been created in directory '{base_dir}'.")
+    console = Console()
+    console.print(
+        f":heavy_check_mark: [bold green]Coldkey '{name}' created in directory '{base_dir}'.[/bold green]"
+    )
 
 
 # ------------------------------------------------------------------------------
@@ -89,7 +97,10 @@ def load_coldkey_cmd(name, password, base_dir, network):
     net = Network.TESTNET if network == "testnet" else Network.MAINNET
     wm = WalletManager(network=net, base_dir=base_dir)
     wm.load_coldkey(name, password)
-    click.echo(f"[OK] Coldkey '{name}' has been loaded from '{base_dir}'.")
+    console = Console()
+    console.print(
+        f":key: [bold blue]Coldkey '{name}' loaded from '{base_dir}'.[/bold blue]"
+    )
 
 
 # ------------------------------------------------------------------------------
@@ -115,7 +126,10 @@ def generate_hotkey_cmd(coldkey, hotkey_name, base_dir, network):
     password = click.prompt("Enter the coldkey password", hide_input=True)
     wm.load_coldkey(coldkey, password)
     encrypted_data = wm.generate_hotkey(coldkey, hotkey_name)
-    click.echo(f"[OK] Hotkey '{hotkey_name}' created => {encrypted_data}")
+    console = Console()
+    console.print(
+        f":sparkles: [bold green]Hotkey '{hotkey_name}' created.[/bold green]"
+    )
 
 
 # ------------------------------------------------------------------------------
@@ -151,7 +165,10 @@ def import_hotkey_cmd(
     wm.load_coldkey(coldkey, password)
 
     wm.import_hotkey(coldkey, encrypted_hotkey, hotkey_name, overwrite=overwrite)
-    click.echo(f"[OK] Hotkey '{hotkey_name}' has been imported.")
+    console = Console()
+    console.print(
+        f":inbox_tray: [bold green]Hotkey '{hotkey_name}' imported.[/bold green]"
+    )
 
 
 # ------------------------------------------------------------------------------
@@ -178,14 +195,17 @@ def list_coldkeys():
     for w in wallets:
         # Tạo node con cho Coldkey
         coldkey_node = root_tree.add(
-            f"[bold yellow]Coldkey[/bold yellow] [magenta]{w['name']}[/magenta]"
+            f":closed_lock_with_key: [bold yellow]Coldkey[/bold yellow] [magenta]{w['name']}[/magenta]"
         )
 
         # hotkeys
         if w.get("hotkeys"):
             for hk in w["hotkeys"]:
                 hk_addr = hk["address"] or "unknown"
-                coldkey_node.add(f"Hotkey [green]{hk['name']}[/green] (addr={hk_addr})")
+                # Use a different key icon for hotkey
+                coldkey_node.add(
+                    f":key: Hotkey [green]{hk['name']}[/green] (addr=[dim]{hk_addr}[/dim])"
+                )
 
     console.print(root_tree)
 
@@ -217,12 +237,6 @@ def list_coldkeys():
     help="Full API endpoint URL for this hotkey (e.g., http://<ip>:<port>).",
 )
 @click.option(
-    "--script-path",
-    required=True,
-    type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    help="Path to the Plutus V3 script file (.plutus).",
-)
-@click.option(
     "--base-dir",
     default=lambda: settings.HOTKEY_BASE_DIR,
     help="Base directory for keys.",
@@ -236,11 +250,6 @@ def list_coldkeys():
     help="Select Cardano network.",
 )
 @click.option(
-    "--contract-address",
-    default=lambda: settings.TEST_CONTRACT_ADDRESS,
-    help="Contract script address.",
-)
-@click.option(
     "--yes",
     is_flag=True,
     help="Skip confirmation prompt before submitting transaction.",
@@ -252,213 +261,209 @@ def register_hotkey_cmd(
     subnet_uid,
     initial_stake,
     api_endpoint,
-    script_path,
     base_dir,
     network,
-    contract_address,
     yes,
 ):
     """
     Register a hotkey as a Miner by updating the smart contract datum.
     Finds the UTxO with the lowest incentive and updates its datum.
     """
-    click.echo(f"Attempting to register hotkey '{hotkey}' as a Miner...")
+    console = Console()
+    console.print(
+        f":rocket: Attempting to register hotkey [cyan]'{hotkey}'[/cyan] as a Miner..."
+    )
 
     try:
         net = Network.TESTNET if network == "testnet" else Network.MAINNET
         wm = WalletManager(network=net, base_dir=base_dir)
 
         # --- Load Keys ---
-        click.echo(f"Loading coldkey '{coldkey}'...")
+        console.print(f"⏳ Loading coldkey [magenta]'{coldkey}'[/magenta]...")
         coldkey_data = wm.load_coldkey(coldkey, password)
         if (
             not coldkey_data
             or not coldkey_data.get("payment_skey")
             or not coldkey_data.get("payment_address")
         ):
-            click.echo(
-                f"[Error] Failed to load coldkey '{coldkey}' or its signing key/address."
+            console.print(
+                f"[bold red]Error:[/bold red] Failed to load coldkey '{coldkey}' or its signing key/address."
             )
             return
         cold_payment_skey: PaymentSigningKey = coldkey_data["payment_skey"]
         cold_address: Address = coldkey_data["payment_address"]
-        # Stake key might be needed depending on the contract
         cold_stake_skey: Optional[StakeSigningKey] = coldkey_data.get("stake_skey")
-        click.echo(f"Coldkey '{coldkey}' loaded (Address: {cold_address}).")
+        console.print(
+            f":key: Coldkey '{coldkey}' loaded (Address: [dim]{cold_address}[/dim])."
+        )
 
-        click.echo(f"Verifying hotkey '{hotkey}'...")
+        console.print(f"⏳ Verifying hotkey [cyan]'{hotkey}'[/cyan]...")
         hotkey_info = wm.get_hotkey_info(coldkey, hotkey)
         if not hotkey_info or not hotkey_info.get("address"):
-            click.echo(
-                f"[Error] Failed to find hotkey '{hotkey}' info. Generate it first?"
+            console.print(
+                f"[bold red]Error:[/bold red] Failed to find hotkey '{hotkey}' info. Generate it first?"
             )
             return
         hot_address_str = hotkey_info["address"]
-        click.echo(f"Hotkey '{hotkey}' found (Address: {hot_address_str}).")
+        console.print(
+            f":key: Hotkey '{hotkey}' found (Address: [dim]{hot_address_str}[/dim])."
+        )
 
-        # --- Load Script and Prepare Datum ---
-        click.echo(f"Loading Plutus script from: {script_path}")
-        try:
-            with open(script_path, "r") as f:
-                script_hex = f.read()
-            script = PlutusV3Script(bytes.fromhex(script_hex))
-            script_hash = plutus_script_hash(script)
-            click.echo(f"Script loaded. Script Hash: {script_hash.to_primitive()}")
-        except FileNotFoundError:
-            click.echo(f"[Error] Script file not found: {script_path}")
-            return
-        except ValueError as e:  # Catch hex decoding errors
-            click.echo(f"[Error] Invalid script file content (not valid hex?): {e}")
-            return
-        except Exception as e:
-            click.echo(f"[Error] Failed to load or parse Plutus script: {e}")
-            return
-
-        click.echo("Preparing new Miner Datum...")
-        # Get current slot (Need a utility function for this)
-        # current_slot = get_current_slot(context) # Assuming context is needed here
-        current_slot = 0  # Placeholder - GET ACTUAL SLOT!
-        if current_slot == 0:
-            click.echo(
-                "[Warning] Could not get current slot, using 0 for registration/update slot."
+        # --- Blockchain Interaction (Initialize Context FIRST) ---
+        console.print("⏳ Initializing Cardano context...")
+        context = get_chain_context(method="blockfrost")  # Assumes blockfrost
+        if not context:
+            console.print(
+                "[bold red]Error:[/bold red] Could not initialize Cardano chain context."
             )
+            return
+        console.print(
+            f":globe_with_meridians: Cardano context initialized (Network: {net})."
+        )
+
+        # --- Load Script --- (Moved after context init)
+        console.print("⏳ Loading validator script details...")
+        try:
+            validator_details = read_validator()
+            if (
+                not validator_details
+                or "script" not in validator_details
+                or "script_hash" not in validator_details
+            ):
+                console.print(
+                    "[bold red]Error:[/bold red] Failed to load valid script details (script or hash missing) using read_validator."
+                )
+                return
+            script: PlutusV3Script = validator_details["script"]
+            script_hash: ScriptHash = validator_details["script_hash"]
+            contract_address_obj = Address(payment_part=script_hash, network=net)
+            console.print(
+                f":scroll: Script details loaded. Script Hash: [yellow]{script_hash.to_primitive()}[/yellow]"
+            )
+            console.print(
+                f":link: Derived Contract Address: [blue]{contract_address_obj}[/blue]"
+            )
+        except Exception as e:
+            console.print(
+                f"[bold red]Error:[/bold red] Failed to load validator script details: {e}"
+            )
+            console.print_exception(show_locals=True)
+            return
+
+        # --- Prepare Datum --- (Moved after context init)
+        console.print("⏳ Preparing new Miner Datum...")
+        current_slot: Optional[int] = None
+        try:
+            current_slot = context.last_block_slot
+            if current_slot is None:
+                console.print(
+                    "[yellow]Warning:[/yellow] context.last_block_slot returned None."
+                )
+                current_slot = 0
+            console.print(f":clock1: Using current slot: {current_slot}")
+        except Exception as slot_err:
+            console.print(
+                f"[yellow]Warning:[/yellow] Could not get current slot from context: {slot_err}. Using 0."
+            )
+            current_slot = 0
 
         # Convert addresses/UIDs/endpoint to bytes for Datum
         try:
             hotkey_uid_bytes = hotkey.encode("utf-8")
             api_endpoint_bytes = api_endpoint.encode("utf-8")
-            # Use hash.blake2b_224 for wallet address hash
             wallet_addr_hash_bytes = hashlib.blake2b(
                 bytes(cold_address), digest_size=28
             ).digest()
-            # Performance history hash - initialize as empty? Needs clarification.
-            perf_history_hash_bytes = b""
+            perf_history_hash_bytes = hash_data([])
         except Exception as e:
-            click.echo(f"[Error] Failed to encode data for Datum: {e}")
+            console.print(
+                f"[bold red]Error:[/bold red] Failed to encode data for Datum: {e}"
+            )
             return
 
         # Create the new datum instance
-        # Note: Defaulting performance/trust/rewards to 0. Needs review.
         new_datum = MinerDatum(
             uid=hotkey_uid_bytes,
             subnet_uid=subnet_uid,
-            stake=initial_stake,  # Lovelace
+            stake=initial_stake,
             scaled_last_performance=0,
             scaled_trust_score=0,
             accumulated_rewards=0,
-            last_update_slot=current_slot,  # Use current slot
-            performance_history_hash=perf_history_hash_bytes,  # Placeholder
-            wallet_addr_hash=wallet_addr_hash_bytes,  # Placeholder hash
-            status=STATUS_ACTIVE,  # Register as active
-            registration_slot=current_slot,  # Use current slot
+            last_update_slot=current_slot,
+            performance_history_hash=perf_history_hash_bytes,
+            wallet_addr_hash=wallet_addr_hash_bytes,
+            status=STATUS_ACTIVE,
+            registration_slot=current_slot,
             api_endpoint=api_endpoint_bytes,
         )
-        click.echo("New Miner Datum prepared:")
+        console.print(":clipboard: New Miner Datum prepared:")
         click.echo(f"  UID: {hotkey}")
         click.echo(f"  Subnet UID: {subnet_uid}")
         click.echo(f"  Stake: {initial_stake}")
         click.echo(f"  API Endpoint: {api_endpoint}")
-        # Print other relevant datum fields if needed
-
-        # --- Blockchain Interaction ---
-        click.echo("Initializing Cardano context...")
-        context = get_chain_context(method="blockfrost")  # Assumes blockfrost
-        if not context:
-            click.echo("[Error] Could not initialize Cardano chain context.")
-            return
-
-        # Use contract address from parameter or settings and convert to ScriptHash
-        try:
-            contract_sh = (
-                ScriptHash.from_primitive(contract_address)
-                if contract_address
-                else None
-            )
-        except ValueError:
-            click.echo(
-                f"[Error] Invalid contract address format: {contract_address}. Must be a valid ScriptHash hex string."
-            )
-            return
-
-        if not contract_sh:
-            # Try getting default from settings if not provided via CLI
-            try:
-                default_addr_str = settings.TEST_CONTRACT_ADDRESS
-                contract_sh = (
-                    ScriptHash.from_primitive(default_addr_str)
-                    if default_addr_str
-                    else None
-                )
-            except Exception as e:
-                click.echo(
-                    f"[Error] Could not load default contract address from settings: {e}"
-                )
-                contract_sh = None  # Ensure it's None if loading fails
-
-        if not contract_sh:
-            click.echo(
-                "[Error] Contract address (ScriptHash) is required, either via --contract-address or settings."
-            )
-            return
-        click.echo(f"Using Contract Script Hash: {contract_sh.to_primitive()}")
 
         # Confirm before proceeding
         if not yes:
             click.confirm(
-                f"\nRegister hotkey '{hotkey}' as Miner on subnet {subnet_uid} "
-                f"by updating UTxO at {contract_sh}?",
+                f"\n❓ Register hotkey [cyan]'{hotkey}'[/cyan] as Miner on subnet [yellow]{subnet_uid}[/yellow] "
+                f"by updating UTxO at contract address [blue]{contract_address_obj}[/blue]?",
                 abort=True,
             )
 
-        click.echo("Submitting registration transaction via register_key service...")
+        console.print(
+            ":arrow_up: Submitting registration transaction via [bold]register_key[/bold] service..."
+        )
         try:
             tx_id = register_key(
-                payment_xsk=cold_payment_skey.to_extended_signing_key(),  # Convert if needed
+                payment_xsk=cold_payment_skey.to_extended_signing_key(),
                 stake_xsk=(
                     cold_stake_skey.to_extended_signing_key()
                     if cold_stake_skey
                     else None
                 ),
-                script_hash=script_hash,  # This is already ScriptHash type
+                script_hash=script_hash,
                 new_datum=new_datum,
                 script=script,
                 context=context,
                 network=net,
-                contract_address=contract_sh,  # Pass the ScriptHash object
-                # redeemer=None # Use default Redeemer(0)
+                contract_address=contract_address_obj,
             )
 
             if tx_id:
-                click.echo(f"[OK] Miner registration transaction submitted.")
-                click.echo(f"Transaction ID: {tx_id}")
-                click.echo("Please wait for blockchain confirmation.")
+                console.print(
+                    f":heavy_check_mark: [bold green]Miner registration transaction submitted.[/bold green]"
+                )
+                console.print(f"Transaction ID: [bold blue]{tx_id}[/bold blue]")
+                console.print(
+                    ":hourglass_flowing_sand: Please wait for blockchain confirmation."
+                )
             else:
-                # The function should raise an error if submission fails
-                click.echo(
-                    "[Error] Failed to submit registration transaction (No TxID returned)."
+                console.print(
+                    "[bold red]Error:[/bold red] Failed to submit registration transaction (No TxID returned)."
                 )
 
         except FileNotFoundError as e:
-            click.echo(
-                f"[Error] Key file not found: {e}. Have you created the coldkey/hotkey?"
+            console.print(
+                f"[bold red]Error:[/bold red] Key file not found: {e}. Have you created the coldkey/hotkey?"
             )
         except ValueError as e:
-            # Catch errors from register_key (e.g., no UTxO found)
-            click.echo(f"[Error] Registration failed: {e}")
+            console.print(f"[bold red]Error:[/bold red] Registration failed: {e}")
         except Exception as e:
-            # Catch potential errors during tx building/signing/submission
-            click.echo(f"[Error] An unexpected error occurred during registration: {e}")
-            traceback.print_exc()  # Print full traceback for debugging
+            console.print(
+                f"[bold red]Error:[/bold red] An unexpected error occurred during registration: {e}"
+            )
+            console.print_exception(show_locals=True)
 
     except FileNotFoundError as e:
-        # Catch errors from initial file/key loading if they occurred outside the inner try
-        click.echo(f"[Error] Initial file/key loading error: {e}")
-    except ValueError as e:
-        # Catch other value errors (e.g., parsing arguments, address conversion)
-        click.echo(f"[Error] Invalid value encountered during setup: {e}")
-    except Exception as e:
-        # Catch any other unexpected error not caught by the inner block
-        click.echo(
-            f"[Error] An overall unexpected error occurred in register_hotkey_cmd: {e}"
+        console.print(
+            f"[bold red]Error:[/bold red] Initial file/key loading error: {e}"
         )
-        traceback.print_exc()  # Print details for debugging the outer failure
+    except ValueError as e:
+        console.print(
+            f"[bold red]Error:[/bold red] Invalid value encountered during setup: {e}"
+        )
+    except Exception as e:
+        console.print(
+            f"[bold red]Error:[/bold red] An overall unexpected error occurred in register_hotkey_cmd: {e}"
+        )
+        console.print_exception(show_locals=True)

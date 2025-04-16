@@ -13,41 +13,49 @@ from pycardano import Network
 
 # ANSI color codes
 RED = "\033[91m"
+YELLOW = "\033[93m"
 RESET = "\033[0m"
 
+# Regex to find potential TxIDs (64 hex chars) or Addresses/Hashes (e.g., 56 hex chars)
+# Word boundaries \b ensure we match whole hex strings
+HEX_ID_REGEX = re.compile(r"(\b[a-fA-F0-9]{56,64}\b)")
+SCORE_REGEX = re.compile(r"(\bScored\b)", re.IGNORECASE)
 
-class HighlightScoreFormatter(coloredlogs.ColoredFormatter):
-    """Custom formatter to highlight 'score' in log messages."""
+
+class HighlightFormatter(coloredlogs.ColoredFormatter):
+    """Custom formatter to highlight 'score' and hex IDs/addresses."""
 
     def format(self, record):
-        # Format the message using the base class
+        # Format the message using the base class first to get level colors
         formatted_message = super().format(record)
         try:
-            original_msg = record.getMessage()
-            # Check if 'score' is in the original message (case-insensitive)
-            if re.search(r"Scored", original_msg, re.IGNORECASE):
-                # Replace 'score' (case-insensitive) with red 'score'
-                # Using word boundaries \b to avoid coloring parts of words
-                colored_msg = re.sub(
-                    r"(\bScored\b)",
-                    f"{RED}\1{RESET}",
-                    original_msg,
-                    flags=re.IGNORECASE,
+            # Use the already formatted message content for highlighting
+            # This avoids issues if the original message is complex
+
+            # Highlight 'score' first
+            if SCORE_REGEX.search(formatted_message):
+                formatted_message = SCORE_REGEX.sub(
+                    f"{RED}\1{RESET}", formatted_message
                 )
-                # Replace the original message part in the fully formatted string
-                # This might fail if the format string drastically changes the message structure
-                if original_msg in formatted_message:
-                    formatted_message = formatted_message.replace(
-                        original_msg, colored_msg
-                    )
-                else:
-                    # Fallback if simple replacement doesn't work: color the whole line
-                    # Check if already colored to avoid nested colors
-                    if not formatted_message.startswith(RED):
-                        formatted_message = f"{RED}{formatted_message}{RESET}"
-        except Exception:
-            # In case of any error during custom formatting, return the original formatted message
-            pass  # Keep the original formatted_message
+
+            # Then highlight hex IDs/addresses
+            # Use a function for replacement to handle potential overlaps with score highlighting
+            def replace_hex(match):
+                hex_str = match.group(1)
+                # Avoid re-coloring if already colored red (part of 'score')
+                # This check is basic, might need refinement for complex cases
+                if RED in hex_str:
+                    return hex_str  # Don't change color if it was part of score
+                return f"{YELLOW}{hex_str}{RESET}"
+
+            formatted_message = HEX_ID_REGEX.sub(replace_hex, formatted_message)
+
+        except Exception as format_err:
+            # Log the formatting error itself using the root logger to avoid loops
+            logging.getLogger().exception(f"Error in HighlightFormatter: {format_err}")
+            # Return the message as formatted by the base class
+            pass  # Keep the original formatted_message from super().format()
+
         return formatted_message
 
 
@@ -452,7 +460,7 @@ DEFAULT_FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 # coloredlogs.install(...)
 
 # Instantiate the custom formatter
-formatter = HighlightScoreFormatter(
+highlight_formatter = HighlightFormatter(
     fmt=DEFAULT_FMT,
     level_styles=DEFAULT_LEVEL_STYLES,
     field_styles=DEFAULT_FIELD_STYLES,
@@ -461,7 +469,7 @@ formatter = HighlightScoreFormatter(
 # Install coloredlogs using the custom formatter
 coloredlogs.install(
     level=LOG_LEVEL_CONFIG,
-    formatter=formatter,
+    formatter=highlight_formatter,
     # fmt, level_styles, field_styles are now handled by the formatter instance
 )
 

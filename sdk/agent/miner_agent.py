@@ -100,22 +100,29 @@ class MinerAgent:
         self.config = config
         self.signing_key = miner_skey
         self.stake_signing_key = miner_stake_skey
+        uid_prefix = f"[Init:{self.miner_uid_hex}]"
 
         # --- Khởi tạo Context và Network ---
+        logger.debug(f"{uid_prefix} Initializing Cardano context...")
         try:
             self.context = get_chain_context(method="blockfrost")
             if not self.context:
                 raise RuntimeError("Failed to initialize Cardano context.")
-            self.network = self.context.network  # Lấy network từ context
+            self.network = self.context.network
+            logger.debug(
+                f"{uid_prefix} Cardano context initialized (Network: {self.network})."
+            )
         except Exception as e:
-            logger.exception("Failed to initialize Cardano context for MinerAgent.")
+            logger.exception(f"{uid_prefix} Failed to initialize Cardano context.")
             raise RuntimeError(f"Failed to initialize Cardano context: {e}") from e
         # ------------------------------------
 
-        # HTTP client để gọi API Validator
+        # HTTP client
+        logger.debug(f"{uid_prefix} Initializing HTTP client...")
         self.http_client = httpx.AsyncClient(timeout=15.0)
 
         # --- Load Script Details ---
+        logger.debug(f"{uid_prefix} Loading validator script details...")
         try:
             validator_details = read_validator()
             if (
@@ -129,12 +136,16 @@ class MinerAgent:
             self.contract_address = Address(
                 payment_part=self.script_hash, network=self.network
             )
+            logger.debug(
+                f"{uid_prefix} Script details loaded (Contract Address: {self.contract_address})."
+            )
         except Exception as e:
-            logger.exception("Failed to load script details for MinerAgent.")
+            logger.exception(f"{uid_prefix} Failed to load script details.")
             raise RuntimeError(f"Failed to load script details: {e}") from e
         # ---------------------------
 
         # --- Tạo Địa chỉ Ví Miner ---
+        logger.debug(f"{uid_prefix} Deriving miner wallet address...")
         try:
             pay_vkey = self.signing_key.to_verification_key()
             stake_vkey = (
@@ -147,26 +158,35 @@ class MinerAgent:
                 staking_part=stake_vkey.hash() if stake_vkey else None,
                 network=self.network,
             )
+            logger.debug(
+                f"{uid_prefix} Miner wallet address derived: {self.miner_wallet_address}"
+            )
         except Exception as e:
-            logger.exception("Failed to derive miner wallet address.")
+            logger.exception(f"{uid_prefix} Failed to derive miner wallet address.")
             raise RuntimeError(f"Failed to derive miner wallet address: {e}") from e
         # ---------------------------
 
         # State theo dõi
         self.last_processed_cycle = -1
-        self.last_known_utxo: Optional[UTxO] = None  # Cache UTXO tìm được gần nhất
+        self.last_known_utxo: Optional[UTxO] = None
 
-        self.state_dir = Path(getattr(self.config, "AGENT_STATE_DIR", ".miner_agent_state"))
+        self.state_dir = Path(
+            getattr(self.config, "AGENT_STATE_DIR", ".miner_agent_state")
+        )
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.history_file = self.state_dir / f"history_{self.miner_uid_hex}.json"
+        logger.debug(f"{uid_prefix} State directory: {self.state_dir}")
+        logger.debug(f"{uid_prefix} History file: {self.history_file}")
 
-        logger.info(f"MinerAgent initialized for Miner UID: {self.miner_uid_hex}")
-        logger.info(f" - Wallet Address: {self.miner_wallet_address}")
-        logger.info(f" - Contract Address: {self.contract_address}")
-        logger.info(f" - UID Bytes Used for Search: {self.miner_uid_bytes.hex()}")
+        # Final init log
+        logger.info(f"{uid_prefix} MinerAgent initialized.")
+        logger.info(f"{uid_prefix} Wallet Address: {self.miner_wallet_address}")
+        logger.info(f"{uid_prefix} Contract Address: {self.contract_address}")
+        logger.info(f"{uid_prefix} UID Bytes: {self.miner_uid_bytes.hex()}")
 
     def _load_local_history(self) -> List[float]:
         """Tải danh sách lịch sử hiệu suất từ file cục bộ."""
+        uid_prefix = f"[LoadHistory:{self.miner_uid_hex}]"
         if self.history_file.exists():
             try:
                 with open(self.history_file, "r") as f:
@@ -174,85 +194,80 @@ class MinerAgent:
                     if isinstance(history, list) and all(
                         isinstance(x, (int, float)) for x in history
                     ):
+                        # Use UID prefix
                         logger.debug(
-                            f"Loaded {len(history)} performance scores from {self.history_file}"
+                            f"{uid_prefix} Loaded {len(history)} performance scores from {self.history_file}"
                         )
                         return history
                     else:
+                        # Use UID prefix
                         logger.warning(
-                            f"Invalid data format in {self.history_file}. Resetting history."
+                            f"{uid_prefix} Invalid data format in {self.history_file}. Resetting history."
                         )
             except (json.JSONDecodeError, OSError) as e:
+                # Use UID prefix
                 logger.error(
-                    f"Error reading history file {self.history_file}: {e}. Resetting history."
+                    f"{uid_prefix} Error reading history file {self.history_file}: {e}. Resetting history."
                 )
         else:
+            # Use UID prefix
             logger.debug(
-                f"History file {self.history_file} not found. Starting new history."
+                f"{uid_prefix} History file {self.history_file} not found. Starting new history."
             )
         return []
 
     def _save_local_history(self, history: List[float]):
         """Lưu danh sách lịch sử hiệu suất vào file cục bộ."""
+        uid_prefix = f"[SaveHistory:{self.miner_uid_hex}]"
         try:
             with open(self.history_file, "w") as f:
                 json.dump(history, f)
+            # Use UID prefix
             logger.debug(
-                f"Saved {len(history)} performance scores to {self.history_file}"
+                f"{uid_prefix} Saved {len(history)} performance scores to {self.history_file}"
             )
         except OSError as e:
-            logger.error(f"Error writing history file {self.history_file}: {e}")
+            # Use UID prefix
+            logger.error(
+                f"{uid_prefix} Error writing history file {self.history_file}: {e}"
+            )
 
     async def fetch_consensus_result(
         self, cycle_num: int, validator_api_url: str
     ) -> Optional[MinerConsensusResult]:
         """Lấy kết quả đồng thuận cho miner từ API validator cho một chu kỳ cụ thể."""
-        # Endpoint API cần khớp với định nghĩa trong API của validator
         target_url = f"{validator_api_url.rstrip('/')}/v1/consensus/results/{cycle_num}"
-        logger.debug(
-            f"Miner {self.miner_uid_hex}: Fetching results for cycle {cycle_num} from {target_url}"
-        )
+        uid_prefix = f"[FetchResult:{self.miner_uid_hex}:C{cycle_num}]"
+        logger.debug(f"{uid_prefix} Fetching results from {target_url}")
         try:
             response = await self.http_client.get(target_url, timeout=10.0)
             response.raise_for_status()
             data = response.json()
-            # Validate cấu trúc response bằng Pydantic model
             cycle_results = CycleConsensusResults(**data)
 
             if cycle_results.cycle != cycle_num:
                 logger.warning(
-                    f"Fetched results for wrong cycle ({cycle_results.cycle}) when requesting {cycle_num}"
+                    f"{uid_prefix} Fetched results for wrong cycle ({cycle_results.cycle})!"
                 )
                 return None
 
-            # Tìm kết quả của chính miner này trong dict `results` bằng UID hex
             miner_result_data = cycle_results.results.get(self.miner_uid_hex)
             if miner_result_data:
-                logger.info(
-                    f"Miner {self.miner_uid_hex}: Successfully fetched consensus result for cycle {cycle_num}"
-                )
-                return miner_result_data  # Trả về đối tượng MinerConsensusResult
+                logger.info(f"{uid_prefix} Successfully fetched consensus result.")
+                return miner_result_data
             else:
-                logger.info(
-                    f"Miner {self.miner_uid_hex}: Result not found for self in cycle {cycle_num} data."
-                )
+                logger.info(f"{uid_prefix} Result not found for self in cycle data.")
                 return None
-
         except httpx.RequestError as e:
-            logger.error(
-                f"Miner {self.miner_uid_hex}: Network error fetching results for cycle {cycle_num}: {e}"
-            )
+            logger.error(f"{uid_prefix} Network error fetching results: {e}")
             return None
         except httpx.HTTPStatusError as e:
             logger.error(
-                f"Miner {self.miner_uid_hex}: HTTP error fetching results for cycle {cycle_num}: Status {e.response.status_code}"
+                f"{uid_prefix} HTTP error fetching results: Status {e.response.status_code}"
             )
-            # Có thể log response body để debug: logger.error(f"Response body: {e.response.text[:500]}")
             return None
-        except Exception as e:  # Bao gồm lỗi JSONDecodeError, Pydantic ValidationError
-            logger.exception(
-                f"Miner {self.miner_uid_hex}: Error processing results for cycle {cycle_num}: {e}"
-            )
+        except Exception as e:  # Catch other errors like JSON parsing
+            logger.exception(f"{uid_prefix} Unexpected error fetching results: {e}")
             return None
 
     async def find_own_utxo(self) -> Optional[UTxO]:
@@ -313,15 +328,23 @@ class MinerAgent:
                         history_verified = True
                         logger.debug("Local performance history matches on-chain hash.")
                     else:
-                        logger.warning("Local performance history MISMATCH with on-chain hash! Resetting local history.")
-                        local_history_old = [] # Reset nếu hash không khớp
+                        logger.warning(
+                            "Local performance history MISMATCH with on-chain hash! Resetting local history."
+                        )
+                        local_history_old = []  # Reset nếu hash không khớp
                 except Exception as e:
-                    logger.error(f"Error verifying history hash: {e}. Assuming mismatch and resetting.")
+                    logger.error(
+                        f"Error verifying history hash: {e}. Assuming mismatch and resetting."
+                    )
                     local_history_old = []
             elif local_history_old:
-                logger.warning("Local performance history exists but no on-chain hash found. Using local history.")
+                logger.warning(
+                    "Local performance history exists but no on-chain hash found. Using local history."
+                )
                 # Có thể coi là hợp lệ nếu không có hash cũ để so sánh
-                history_verified = True # Hoặc đặt là False và reset tùy logic mong muốn
+                history_verified = (
+                    True  # Hoặc đặt là False và reset tùy logic mong muốn
+                )
             else:
                 # Không có local history và không có hash on-chain -> Bắt đầu mới
                 history_verified = True
@@ -332,19 +355,31 @@ class MinerAgent:
                 history_for_new_datum = [p_adj] if p_adj is not None else []
             else:
                 history_for_new_datum = local_history_old
-                if p_adj is not None: # Chỉ thêm nếu p_adj hợp lệ
+                if p_adj is not None:  # Chỉ thêm nếu p_adj hợp lệ
                     history_for_new_datum.append(p_adj)
 
             # Cắt bớt history và tính hash mới
-            history_for_new_datum = history_for_new_datum[-self.config.CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN:]
+            history_for_new_datum = history_for_new_datum[
+                -self.config.CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN :
+            ]
             try:
-                new_perf_history_hash = hash_data(history_for_new_datum) if history_for_new_datum else on_chain_history_hash # Giữ hash cũ nếu history mới rỗng? Hoặc hash list rỗng?
+                new_perf_history_hash = (
+                    hash_data(history_for_new_datum)
+                    if history_for_new_datum
+                    else on_chain_history_hash
+                )  # Giữ hash cũ nếu history mới rỗng? Hoặc hash list rỗng?
             except Exception as e:
-                logger.error(f"Failed to hash new performance history: {e}. Keeping old hash.")
+                logger.error(
+                    f"Failed to hash new performance history: {e}. Keeping old hash."
+                )
                 new_perf_history_hash = on_chain_history_hash
 
             # Lưu history mới vào file cục bộ (chỉ khi hash thành công?)
-            if new_perf_history_hash != on_chain_history_hash or not self.history_file.exists() or not history_verified:
+            if (
+                new_perf_history_hash != on_chain_history_hash
+                or not self.history_file.exists()
+                or not history_verified
+            ):
                 self._save_local_history(history_for_new_datum)
             history_old = []  # Tạm thời coi như bắt đầu lại history mỗi lần tính
 
@@ -506,95 +541,112 @@ class MinerAgent:
         """
         Vòng lặp chính của Miner Agent: Fetch kết quả -> Tìm UTXO -> Tính Datum -> Commit.
         """
-        logger.info(f"MinerAgent for {self.miner_uid_hex} starting run loop...")
+        uid_prefix = f"[RunLoop:{self.miner_uid_hex}]"
+        logger.info(
+            f"{uid_prefix} Starting run loop. Checking every {check_interval_seconds}s."
+        )
+        target_cycle = self.last_processed_cycle + 1  # Start checking the next cycle
+
         while True:
             try:
-                # Xác định chu kỳ cần kiểm tra (là chu kỳ tiếp theo sau chu kỳ đã xử lý)
-                target_cycle = self.last_processed_cycle + 1
                 logger.info(
-                    f"Checking for consensus results of cycle {target_cycle}..."
+                    f"{uid_prefix}:C{target_cycle} Checking for consensus results..."
                 )
-
-                # 1. Fetch kết quả đồng thuận từ Validator API
                 consensus_result = await self.fetch_consensus_result(
                     target_cycle, validator_api_url
                 )
 
                 if consensus_result:
                     logger.info(
-                        f"Found results for cycle {target_cycle}. Preparing state update."
+                        f"{uid_prefix}:C{target_cycle} Found results. Processing update..."
                     )
 
-                    # 2. Tìm UTXO Datum cũ trên blockchain
-                    # Nên tìm lại mỗi lần để đảm bảo lấy đúng UTXO mới nhất
-                    old_utxo = await self.find_own_utxo()
-                    if not old_utxo:
+                    logger.info(f"{uid_prefix}:C{target_cycle} Finding own UTXO...")
+                    current_utxo = await self.find_own_utxo()
+                    if not current_utxo:
                         logger.error(
-                            f"Cannot proceed with update for cycle {target_cycle}: Own UTXO not found on chain. Will retry."
+                            f"{uid_prefix}:C{target_cycle} Could not find own UTXO containing MinerDatum. Cannot update state."
                         )
-                        # Chờ và thử lại ở lần sau
-                        await asyncio.sleep(check_interval_seconds)
+                        # Optionally wait longer or implement retry logic?
+                        target_cycle += 1  # Move to next cycle check
                         continue
-                    if not old_utxo.output.datum:
+                    self.last_known_utxo = current_utxo  # Cache it
+                    logger.info(
+                        f"{uid_prefix}:C{target_cycle} Found UTXO: {current_utxo.input}"
+                    )
+
+                    logger.info(
+                        f"{uid_prefix}:C{target_cycle} Calculating new datum..."
+                    )
+                    old_datum_obj = MinerDatum.from_cbor(current_utxo.output.datum.cbor)  # type: ignore
+                    if not isinstance(old_datum_obj, MinerDatum):
                         logger.error(
-                            f"Cannot proceed with update for cycle {target_cycle}: Found UTXO {old_utxo.input} but it has no inline datum. Will retry."
+                            f"{uid_prefix}:C{target_cycle} Failed to decode old datum from UTXO {current_utxo.input} into MinerDatum object."
                         )
-                        await asyncio.sleep(check_interval_seconds)
+                        target_cycle += 1  # Skip this cycle
                         continue
 
-                    # Decode datum cũ
-                    try:
-                        old_datum = MinerDatum.from_cbor(old_utxo.output.datum.cbor)  # type: ignore
-                    except Exception as dec_err:
-                        logger.error(
-                            f"Failed to decode current MinerDatum for UTxO {old_utxo.input}: {dec_err}. Will retry."
-                        )
-                        await asyncio.sleep(check_interval_seconds)
-                        continue
-
-                    # 3. Tính toán Datum mới
+                    # Now old_datum_obj is confirmed to be MinerDatum
                     new_datum = self.calculate_new_datum(
-                        old_datum, consensus_result, target_cycle  # type: ignore
+                        old_datum_obj, consensus_result, target_cycle
                     )
 
-                    if new_datum:
-                        # 4. Gửi giao dịch Commit Self-Update
-                        tx_id = await self.commit_self_update(old_utxo, new_datum)
-                        if tx_id:
-                            logger.info(
-                                f"Successfully processed and committed update for cycle {target_cycle}. TxID: {tx_id}"
-                            )
-                            # Cập nhật chu kỳ đã xử lý thành công
-                            self.last_processed_cycle = target_cycle
-                            # Chờ một chút trước khi kiểm tra chu kỳ tiếp theo
-                            # Có thể chờ ít hơn check_interval_seconds để phản ứng nhanh hơn
-                            await asyncio.sleep(15)
-                        else:
-                            logger.error(
-                                f"Commit transaction failed for cycle {target_cycle}. Will retry finding UTXO and committing in the next iteration."
-                            )
-                            # Không tăng last_processed_cycle để thử lại commit cho chu kỳ này
+                    if not new_datum:
+                        logger.error(
+                            f"{uid_prefix}:C{target_cycle} Failed to calculate new datum. Skipping update."
+                        )
+                        target_cycle += 1
+                        continue
+
+                    logger.info(
+                        f"{uid_prefix}:C{target_cycle} New datum calculated. Committing self-update transaction..."
+                    )
+                    tx_id = await self.commit_self_update(current_utxo, new_datum)
+
+                    if tx_id:
+                        logger.info(
+                            f"{uid_prefix}:C{target_cycle} Self-update transaction submitted: {tx_id}. Update complete for this cycle."
+                        )
+                        self.last_processed_cycle = target_cycle
+                        self.last_known_utxo = (
+                            None  # Clear cache after successful update
+                        )
                     else:
                         logger.error(
-                            f"Failed to calculate new datum for cycle {target_cycle}. Skipping commit for this cycle."
+                            f"{uid_prefix}:C{target_cycle} Failed to submit self-update transaction. Will retry finding UTXO next time."
                         )
-                        # Cân nhắc: Có nên tăng last_processed_cycle để bỏ qua chu kỳ lỗi này không?
-                        # Tạm thời không tăng để đảm bảo không bỏ lỡ cập nhật.
-                        # Nếu lỗi tính toán xảy ra liên tục, cần phải điều tra.
+                        self.last_known_utxo = (
+                            None  # Clear cache as UTXO might be spent by failed tx
+                        )
+                        # Do not increment target_cycle yet, retry this cycle after interval
 
                 else:
-                    # Chưa có kết quả cho chu kỳ target_cycle
-                    logger.info(f"No results found for cycle {target_cycle} yet.")
+                    logger.info(f"{uid_prefix}:C{target_cycle} No results found yet.")
+                    # Only increment cycle if we didn't process it
+                    # This logic might need adjustment depending on whether validator API guarantees results eventually
+                    # If results might be missing permanently, we might need to skip cycles after some time.
+                    # For now, assume results will appear eventually if the cycle happened.
+                    # Maybe check current block height vs expected cycle end?
+                    pass  # Keep checking the same target_cycle
 
             except Exception as loop_err:
-                # Bắt lỗi không mong muốn trong vòng lặp
-                logger.exception(f"Unhandled error in MinerAgent run loop: {loop_err}")
-                # Nên có một khoảng chờ dài hơn ở đây để tránh lặp lỗi quá nhanh
-                await asyncio.sleep(max(60, check_interval_seconds))
+                logger.exception(
+                    f"{uid_prefix}:C{target_cycle} Unhandled error in MinerAgent run loop: {loop_err}"
+                )
+                # Avoid busy-looping on persistent errors
+                await asyncio.sleep(check_interval_seconds * 2)
 
-            # Chờ trước khi kiểm tra lại ở vòng lặp tiếp theo
-            logger.debug(f"Waiting {check_interval_seconds}s before next check...")
+            # Wait before next check
+            logger.debug(
+                f"{uid_prefix}:C{target_cycle} Waiting {check_interval_seconds}s before next check..."
+            )
             await asyncio.sleep(check_interval_seconds)
+            # Increment target cycle ONLY if we successfully processed OR confirmed no results yet for a reasonable time? TBD.
+            # Simplest for now: always check next cycle if current has been processed or if fetch returned None explicitly.
+            if (
+                consensus_result is None
+            ):  # Only increment if fetch explicitly returned None (meaning cycle check is done)
+                target_cycle += 1
 
     async def close(self):
         """Đóng các tài nguyên (ví dụ: http client) khi agent dừng."""
