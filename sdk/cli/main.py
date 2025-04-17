@@ -5,6 +5,7 @@ import logging
 from .wallet_cli import wallet_cli
 from .tx_cli import tx_cli
 from .query_cli import query_cli
+from .stake_cli import stake_cli
 
 # from .metagraph_cli import metagraph_cli  # If you have
 
@@ -21,6 +22,7 @@ def cli():
 cli.add_command(wallet_cli, name="w")
 cli.add_command(tx_cli, name="tx")
 cli.add_command(query_cli, name="query")
+cli.add_command(stake_cli, name="stake")
 # cli.add_command(metagraph_cli, name="metagraph")
 
 
