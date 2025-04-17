@@ -1980,7 +1980,7 @@ class ValidatorNode:
         """
         # === A. Khởi đầu Chu kỳ & Tính toán Slot ===
         logger.info(
-            f"[Cycle:{self.current_cycle}] >>> Starting Consensus Cycle {self.current_cycle} <<<"
+            f"[bold green]:arrow_forward: Cycle:{self.current_cycle}[/bold green] >>> Starting Consensus Cycle {self.current_cycle} <<<"
         )
         cycle_start_time = time.time()
 
@@ -2039,18 +2039,22 @@ class ValidatorNode:
                 # Quyết định dừng hoặc chạy với lỗi? Tạm thời dừng.
                 return
             logger.info(
-                f" - Target Slots: TaskingEnd <= {tasking_end_target_slot}, Broadcast >= {broadcast_target_slot}, ConsensusWaitEnd >= {consensus_wait_end_slot}, Commit >= {commit_target_slot}"
+                f" - Target Slots: TaskingEnd <= [yellow]{tasking_end_target_slot}[/yellow], Broadcast >= [yellow]{broadcast_target_slot}[/yellow], ConsensusWaitEnd >= [yellow]{consensus_wait_end_slot}[/yellow], Commit >= [yellow]{commit_target_slot}[/yellow]"
             )
 
         except AttributeError as e:
-            logger.error(f"Missing slot offset configuration: {e}")
+            logger.error(
+                f":stop_sign: [bold red]Missing slot offset configuration:[/bold red] {e}"
+            )
             return
         except Exception as e:
-            logger.exception(f"Slot timing calculation error: {e}")
+            logger.exception(
+                f":stop_sign: [bold red]Slot timing calculation error:[/bold red] {e}"
+            )
             return
 
         # === B. Reset State ===
-        logger.debug(f"Cycle {self.current_cycle}: Resetting cycle state...")
+        logger.debug(f":recycle: Cycle {self.current_cycle}: Resetting cycle state...")
         self.cycle_scores = defaultdict(list)
         self.miner_is_busy = set()
         async with self.received_scores_lock:
@@ -2061,7 +2065,7 @@ class ValidatorNode:
             self.results_buffer.clear()
         self.tasks_sent.clear()
         self.miners_selected_for_cycle = set()  # Reset danh sách miner đã chọn
-        logger.debug(f"Cycle {self.current_cycle}: State reset complete.")
+        logger.debug(f":recycle: Cycle {self.current_cycle}: State reset complete.")
 
         # Khởi tạo biến kết quả
         final_miner_scores: Dict[str, float] = {}
@@ -2070,23 +2074,25 @@ class ValidatorNode:
 
         try:
             # === C. Verify/Penalize Chu kỳ Trước ===
-            logger.info("Step 1: Verifying previous cycle validator updates...")
+            logger.info(":mag: Step 1: Verifying previous cycle validator updates...")
             await self.verify_and_penalize_validators()
-            logger.info("Step 1: Verification/Penalization check completed.")
+            logger.info(
+                ":mag_right: Step 1: Verification/Penalization check completed."
+            )
 
             # === D. Load Metagraph ===
-            logger.info("Step 2: Loading Metagraph data...")
+            logger.info(":cloud: Step 2: Loading Metagraph data...")
             await self.load_metagraph_data()
             logger.info(
-                f"Step 2: Metagraph loaded. Miners: {len(self.miners_info)}, Validators: {len(self.validators_info)}"
+                f":cloud: Step 2: Metagraph loaded. Miners: [cyan]{len(self.miners_info)}[/cyan], Validators: [cyan]{len(self.validators_info)}[/cyan]"
             )
 
             # === E. Giai đoạn Giao Task (Mini-Batch, giới hạn bởi Slot) ===
             if not self.miners_info:
-                logger.warning("Step 3 (Tasking): No miners found. Skipping.")
+                logger.warning(":warning: Step 3 (Tasking): No miners found. Skipping.")
             else:
                 logger.info(
-                    f"Step 3: Entering Mini-Batch Tasking Phase (until slot ~{tasking_end_target_slot})..."
+                    f":fast_forward: Step 3: Entering Mini-Batch Tasking Phase (until slot ~[yellow]{tasking_end_target_slot}[/yellow])..."
                 )
                 batch_num = 0
                 tasks_sent_this_cycle = 0
@@ -2156,28 +2162,28 @@ class ValidatorNode:
                     # Không cần sleep interval cố định ở đây nữa vì vòng lặp sẽ kiểm tra slot
 
                 logger.info(
-                    f"Step 3: Mini-Batch Tasking Phase Finished. Total tasks sent: {tasks_sent_this_cycle}"
+                    f":checkered_flag: Step 3: Mini-Batch Tasking Phase Finished. Total tasks sent: [cyan]{tasks_sent_this_cycle}[/cyan]"
                 )
 
             # === F. Broadcast Điểm (Chờ đến Slot) ===
             logger.info(
-                f"Step 4: Waiting until slot {broadcast_target_slot} to broadcast local scores..."
+                f":satellite_antenna: Step 4: Waiting until slot [yellow]{broadcast_target_slot}[/yellow] to broadcast local scores..."
             )
             await self.wait_until_slot(broadcast_target_slot)
             accumulated_scores_count = sum(len(v) for v in self.cycle_scores.values())
             logger.info(
-                f"Step 4: Broadcasting {accumulated_scores_count} accumulated local scores..."
+                f":satellite_antenna: Step 4: Broadcasting [cyan]{accumulated_scores_count}[/cyan] accumulated local scores..."
             )
             # Đảm bảo broadcast_scores sử dụng self.cycle_scores hiện tại
             await self.broadcast_scores(self.cycle_scores)  # Truyền điểm đã tích lũy
 
             # === G. Chờ Điểm P2P (Chờ đến Slot) ===
             logger.info(
-                f"Step 5: Waiting until slot {consensus_wait_end_slot} for P2P scores..."
+                f":hourglass_flowing_sand: Step 5: Waiting until slot [yellow]{consensus_wait_end_slot}[/yellow] for P2P scores..."
             )
             await self.wait_until_slot(consensus_wait_end_slot)
             logger.info(
-                f"Step 5: Consensus score waiting period ended (Reached slot {consensus_wait_end_slot})."
+                f":hourglass_done: Step 5: Consensus score waiting period ended (Reached slot {consensus_wait_end_slot})."
             )
             # Kiểm tra đủ điểm
             async with self.received_scores_lock:
@@ -2197,11 +2203,11 @@ class ValidatorNode:
                 scores_received_count = len(unique_senders)
             consensus_possible = scores_received_count >= min_validators_needed
             logger.info(
-                f"Step 5: Consensus possible based on received P2P scores: {consensus_possible} ({scores_received_count}/{min_validators_needed} active validators needed)"
+                f":ballot_box_with_check: Step 5: Consensus possible based on received P2P scores: {'[bold green]Yes[/bold green]' if consensus_possible else '[bold red]No[/bold red]'} ([cyan]{scores_received_count}[/cyan]/[cyan]{min_validators_needed}[/cyan] active validators needed)"
             )
 
             # === H. Chạy Đồng thuận & Tính toán ===
-            logger.info("Step 6: Running final consensus calculations...")
+            logger.info(":brain: Step 6: Running final consensus calculations...")
             final_miner_scores, calculated_validator_states = (
                 self.run_consensus_and_penalties(
                     consensus_possible=consensus_possible,
@@ -2215,11 +2221,11 @@ class ValidatorNode:
             self.previous_cycle_results["final_miner_scores"] = (
                 final_miner_scores.copy()
             )
-            logger.info(f"Step 6: Consensus calculation finished.")
+            logger.info(f":brain: Step 6: Consensus calculation finished.")
 
             # === I. Publish Kết quả cho Miner ===
             logger.info(
-                "Step 7: Calculating Miner incentives and Publishing/Caching consensus results..."
+                ":receipt: Step 7: Calculating Miner incentives and Publishing/Caching consensus results..."
             )
             # Tính rewards (logic như cũ)
             calculated_miner_rewards: Dict[str, float] = {}
@@ -2273,41 +2279,48 @@ class ValidatorNode:
                 final_miner_scores=final_miner_scores,
                 calculated_rewards=calculated_miner_rewards,
             )
-            logger.info("Step 7: Consensus results cached/published.")
+            logger.info(":receipt: Step 7: Consensus results cached/published.")
 
             # === J. Chuẩn bị Self-Update Datum ===
-            logger.info("Step 8: Preparing self validator datum update...")
+            logger.info(":pencil2: Step 8: Preparing self validator datum update...")
             validator_self_update = await self.prepare_validator_updates(
                 calculated_validator_states
             )
             logger.info(
-                f"Step 8: Prepared {len(validator_self_update)} self validator datums."
+                f":pencil2: Step 8: Prepared [cyan]{len(validator_self_update)}[/cyan] self validator datums."
             )
 
             # === K. Chờ Commit (Chờ đến Slot) ===
             logger.info(
-                f"Step 9: Waiting until slot {commit_target_slot} to commit self-update..."
+                f":timer_clock: Step 9: Waiting until slot [yellow]{commit_target_slot}[/yellow] to commit self-update..."
             )
             await self.wait_until_slot(commit_target_slot)
 
             # === L. Commit Self-Update ===
-            logger.info("Step 10: Committing SELF validator update to blockchain...")
+            logger.info(
+                ":link: Step 10: Committing SELF validator update to blockchain..."
+            )
             await self.commit_updates_to_blockchain(
                 validator_updates=validator_self_update,  # Chỉ commit self-update
             )
-            logger.info("Step 10: Commit process for self-validator initiated.")
+            logger.info(":link: Step 10: Commit process for self-validator initiated.")
 
         except Exception as e:
-            logger.exception(f"Error during consensus cycle {self.current_cycle}: {e}")
+            logger.exception(
+                f":rotating_light: [bold red]Error during consensus cycle {self.current_cycle}:[/bold red] {e}"
+            )
 
         finally:
             # === M. Chờ Kết thúc Chu kỳ (Chờ đến Slot) & Dọn dẹp ===
             cycle_end_time_actual = time.time()
-            # ... log duration ...
+            cycle_duration = cycle_end_time_actual - cycle_start_time
+            logger.info(
+                f":stopwatch: Cycle {self.current_cycle} duration so far: {cycle_duration:.2f}s"
+            )
 
             next_cycle_start_slot = target_end_slot + 1
             logger.info(
-                f"Waiting until slot {next_cycle_start_slot} to finalize cycle {self.current_cycle}..."
+                f":hourglass: Waiting until slot [yellow]{next_cycle_start_slot}[/yellow] to finalize cycle {self.current_cycle}..."
             )
             await self.wait_until_slot(next_cycle_start_slot)
 
@@ -2322,13 +2335,16 @@ class ValidatorNode:
                 if cleanup_cycle in self.received_validator_scores:
                     try:
                         del self.received_validator_scores[cleanup_cycle]
+                        logger.debug(
+                            f":wastebasket: Cleaned up P2P scores for cycle {cleanup_cycle}"
+                        )
                     except KeyError:
                         pass
             logger.info(f"--- End of Cycle {completed_cycle} ---")
 
-        cycle_duration = time.time() - cycle_start_time
+        cycle_duration_final = time.time() - cycle_start_time
         logger.info(
-            f"[Cycle:{self.current_cycle - 1}] >>> Completed Consensus Cycle {self.current_cycle - 1} in {cycle_duration:.2f}s <<<"
+            f":checkered_flag: [bold green]>>> Completed Consensus Cycle {completed_cycle} in {cycle_duration_final:.2f}s <<<[/bold green]"
         )
 
     async def run(self):

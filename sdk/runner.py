@@ -26,34 +26,47 @@ logger = logging.getLogger(__name__)
 
 class ValidatorRunner:
     """
-    Lớp đóng gói việc khởi tạo và chạy một Validator Node tích hợp (Logic + API).
-    Nó nhận vào lớp Validator cụ thể của subnet và các cấu hình.
+    Lớp điều phối việc khởi tạo, cấu hình và chạy một node Validator đầy đủ.
+
+    Bao gồm việc thiết lập API server (FastAPI), khởi tạo instance của lớp
+    ValidatorNode cụ thể được cung cấp, và chạy vòng lặp đồng thuận chính
+    của node trong một background task.
+
+    Attributes:
+        config (Dict[str, Any]): Dictionary cấu hình được truyền vào khi khởi tạo.
+        validator_class (Type[ValidatorNode]): Lớp ValidatorNode cụ thể của subnet.
+        app (FastAPI): Instance của FastAPI dùng để chạy API server.
+        validator_node_instance (Optional[ValidatorNode]): Instance của ValidatorNode
+            sau khi được khởi tạo thành công trong sự kiện startup.
+        main_loop_task (Optional[asyncio.Task]): Task chạy vòng lặp đồng thuận chính.
     """
 
     def __init__(self, config: Dict[str, Any]):
         """
-        Khởi tạo Runner.
+        Khởi tạo ValidatorRunner với cấu hình được cung cấp.
 
         Args:
-            config (Dict[str, Any]): Dictionary chứa các cấu hình cần thiết:
-                - validator_class (Type[ValidatorNode]): Lớp validator cụ thể (vd: Subnet1Validator).
-                - host (str): Host IP để API server lắng nghe (vd: "127.0.0.1").
-                - port (int): Cổng để API server lắng nghe (vd: 8001).
-                - validator_uid (str): UID của validator.
+            config (Dict[str, Any]): Dictionary chứa các cấu hình cần thiết để
+                khởi tạo ValidatorNode và chạy API server. Bao gồm các key như:
+                - validator_class (Type[ValidatorNode]): Lớp validator cụ thể.
+                - host (str): Địa chỉ IP host cho API server.
+                - port (int): Cổng cho API server.
+                - log_level (str): Cấp độ log (vd: 'info', 'debug').
+                - validator_uid (str): UID hex của validator on-chain.
                 - validator_address (str): Địa chỉ Cardano của validator.
-                - validator_api_endpoint (str): URL công khai của API.
-                - hotkey_base_dir (str): Đường dẫn thư mục chứa coldkeys.
-                - coldkey_name (str): Tên coldkey.
-                - hotkey_name (str): Tên hotkey.
-                - password (str): Mật khẩu hotkey.
+                - validator_api_endpoint (str): URL công khai của API server.
+                - hotkey_base_dir (str): Đường dẫn thư mục gốc chứa coldkeys.
+                - coldkey_name (str): Tên thư mục của coldkey.
+                - hotkey_name (str): Tên của hotkey cần load.
+                - password (str): Mật khẩu để giải mã hotkey.
                 - blockfrost_project_id (str): ID dự án Blockfrost.
-                - network (Network): Mạng Cardano (Testnet/Mainnet).
-                # Thêm các cấu hình khác nếu lớp validator cụ thể yêu cầu
+                - network (Network): Mạng Cardano (MAINNET hoặc TESTNET).
+                - ... (Các cấu hình bổ sung mà validator_class yêu cầu).
         """
         self.config = config
         self.validator_class: Type[ValidatorNode] = config.get(
             "validator_class", ValidatorNode
-        )  # Lấy lớp validator, mặc định là base
+        )
         self.app = FastAPI(
             title=f"Moderntensor Validator API - {self.validator_class.__name__}",
             description=f"API server and consensus node runner for {self.validator_class.__name__}.",
@@ -65,7 +78,17 @@ class ValidatorRunner:
         self._setup_app()
 
     def _setup_app(self):
-        """Thiết lập ứng dụng FastAPI, bao gồm sự kiện startup/shutdown và router."""
+        """
+        Thiết lập instance FastAPI (`self.app`).
+
+        Bao gồm việc đăng ký các sự kiện startup và shutdown:
+        - Startup: Khởi tạo instance ValidatorNode, load keys, context,
+          inject node instance vào dependencies, và bắt đầu vòng lặp đồng thuận.
+        - Shutdown: Hủy bỏ task vòng lặp đồng thuận và đóng các tài nguyên
+          (như HTTP client của node) nếu cần.
+
+        Đồng thời, include API router từ `sdk.network.app.api.v1.routes`.
+        """
 
         @self.app.on_event("startup")
         async def startup_event():
@@ -168,12 +191,20 @@ class ValidatorRunner:
         # Include API routes từ SDK
         self.app.include_router(api_router)
 
-
     async def _run_main_node_loop(
         self,
-    ):  # Hoặc async def run_main_node_loop(node: ValidatorNode):
-        """Chạy vòng lặp đồng thuận chính trong background."""
-        node = self.validator_node_instance  # Hoặc dùng node từ tham số
+    ):
+        """
+        Chạy vòng lặp đồng thuận chính của ValidatorNode (`self.validator_node_instance`) như một background task.
+
+        Vòng lặp này gọi phương thức `run_cycle()` của node một cách liên tục.
+        Nó sẽ tiếp tục chạy cho đến khi task bị hủy (thường là khi server shutdown)
+        hoặc gặp lỗi không mong muốn.
+
+        Lưu ý: Vòng lặp này hiện tại không có độ trễ giữa các cycle. Cân nhắc
+        thêm `asyncio.sleep()` nếu `run_cycle()` trả về quá nhanh và gây tốn CPU.
+        """
+        node = self.validator_node_instance
         if not node:
             logger.error("Runner: Validator node instance not available for main loop.")
             return
@@ -181,18 +212,13 @@ class ValidatorRunner:
         node_settings = getattr(node, "settings", sdk_settings)
 
         try:
-            await asyncio.sleep(5)  # Chờ API sẵn sàng (có thể giữ lại)
+            await asyncio.sleep(
+                5
+            )  # Giữ lại khoảng chờ ngắn ban đầu nếu cần API sẵn sàng
             while True:
-                # >>> BỎ PHẦN TÍNH TOÁN THỜI GIAN VÀ SLEEP Ở ĐÂY <<<
-                # cycle_start_time = time.time()
-                await node.run_cycle()  # Chỉ cần gọi run_cycle
-                # cycle_duration = time.time() - cycle_start_time
-                # cycle_interval_minutes = getattr(...)
-                # cycle_interval_seconds = ...
-                # min_wait = getattr(...)
-                # wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
-                # logger.info(f"Cycle {node.current_cycle -1} duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle...")
-                # await asyncio.sleep(wait_time) # <<< BỎ DÒNG NÀY >>>
+                await node.run_cycle()
+                # Cân nhắc thêm sleep nếu cần:
+                # await asyncio.sleep(node_settings.CYCLE_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             logger.info("Runner: Main node loop cancelled.")
         except Exception as e:
@@ -201,7 +227,13 @@ class ValidatorRunner:
             logger.info("Runner: Main node loop finished.")
 
     def run(self):
-        """Khởi động Uvicorn server."""
+        """
+        Khởi động API server sử dụng Uvicorn.
+
+        Lấy thông tin host, port và log level từ `self.config` và chạy
+        `uvicorn.run()` với instance FastAPI (`self.app`) đã được thiết lập.
+        Đây là một blocking call, giữ cho tiến trình chạy để phục vụ API.
+        """
         host = self.config.get("host", "127.0.0.1")
         port = self.config.get("port", 8001)
         log_level = self.config.get(

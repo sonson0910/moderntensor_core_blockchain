@@ -246,7 +246,7 @@ def run_consensus_logic(
             - Final miner adjusted scores ({miner_uid_hex: P_adj}).
             - Calculated next validator states ({validator_uid_hex: {state_dict}}).
     """
-    logger.info(f"Running consensus calculations for cycle {current_cycle}...")
+    logger.info(f":brain: Running consensus calculations for cycle {current_cycle}...")
     final_miner_scores: Dict[str, float] = {}  # {miner_uid_hex: P_adj}
     validator_deviations: Dict[str, List[float]] = defaultdict(
         list
@@ -255,7 +255,7 @@ def run_consensus_logic(
     total_validator_contribution: float = 0.0  # Tổng W*E để tính thưởng validator
     if not consensus_possible:
         logger.warning(
-            f"Cycle {current_cycle}: Insufficient P2P scores received. Skipping detailed consensus calculations and reward distribution. Applying only trust decay if applicable."
+            f":warning: Cycle {current_cycle}: Insufficient P2P scores received. Skipping detailed consensus. Applying only trust decay."
         )
         # Chỉ tính decay cho trust score, không tính P_adj, E_v, reward
         for validator_uid_hex, validator_info in validators_info.items():
@@ -336,7 +336,9 @@ def run_consensus_logic(
 
         p_adj = calculate_adjusted_miner_performance(scores, trusts)
         final_miner_scores[miner_uid_hex] = p_adj
-        logger.info(f"  Consensus score (P_adj) for Miner {miner_uid_hex}: {p_adj:.4f}")
+        logger.info(
+            f"  :chart_with_upwards_trend: Consensus score (P_adj) for Miner [cyan]{miner_uid_hex}[/cyan]: [yellow]{p_adj:.4f}[/yellow]"
+        )
 
         # Tính độ lệch cho từng validator đã chấm điểm miner này, trên từng task
         related_task_ids = tasks_processed_by_miner.get(miner_uid_hex, set())
@@ -428,7 +430,7 @@ def run_consensus_logic(
             penalty_p_penalty=settings.CONSENSUS_PARAM_PENALTY_P_PENALTY,
         )
         logger.info(
-            f"  Calculated performance (E_val) for Validator {validator_uid_hex}: {new_e_validator:.4f}"
+            f"  :chart_with_downwards_trend: Calculated performance (E_val) for Validator [cyan]{validator_uid_hex}[/cyan]: [yellow]{new_e_validator:.4f}[/yellow]"
         )
 
         # Tính Trust Score mới dự kiến
@@ -457,7 +459,7 @@ def run_consensus_logic(
             update_sigmoid_x0=settings.CONSENSUS_PARAM_UPDATE_SIG_X0,
         )
         logger.info(
-            f"  Calculated next Trust for Validator {validator_uid_hex}: {new_val_trust_score:.4f}"
+            f"  :sparkles: Calculated next Trust for Validator [cyan]{validator_uid_hex}[/cyan]: [yellow]{new_val_trust_score:.4f}[/yellow]"
         )
 
         # Tính đóng góp W*E cho việc tính thưởng (dùng weight đầu chu kỳ và E_v mới)
@@ -485,7 +487,7 @@ def run_consensus_logic(
 
     # --- 3. Tính phần thưởng dự kiến cho từng validator (chỉ những ai active) ---
     logger.info(
-        f"Total validator contribution (Sum W_current*E_new from Active): {total_validator_contribution:.4f}"
+        f":moneybag: Total validator contribution (Sum W*E from Active): [yellow]{total_validator_contribution:.4f}[/yellow]"
     )
     if total_validator_contribution > EPSILON:
         for validator_uid_hex, state in calculated_validator_states.items():
@@ -503,18 +505,20 @@ def run_consensus_logic(
                 )
                 state["reward"] = reward  # Thêm phần thưởng vào trạng thái dự kiến
                 logger.info(
-                    f"  Validator {validator_uid_hex}: Calculated Reward = {reward:.6f}"
+                    f"  :dollar: Validator [cyan]{validator_uid_hex}[/cyan]: Calculated Reward = [green]{reward:.6f}[/green]"
                 )
             else:
                 state["reward"] = 0.0  # Không có thưởng nếu không active
     else:
         logger.warning(
-            "Total active validator contribution is zero. No validator rewards calculated."
+            ":warning: Total active validator contribution is zero. No validator rewards calculated."
         )
         for state in calculated_validator_states.values():
             state["reward"] = 0.0
 
-    logger.info("Finished consensus calculations and validator state estimation.")
+    logger.info(
+        ":brain: Finished consensus calculations and validator state estimation."
+    )
     return final_miner_scores, calculated_validator_states
 
 
@@ -554,7 +558,9 @@ async def verify_and_penalize_logic(
         ApiError: If fetching on-chain data from BlockFrost fails.
         Exception: For other unexpected errors during data fetching or comparison.
     """
-    logger.info(f"Verifying previous cycle ({current_cycle - 1}) validator updates...")
+    logger.info(
+        f":mag: Verifying previous cycle ({current_cycle - 1}) validator updates..."
+    )
     previous_cycle = current_cycle - 1
     if previous_cycle < 0:
         return
@@ -579,14 +585,16 @@ async def verify_and_penalize_logic(
                 on_chain_states_decoded[uid_hex] = datum_dict
                 utxo_map_on_chain[uid_hex] = utxo_obj
         logger.info(
-            f"Found {len(on_chain_states_decoded)} validator datums updated in cycle {previous_cycle} for verification."
+            f":inbox_tray: Found [cyan]{len(on_chain_states_decoded)}[/cyan] validator datums updated in cycle [yellow]{previous_cycle}[/yellow] for verification."
         )
 
         # 2. Compare with expected states
         expected_states = previous_calculated_states
         if not expected_states:
-            logger.warning("No expected validator states found from previous cycle.")
-            return  # <<<--- Trả về None
+            logger.warning(
+                ":warning: No expected validator states found from previous cycle."
+            )
+            return
         suspicious_validators: Dict[str, str] = {}
         for uid_hex, expected in expected_states.items():
             actual_decoded = on_chain_states_decoded.get(uid_hex)
@@ -625,13 +633,13 @@ async def verify_and_penalize_logic(
             if reason_parts:
                 suspicious_validators[uid_hex] = "; ".join(reason_parts)
                 logger.warning(
-                    f"Deviation detected for Validator {uid_hex}: {suspicious_validators[uid_hex]}"
+                    f":exclamation: Deviation detected for Validator [cyan]{uid_hex}[/cyan]: [yellow]{suspicious_validators[uid_hex]}[/yellow]"
                 )
 
         # 3. Consensus on Fraud (Mocked)
         confirmed_deviators = suspicious_validators  # Mock
 
-        # 4. Apply Penalties and Prepare Penalty Datums
+        # 4. Apply Penalties
         for uid_hex, reason in confirmed_deviators.items():
             validator_info = validators_info.get(uid_hex)
             if not validator_info:
@@ -641,7 +649,7 @@ async def verify_and_penalize_logic(
                 continue
 
             logger.warning(
-                f"Applying penalty IN MEMORY to Validator {uid_hex} for: {reason}"
+                f":hammer: Applying penalty IN MEMORY to Validator [cyan]{uid_hex}[/cyan] for: [yellow]{reason}[/yellow]"
             )
 
             # a. Determine Severity
@@ -655,7 +663,7 @@ async def verify_and_penalize_logic(
             )
             if slash_amount > 0:
                 logger.warning(
-                    f"Potential slash amount for {uid_hex}: {slash_amount / 1e6:.6f} ADA (Severity: {fraud_severity:.2f}). Needs trigger mechanism."
+                    f":money_with_wings: Potential slash for [cyan]{uid_hex}[/cyan]: [red]{slash_amount / 1e6:.6f}[/red] ADA (Severity: {fraud_severity:.2f}). Needs trigger mechanism."
                 )
                 # TODO: Trigger Slashing Mechanism (Future/DAO)
 
@@ -665,13 +673,11 @@ async def verify_and_penalize_logic(
             new_trust_score = max(
                 0.0, original_trust * (1 - penalty_eta * fraud_severity)
             )
-            if abs(new_trust_score - original_trust) > 1e-9:  # Dùng epsilon nhỏ
+            if abs(new_trust_score - original_trust) > 1e-9:
                 logger.warning(
-                    f"Updating IN-MEMORY Trust Score for {uid_hex}: {original_trust:.4f} -> {new_trust_score:.4f}"
+                    f":arrow_down: Updating IN-MEMORY Trust Score for [cyan]{uid_hex}[/cyan]: [yellow]{original_trust:.4f}[/yellow] -> [red]{new_trust_score:.4f}[/red]"
                 )
-                validator_info.trust_score = (
-                    new_trust_score  # <<<--- CẬP NHẬT TRỰC TIẾP
-                )
+                validator_info.trust_score = new_trust_score
             else:
                 logger.info(
                     f"In-memory trust score for {uid_hex} remains {original_trust:.4f}."
@@ -687,61 +693,10 @@ async def verify_and_penalize_logic(
                 and validator_info.status == STATUS_ACTIVE
             ):
                 new_status = STATUS_JAILED
-                logger.warning(f"Updating IN-MEMORY Status for {uid_hex} to JAILED.")
-                validator_info.status = new_status  # <<<--- CẬP NHẬT TRỰC TIẾP
-
-            # e. Prepare new ValidatorDatum for penalty commit
-            # original_datum = None
-            # original_utxo = utxo_map_on_chain.get(uid_hex)  # << USE CORRECT MAP NAME
-
-            # if (
-            #     original_utxo
-            #     and hasattr(original_utxo, "output")
-            #     and hasattr(original_utxo.output, "datum")
-            # ):
-            #     potential_datum = original_utxo.output.datum
-            #     if isinstance(potential_datum, ValidatorDatum):
-            #         original_datum = potential_datum
-            #     else:
-            #         logger.warning(
-            #             f"Object in utxo.output.datum for {uid_hex} not ValidatorDatum: {type(potential_datum)}"
-            #         )
-            # else:
-            #     logger.warning(
-            #         f"Could not find original UTxO/output/datum in map for {uid_hex}"
-            #     )
-
-            # --- ADD CHECK FOR original_datum BEFORE try block ---
-            # if not original_datum:
-            #     logger.error(
-            #         f"Cannot prepare penalty datum for {uid_hex}: Original on-chain ValidatorDatum object not found/retrieved."
-            #     )
-            #     continue  # Skip to next deviator if datum object not found
-            # # ---
-
-            # try:
-            #     # Now original_datum is guaranteed to be a ValidatorDatum object
-            #     datum_to_commit = ValidatorDatum(
-            #         uid=original_datum.uid,
-            #         subnet_uid=original_datum.subnet_uid,
-            #         stake=original_datum.stake,
-            #         scaled_last_performance=original_datum.scaled_last_performance,
-            #         scaled_trust_score=int(new_trust_score * divisor),
-            #         accumulated_rewards=original_datum.accumulated_rewards,
-            #         last_update_slot=current_cycle,  # Update slot
-            #         performance_history_hash=original_datum.performance_history_hash,
-            #         wallet_addr_hash=original_datum.wallet_addr_hash,
-            #         status=new_status,  # Update status
-            #         registration_slot=original_datum.registration_slot,
-            #         api_endpoint=original_datum.api_endpoint,
-            #     )
-            #     penalized_validator_datums[uid_hex] = datum_to_commit
-            #     logger.info(f"Prepared penalty datum update for {uid_hex}.")
-            # except Exception as build_e:
-            #     # This catch block might now catch errors if ValidatorDatum init fails for other reasons
-            #     logger.exception(
-            #         f"Failed to build penalty datum for {uid_hex}: {build_e}"
-            #     )  # Use logger.exception
+                logger.warning(
+                    f":lock: Updating IN-MEMORY Status for [cyan]{uid_hex}[/cyan] to [bold red]JAILED[/bold red]."
+                )
+                validator_info.status = new_status
 
     except Exception as e:
         logger.exception(f"Error during validator verification/penalization: {e}")
@@ -784,7 +739,7 @@ async def prepare_miner_updates_logic(  # <<<--- async vì cần lấy/decode da
         ValueError: If datum CBOR decoding fails for existing datums.
         Exception: For errors during history hashing or MinerDatum creation.
     """
-    logger.info(f"Preparing miner state updates for cycle {current_cycle}...")
+    logger.info(f":package: Preparing miner state updates for cycle {current_cycle}...")
     miner_updates: Dict[str, MinerDatum] = {}
     divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
 
@@ -992,7 +947,9 @@ async def prepare_miner_updates_logic(  # <<<--- async vì cần lấy/decode da
                 f"{log_prefix}: Failed to create MinerDatum: {e}", exc_info=True
             )
 
-    logger.info(f"Prepared {len(miner_updates)} miner datums for update.")
+    logger.info(
+        f":package: Prepared [cyan]{len(miner_updates)}[/cyan] miner datums for update."
+    )
     return miner_updates
 
 
@@ -1028,13 +985,17 @@ async def prepare_validator_updates_logic(
     Raises:
         Exception: If errors occur during Datum creation.
     """
-    logger.info(f"Preparing self validator state update for cycle {current_cycle}...")
+    logger.info(
+        f":pencil2: Preparing self validator state update for cycle {current_cycle}..."
+    )
     validator_updates: Dict[str, ValidatorDatum] = {}
     self_uid_hex = self_validator_info.uid
     divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
 
     if self_uid_hex not in calculated_states:
-        logger.warning(f"Calculated state for self validator {self_uid_hex} not found.")
+        logger.warning(
+            f":warning: Calculated state for self validator [cyan]{self_uid_hex}[/cyan] not found."
+        )
         return {}
 
     state = calculated_states[self_uid_hex]
@@ -1102,10 +1063,12 @@ async def prepare_validator_updates_logic(
             api_endpoint=api_endpoint_bytes_hashed,  # Pass bytes
         )
         validator_updates[self_uid_hex] = new_datum
-        logger.info(f"Prepared update for self ({self_uid_hex})")
+        logger.info(
+            f":white_check_mark: Prepared update for self ([cyan]{self_uid_hex}[/cyan])"
+        )
     except Exception as e:
         logger.exception(
-            f"Failed to create ValidatorDatum for self ({self_uid_hex}): {e}"
+            f":x: Failed to create ValidatorDatum for self ([cyan]{self_uid_hex}[/cyan]): {e}"
         )
 
     return validator_updates
@@ -1158,11 +1121,15 @@ async def commit_updates_logic(
         ApiError: If Blockfrost submission fails.
         Exception: For unexpected errors during transaction building or signing.
     """
-    logger.info(f"Starting blockchain commit process (SELF Validator Update Only)...")
+    logger.info(
+        f":link: Starting blockchain commit process (SELF Validator Update Only)..."
+    )
 
     # Kiểm tra xem có bản cập nhật nào cần commit không (chỉ là self-update)
     if not validator_updates:
-        logger.info("No self validator update prepared for this cycle.")
+        logger.info(
+            ":information_source: No self validator update prepared for this cycle."
+        )
         return {
             "status": "completed_no_updates",
             "submitted_count": 0,
@@ -1186,7 +1153,9 @@ async def commit_updates_logic(
         )
         logger.info(f"Commit Owner Address: {owner_address}")
     except Exception as e:
-        logger.exception(f"Failed to derive owner address/keys: {e}. Aborting commit.")
+        logger.exception(
+            f":stop_sign: [bold red]Failed to derive owner address/keys:[/bold red] {e}. Aborting commit."
+        )
         return {"status": "failed", "reason": "Owner key/address derivation failed."}
 
     # Địa chỉ contract và Redeemer mặc định
@@ -1291,7 +1260,7 @@ async def commit_updates_logic(
 
     except Exception as build_e:
         logger.exception(
-            f"{log_prefix}: Failed during transaction build/sign phase: {build_e}"
+            f":hammer: {log_prefix}: Failed during transaction build/sign phase: {build_e}"
         )
         failed_updates[self_uid_hex] = f"Build/Sign Error: {str(build_e)}"
         # Trả về kết quả lỗi
@@ -1309,27 +1278,27 @@ async def commit_updates_logic(
     tx_id_str: Optional[str] = None
     try:
         logger.info(
-            f"{log_prefix}: Submitting self-update transaction to the blockchain..."
+            f":arrow_up: {log_prefix}: Submitting self-update transaction to the blockchain..."
         )
         # submit_tx của BlockFrostContext trả về TransactionId
         tx_id: TransactionId = await context.submit_tx(signed_tx)  # type: ignore
         tx_id_str = str(tx_id)
         logger.info(
-            f"{log_prefix}: Successfully submitted self-update! TxID: {tx_id_str}"
+            f":white_check_mark: {log_prefix}: Successfully submitted self-update! TxID: [yellow]{tx_id_str}[/yellow]"
         )
         submitted_tx_ids[f"validator_{self_uid_hex}"] = tx_id_str
 
     except ApiError as e:
         error_msg = f"Blockfrost API Error ({e.status_code}): {e.message}"
         logger.error(
-            f"{log_prefix}: Blockfrost API Error on submit: Status={e.status_code}, Message={e.message}",
+            f":x: {log_prefix}: Blockfrost API Error on submit: Status=[red]{e.status_code}[/red], Message=[yellow]{e.message}[/yellow]",
             exc_info=False,
         )
         failed_updates[self_uid_hex] = error_msg
     except Exception as e:
         error_msg = f"Submit Error: {str(e)}"
         logger.exception(
-            f"{log_prefix}: Generic error during transaction submission: {e}"
+            f":rotating_light: {log_prefix}: Generic error during transaction submission: {e}"
         )
         failed_updates[self_uid_hex] = error_msg
 
@@ -1338,12 +1307,12 @@ async def commit_updates_logic(
     total_failed = len(failed_updates)
     total_skipped = len(skipped_updates)  # Sẽ là 0 hoặc 1 ở đây
     logger.info(
-        f"Validator Self-Commit process finished. Submitted: {total_submitted}, Failed: {total_failed}, Skipped (No Input UTxO): {total_skipped}"
+        f":checkered_flag: Validator Self-Commit process finished. Submitted: [green]{total_submitted}[/green], Failed: [red]{total_failed}[/red], Skipped: [yellow]{total_skipped}[/yellow]"
     )
     if failed_updates:
-        logger.warning(f"Failed self-update details: {failed_updates}")
+        logger.warning(f":warning: Failed self-update details: {failed_updates}")
     if skipped_updates:
-        logger.warning(f"Skipped self-update details: {skipped_updates}")
+        logger.warning(f":warning: Skipped self-update details: {skipped_updates}")
 
     return {
         "status": (

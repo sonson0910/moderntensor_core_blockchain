@@ -10,9 +10,13 @@ moderntensor.egg-info/top_level.txt
 sdk/__init__.py
 sdk/runner.py
 sdk/version.py
+sdk/agent/miner_agent.py
 sdk/cli/__init__.py
 sdk/cli/main.py
 sdk/cli/metagraph_cli.py
+sdk/cli/query_cli.py
+sdk/cli/stake_cli.py
+sdk/cli/tx_cli.py
 sdk/cli/wallet_cli.py
 sdk/config/__init__.py
 sdk/config/constants.py
@@ -20,7 +24,6 @@ sdk/config/env.py
 sdk/config/settings.py
 sdk/consensus/__init__.py
 sdk/consensus/node.py
-sdk/consensus/p2p.py
 sdk/consensus/scoring.py
 sdk/consensus/selection.py
 sdk/consensus/state.py
