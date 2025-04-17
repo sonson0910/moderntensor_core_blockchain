@@ -1,6 +1,7 @@
 # sdk/consensus/state.py
 """
-Logic tính toán đồng thuận, kiểm tra phạt, chuẩn bị và commit cập nhật trạng thái.
+Contains logic for consensus calculations, validator penalty checks,
+and preparing/committing state updates to the blockchain.
 """
 import logging
 import math
@@ -44,6 +45,7 @@ from pycardano import (
     TransactionOutput,
     ExtendedSigningKey,
     ExtendedVerificationKey,
+    RawPlutusData,
 )
 from sdk.metagraph.metagraph_datum import (
     MinerDatum,
@@ -57,6 +59,9 @@ from blockfrost import ApiError
 EPSILON = 1e-9
 logger = logging.getLogger(__name__)
 
+# Default empty bytes for hash placeholders
+EMPTY_HASH_BYTES = b""
+
 # --- Logic Đồng thuận và Tính toán Trạng thái Validator ---
 
 
@@ -64,18 +69,19 @@ def calculate_historical_consistency(
     scores: List[float], max_stddev_penalty: float = 2.0
 ) -> float:
     """
-    Tính điểm chất lượng dựa trên độ lệch chuẩn của điểm số lịch sử.
-    Điểm càng cao khi độ lệch chuẩn càng thấp (ổn định hơn).
+    Calculates a quality score based on the standard deviation of historical scores.
+    A lower standard deviation (more stable performance) results in a higher score.
 
     Args:
-        scores: Danh sách các điểm số lịch sử của validator.
-        max_stddev_penalty: Độ lệch chuẩn tối đa chấp nhận được trước khi điểm chất lượng về 0.
+        scores (List[float]): A list of historical performance scores.
+        max_stddev_penalty (float): The maximum standard deviation allowed before
+                                  the quality score drops to 0. Defaults to 2.0.
 
     Returns:
-        Điểm chất lượng từ 0.0 đến 1.0.
+        float: A quality score between 0.0 and 1.0.
     """
     if not scores or len(scores) < 2:
-        return 0.5  # Trả về giá trị trung bình nếu không đủ dữ liệu
+        return 0.5  # Return average value if insufficient data
 
     stddev = float(np.std(scores))
 
@@ -102,15 +108,29 @@ async def find_utxo_by_uid(
     datum_class: type,  # MinerDatum hoặc ValidatorDatum
 ) -> Optional[UTxO]:
     """
-    (Placeholder/Mock) Tìm UTXO tại địa chỉ script chứa Datum có UID khớp.
-    Trong thực tế, nên tối ưu hóa việc này.
+    (Placeholder/Mock) Finds a UTXO at the script address containing a Datum with a matching UID.
+
+    Note:
+        This is a placeholder and likely inefficient. Real implementation should
+        optimize UTXO fetching, potentially by querying for specific datums if the
+        backend supports it, or by using an off-chain index.
+
+    Args:
+        context (BlockFrostChainContext): The Cardano chain context.
+        script_hash (ScriptHash): The hash of the Plutus script.
+        network (Network): The Cardano network.
+        uid_bytes (bytes): The UID (as bytes) to search for within the datum.
+        datum_class (type): The expected Datum class (e.g., MinerDatum, ValidatorDatum).
+
+    Returns:
+        Optional[UTxO]: The found UTxO, or None if not found or an error occurs.
     """
     logger.debug(
         f"Searching for UTxO with UID {uid_bytes.hex()} of type {datum_class.__name__}..."
     )
     contract_address = Address(payment_part=script_hash, network=network)
     try:
-        # TODO: Tối ưu hóa: chỉ fetch UTXO liên quan nếu có thể
+        # TODO: Tối ưu hóa: chỉ fetch UTxO liên quan nếu có thể
         # Tạm thời fetch hết và lọc
         utxos = context.utxos(str(contract_address))
         for utxo in utxos:
@@ -142,6 +162,19 @@ async def find_utxo_by_uid(
 
 # --- Hàm tính Severity tinh chỉnh hơn ---
 def _calculate_fraud_severity(reason: str, tolerance: float) -> float:
+    """
+    Calculates a fraud severity score based on the deviation reason string.
+
+    Parses mismatch details from the reason string and compares the difference
+    against the tolerance to determine severity.
+
+    Args:
+        reason (str): String describing the deviation (e.g., "Trust mismatch (... Diff: 0.1)").
+        tolerance (float): The acceptable tolerance for floating-point comparisons.
+
+    Returns:
+        float: A severity score (e.g., 0.05 for non-commit, 0.1-0.7 for mismatches).
+    """
     severity = 0.0
     max_deviation_factor = 0.0
     if "Did not commit" in reason:
@@ -184,13 +217,34 @@ def run_consensus_logic(
     ],  # {task_id: {validator_uid_hex: ValidatorScore}}
     validators_info: Dict[
         str, ValidatorInfo
-    ],  # {validator_uid_hex: ValidatorInfo} - Trạng thái đầu chu kỳ
+    ],  # {validator_uid_hex: ValidatorInfo} - State at the start of the cycle
     settings: Any,
     consensus_possible: bool,
     self_validator_uid: str,
 ) -> Tuple[Dict[str, float], Dict[str, Any]]:
     """
-    Thực hiện đồng thuận điểm miners, tính toán trạng thái dự kiến VÀ phần thưởng dự kiến cho validators.
+    Performs the core consensus calculations for a cycle.
+
+    Calculates adjusted miner performance scores (P_adj) based on received validator scores
+    and trust. Then, calculates the expected next state (performance E_v, trust score,
+    potential reward, contribution) for each validator based on their participation,
+    deviations, and historical performance.
+
+    If `consensus_possible` is False, it skips most calculations and only applies trust decay.
+
+    Args:
+        current_cycle (int): The current cycle number.
+        tasks_sent (Dict[str, TaskAssignment]): Tasks sent out during this cycle.
+        received_scores (Dict[str, Dict[str, ValidatorScore]]): Scores received from peer validators.
+        validators_info (Dict[str, ValidatorInfo]): Validator info at the start of the cycle.
+        settings (Any): Application settings object.
+        consensus_possible (bool): Whether enough P2P scores were received for full consensus.
+        self_validator_uid (str): UID of the validator running this logic.
+
+    Returns:
+        Tuple[Dict[str, float], Dict[str, Any]]: A tuple containing:
+            - Final miner adjusted scores ({miner_uid_hex: P_adj}).
+            - Calculated next validator states ({validator_uid_hex: {state_dict}}).
     """
     logger.info(f"Running consensus calculations for cycle {current_cycle}...")
     final_miner_scores: Dict[str, float] = {}  # {miner_uid_hex: P_adj}
@@ -469,18 +523,36 @@ def run_consensus_logic(
 
 async def verify_and_penalize_logic(
     current_cycle: int,
-    previous_calculated_states: Dict[str, Any],  # State dự kiến cycle N-1
+    previous_calculated_states: Dict[str, Any],  # Expected state from cycle N-1
     validators_info: Dict[
         str, ValidatorInfo
-    ],  # State hiện tại (đầu cycle N), sẽ bị sửa trực tiếp
+    ],  # Current state (start of cycle N), MODIFIED IN-PLACE
     context: BlockFrostChainContext,
     settings: Any,
     script_hash: ScriptHash,
     network: Network,
 ) -> None:
     """
-    Kiểm tra ValidatorDatum chu kỳ trước, áp dụng phạt trust/status vào validators_info
-    và chuẩn bị ValidatorDatum mới để commit hình phạt đó.
+    Verifies previous cycle's ValidatorDatum against on-chain data.
+    Applies trust/status penalties IN-PLACE to the `validators_info` dictionary
+    for validators found to have deviated.
+
+    Args:
+        current_cycle (int): The current cycle number (N).
+        previous_calculated_states (Dict[str, Any]): Expected validator states calculated at the end of cycle N-1.
+        validators_info (Dict[str, ValidatorInfo]): Dictionary of current validator info (start of cycle N).
+                                                   This dictionary WILL BE MODIFIED IN-PLACE with penalties.
+        context (BlockFrostChainContext): Cardano chain context.
+        settings (Any): Application settings.
+        script_hash (ScriptHash): The validator script hash.
+        network (Network): The Cardano network.
+
+    Returns:
+        None: Modifies `validators_info` directly.
+
+    Raises:
+        ApiError: If fetching on-chain data from BlockFrost fails.
+        Exception: For other unexpected errors during data fetching or comparison.
     """
     logger.info(f"Verifying previous cycle ({current_cycle - 1}) validator updates...")
     previous_cycle = current_cycle - 1
@@ -557,16 +629,20 @@ async def verify_and_penalize_logic(
                 )
 
         # 3. Consensus on Fraud (Mocked)
-        confirmed_deviators = suspicious_validators # Mock
+        confirmed_deviators = suspicious_validators  # Mock
 
         # 4. Apply Penalties and Prepare Penalty Datums
         for uid_hex, reason in confirmed_deviators.items():
             validator_info = validators_info.get(uid_hex)
             if not validator_info:
-                logger.warning(f"Info for penalized validator {uid_hex} not found in current state.")
+                logger.warning(
+                    f"Info for penalized validator {uid_hex} not found in current state."
+                )
                 continue
 
-            logger.warning(f"Applying penalty IN MEMORY to Validator {uid_hex} for: {reason}")
+            logger.warning(
+                f"Applying penalty IN MEMORY to Validator {uid_hex} for: {reason}"
+            )
 
             # a. Determine Severity
             fraud_severity = _calculate_fraud_severity(reason, tolerance)
@@ -670,7 +746,7 @@ async def verify_and_penalize_logic(
     except Exception as e:
         logger.exception(f"Error during validator verification/penalization: {e}")
 
-    return 
+    return
 
 
 # --- Logic Chuẩn bị và Commit Cập nhật ---
@@ -678,18 +754,35 @@ async def verify_and_penalize_logic(
 
 async def prepare_miner_updates_logic(  # <<<--- async vì cần lấy/decode datum cũ
     current_cycle: int,
-    miners_info: Dict[str, MinerInfo],  # Trạng thái miner đầu vào (có thể đã bị phạt)
-    final_scores: Dict[str, float],  # Điểm P_adj
+    miners_info: Dict[str, MinerInfo],  # Input miner state (start of cycle)
+    final_scores: Dict[str, float],  # Adjusted performance scores (P_adj)
     settings: Any,
-    # --- Vẫn cần context và map UTXO để lấy reward cũ ---
-    # context: BlockFrostChainContext, # Có thể là Optional nếu map UTXO đã chứa datum decode sẵn
+    # context: BlockFrostChainContext, # Optional if utxo_map has decoded datum
     current_utxo_map: Dict[str, UTxO],  # Map uid_hex -> UTxO object
-    # -------------------------------------------------
 ) -> Dict[str, MinerDatum]:
     """
-    Chuẩn bị dữ liệu MinerDatum mới để commit.
-    Tính toán trust mới, rewards mới, history hash mới.
-    Ưu tiên lấy thông tin tĩnh từ miners_info, nhưng cần Datum cũ cho reward tích lũy.
+    Prepares new MinerDatum objects for committing to the blockchain.
+
+    Calculates the next state for each miner based on consensus results:
+    - Calculates new trust score using P_adj.
+    - Calculates new incentive based on P_adj and old trust score.
+    - Updates accumulated rewards.
+    - Updates performance history and calculates its new hash.
+    - Constructs the final MinerDatum object.
+
+    Args:
+        current_cycle (int): The current cycle number.
+        miners_info (Dict[str, MinerInfo]): Miner info at the start of the cycle (or after penalties).
+        final_scores (Dict[str, float]): Final adjusted performance scores (P_adj) for miners.
+        settings (Any): Application settings.
+        current_utxo_map (Dict[str, UTxO]): Map of UIDs to their UTxOs (needed for old rewards).
+
+    Returns:
+        Dict[str, MinerDatum]: A dictionary mapping miner UIDs (hex) to their new MinerDatum objects.
+
+    Raises:
+        ValueError: If datum CBOR decoding fails for existing datums.
+        Exception: For errors during history hashing or MinerDatum creation.
     """
     logger.info(f"Preparing miner state updates for cycle {current_cycle}...")
     miner_updates: Dict[str, MinerDatum] = {}
@@ -718,25 +811,34 @@ async def prepare_miner_updates_logic(  # <<<--- async vì cần lấy/decode da
 
         # --- 1. Lấy Thông tin Cần Thiết từ Datum Cũ (Chủ yếu là Reward) ---
         pending_rewards_old = 0
-        # Các trường này ưu tiên lấy từ Info nếu đã load đúng, nếu không thì lấy từ Datum cũ
         old_perf_history = list(getattr(miner_info, "performance_history", []))
         final_wallet_addr_hash = getattr(miner_info, "wallet_addr_hash", None)
         perf_hash_old_bytes = getattr(miner_info, "performance_history_hash", None)
-        registration_slot_old = getattr(
-            miner_info, "registration_slot", 0
-        )  # Lấy từ info nếu có
+        registration_slot_old = getattr(miner_info, "registration_slot", 0)
 
         input_utxo = current_utxo_map.get(miner_uid_hex)
+        datum_cbor: Optional[bytes] = None
         if input_utxo and input_utxo.output.datum:
+            raw_datum = input_utxo.output.datum
+            # --- Stricter check: Only access .cbor if type is RawPlutusData ---
+            if isinstance(raw_datum, RawPlutusData):
+                datum_cbor = raw_datum.cbor  # type: ignore[attr-defined]
+            else:
+                # Log if datum is present but not the expected RawPlutusData type
+                logger.warning(
+                    f"{log_prefix}: Datum found for UTxO, but it's not RawPlutusData. Type: {type(raw_datum)}. Skipping datum decode."
+                )
+            # --------------------------------------------------------------------
+
+        if datum_cbor:  # Only proceed if we successfully got CBOR bytes
             try:
                 # Decode datum cũ chủ yếu để lấy reward cũ
-                old_datum = MinerDatum.from_cbor(input_utxo.output.datum.cbor)  # type: ignore
+                old_datum = MinerDatum.from_cbor(datum_cbor)
                 pending_rewards_old = getattr(old_datum, "accumulated_rewards", 0)
                 logger.debug(
                     f"{log_prefix}: Old accumulated_rewards from datum: {pending_rewards_old}"
                 )
-
-                # Chỉ lấy từ datum cũ nếu chưa có trong info
+                # ... (rest of logic to potentially update fields from old_datum if missing in info)
                 if not final_wallet_addr_hash:
                     final_wallet_addr_hash = getattr(
                         old_datum, "wallet_addr_hash", None
@@ -747,16 +849,13 @@ async def prepare_miner_updates_logic(  # <<<--- async vì cần lấy/decode da
                     )
                 if registration_slot_old == 0:
                     registration_slot_old = getattr(old_datum, "registration_slot", 0)
-                # Logic phức tạp hơn nếu cần decode history từ hash cũ
-                # if not old_perf_history and perf_hash_old_bytes: ...
-
             except Exception as e:
                 logger.warning(
-                    f"{log_prefix}: Could not decode old MinerDatum: {e}. Using defaults (rewards=0)."
+                    f"{log_prefix}: Could not decode old MinerDatum from CBOR: {e}. Using defaults (rewards=0)."
                 )
         else:
             logger.warning(
-                f"{log_prefix}: Old UTXO/Datum not found. Assuming 0 old rewards."
+                f"{log_prefix}: Old UTxO/Datum/CBOR not found. Assuming 0 old rewards."
             )
         # ----------------------------------------------------------
 
@@ -811,30 +910,44 @@ async def prepare_miner_updates_logic(  # <<<--- async vì cần lấy/decode da
         # -------------------------------------
 
         # --- 5. Cập nhật Performance History & Hash ---
-        # Giả định miner_info.performance_history chứa list float đã load đúng
-        updated_history = old_perf_history  # Bắt đầu từ history cũ
-        updated_history.append(score_new)  # Thêm P_adj mới nhất
+        updated_history = old_perf_history
+        updated_history.append(score_new)
         max_len = settings.CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN
-        updated_history = updated_history[-max_len:]  # Giữ độ dài tối đa
+        updated_history = updated_history[-max_len:]
 
-        perf_history_hash_new: Optional[bytes] = None
+        perf_history_hash_new_bytes: bytes = EMPTY_HASH_BYTES  # Default to empty bytes
         if updated_history:
             try:
-                perf_history_hash_new = hash_data(
-                    updated_history
-                )  # hash_data cần xử lý list float
-                logger.debug(f"{log_prefix}: New performance history hash created.")
+                hashed = hash_data(updated_history)
+                if isinstance(hashed, bytes):
+                    perf_history_hash_new_bytes = hashed
+                    logger.debug(f"{log_prefix}: New performance history hash created.")
+                else:
+                    logger.error(
+                        f"{log_prefix}: hash_data did not return bytes for history. Using old hash."
+                    )
+                    perf_history_hash_new_bytes = (
+                        perf_hash_old_bytes
+                        if isinstance(perf_hash_old_bytes, bytes)
+                        else EMPTY_HASH_BYTES
+                    )
             except Exception as hash_e:
                 logger.error(
                     f"{log_prefix}: Failed to hash performance history: {hash_e}"
                 )
-                perf_history_hash_new = perf_hash_old_bytes  # Giữ hash cũ nếu lỗi
+                perf_history_hash_new_bytes = (
+                    perf_hash_old_bytes
+                    if isinstance(perf_hash_old_bytes, bytes)
+                    else EMPTY_HASH_BYTES
+                )
         # -----------------------------------------
 
         # --- 6. Lấy các giá trị tĩnh khác từ MinerInfo ---
         api_endpoint_str = getattr(miner_info, "api_endpoint", None)
         api_endpoint_bytes = (
-            api_endpoint_str.encode("utf-8") if api_endpoint_str else None
+            api_endpoint_str.encode("utf-8")
+            if api_endpoint_str
+            else b""  # Default to empty bytes
         )
         current_status = getattr(miner_info, "status", STATUS_ACTIVE)  # Status hiện tại
         registration_slot = registration_slot_old  # Giữ slot đăng ký gốc
@@ -844,31 +957,28 @@ async def prepare_miner_updates_logic(  # <<<--- async vì cần lấy/decode da
 
         # --- 7. Tạo MinerDatum mới ---
         try:
-            # Đảm bảo uid là bytes
             uid_bytes = bytes.fromhex(miner_uid_hex)
 
-            # Đảm bảo wallet_addr_hash là bytes hoặc None
+            # Ensure wallet_addr_hash is bytes, default to empty bytes if None
             final_wallet_addr_hash_bytes = (
                 final_wallet_addr_hash
                 if isinstance(final_wallet_addr_hash, bytes)
-                else None
+                else EMPTY_HASH_BYTES
             )
 
             new_datum = MinerDatum(
                 uid=uid_bytes,
                 subnet_uid=subnet_uid,
                 stake=stake,
-                scaled_last_performance=int(score_new * divisor),  # Perf mới (P_adj)
-                scaled_trust_score=int(
-                    new_trust_score_float * divisor
-                ),  # <<< Trust MỚI
-                accumulated_rewards=accumulated_rewards_new,  # <<< Reward MỚI
+                scaled_last_performance=int(score_new * divisor),
+                scaled_trust_score=int(new_trust_score_float * divisor),
+                accumulated_rewards=accumulated_rewards_new,
                 last_update_slot=current_cycle,
-                performance_history_hash=perf_history_hash_new,  # <<< Hash MỚI # type: ignore
-                wallet_addr_hash=final_wallet_addr_hash_bytes,  # Hash từ Info/Datum cũ (bytes) # type: ignore
+                performance_history_hash=perf_history_hash_new_bytes,  # Pass bytes
+                wallet_addr_hash=final_wallet_addr_hash_bytes,  # Pass bytes
                 status=current_status,
                 registration_slot=registration_slot,
-                api_endpoint=api_endpoint_bytes,  # type: ignore
+                api_endpoint=api_endpoint_bytes,  # Pass bytes
             )
             miner_updates[miner_uid_hex] = new_datum
             logger.debug(f"{log_prefix}: Successfully prepared new MinerDatum.")
@@ -891,8 +1001,33 @@ async def prepare_validator_updates_logic(
     self_validator_info: ValidatorInfo,
     calculated_states: Dict[str, Any],
     settings: Any,
-    context: Optional[BlockFrostChainContext],  # Context có thể là Optional hoặc mock
+    context: Optional[
+        BlockFrostChainContext
+    ],  # Context might be needed for future extensions
 ) -> Dict[str, ValidatorDatum]:
+    """
+    Prepares the ValidatorDatum update specifically for the validator running this node.
+
+    Uses the pre-calculated state for this validator (from `run_consensus_logic`)
+    and combines it with potentially updated trust/status (from `verify_and_penalize_logic`,
+    reflected in `self_validator_info`) to create the final Datum.
+
+    Args:
+        current_cycle (int): The current cycle number.
+        self_validator_info (ValidatorInfo): The current info for this validator
+                                           (potentially updated with penalties).
+        calculated_states (Dict[str, Any]): The dictionary of calculated next states
+                                           from `run_consensus_logic`.
+        settings (Any): Application settings.
+        context (Optional[BlockFrostChainContext]): Cardano context (may be unused currently).
+
+    Returns:
+        Dict[str, ValidatorDatum]: A dictionary containing the single update for this validator,
+                                   mapping its UID (hex) to its new ValidatorDatum.
+                                   Returns an empty dict if the update cannot be prepared.
+    Raises:
+        Exception: If errors occur during Datum creation.
+    """
     logger.info(f"Preparing self validator state update for cycle {current_cycle}...")
     validator_updates: Dict[str, ValidatorDatum] = {}
     self_uid_hex = self_validator_info.uid
@@ -917,24 +1052,27 @@ async def prepare_validator_updates_logic(
     status_current = getattr(self_validator_info, "status", STATUS_ACTIVE)
 
     # Hash địa chỉ và endpoint thay vì dùng bytes gốc
-    # Lấy hash từ info nếu có, nếu không thì hash lại
     wallet_addr_hash_bytes = getattr(self_validator_info, "wallet_addr_hash", None)
-    if not wallet_addr_hash_bytes:
+    if not isinstance(wallet_addr_hash_bytes, bytes):
         wallet_addr_hash_bytes = hashlib.sha256(
             validator_address_str.encode("utf-8")
         ).digest()
 
-    # Cần đảm bảo ValidatorInfo có lưu hash hoặc logic tính hash nhất quán
-    api_endpoint_bytes = getattr(
-        self_validator_info, "api_endpoint_hash", None
-    )  # Giả sử có trường hash
-    if not api_endpoint_bytes and api_endpoint_current:
-        api_endpoint_bytes = hashlib.sha256(
-            api_endpoint_current.encode("utf-8")
-        ).digest()
+    # Use EMPTY_HASH_BYTES as default
+    api_endpoint_bytes_hashed = getattr(self_validator_info, "api_endpoint_hash", None)
+    if not isinstance(api_endpoint_bytes_hashed, bytes):
+        api_endpoint_bytes_hashed = (
+            hashlib.sha256(api_endpoint_current.encode("utf-8")).digest()
+            if api_endpoint_current
+            else EMPTY_HASH_BYTES
+        )
 
-    # Lấy performance history hash
-    perf_history_hash = getattr(self_validator_info, "performance_history_hash", None)
+    # Lấy performance history hash, default to empty bytes
+    perf_history_hash_bytes = getattr(
+        self_validator_info, "performance_history_hash", None
+    )
+    if not isinstance(perf_history_hash_bytes, bytes):
+        perf_history_hash_bytes = EMPTY_HASH_BYTES
 
     # Lấy accumulated_rewards cũ
     pending_rewards_old = int(state.get("accumulated_rewards_old", 0))
@@ -954,16 +1092,14 @@ async def prepare_validator_updates_logic(
             subnet_uid=subnet_uid_current,
             stake=stake_current,
             scaled_last_performance=int(new_perf_float * divisor),
-            scaled_trust_score=int(
-                current_trust_float * divisor
-            ),  # Dùng trust hiện tại
-            accumulated_rewards=accumulated_rewards_new,  # Dùng reward đã cộng dồn (nếu có)
+            scaled_trust_score=int(current_trust_float * divisor),
+            accumulated_rewards=accumulated_rewards_new,
             last_update_slot=current_cycle,
-            performance_history_hash=perf_history_hash,  # type: ignore
-            wallet_addr_hash=wallet_addr_hash_bytes,  # type: ignore
-            status=current_status,  # Dùng status hiện tại
+            performance_history_hash=perf_history_hash_bytes,  # Pass bytes
+            wallet_addr_hash=wallet_addr_hash_bytes,  # Pass bytes
+            status=current_status,
             registration_slot=registration_slot_current,
-            api_endpoint=api_endpoint_bytes,  # type: ignore
+            api_endpoint=api_endpoint_bytes_hashed,  # Pass bytes
         )
         validator_updates[self_uid_hex] = new_datum
         logger.info(f"Prepared update for self ({self_uid_hex})")
@@ -976,22 +1112,51 @@ async def prepare_validator_updates_logic(
 
 
 async def commit_updates_logic(
-    # <<<--- Bỏ miner_updates và penalized_validator_updates ---<<<
-    validator_updates: Dict[
-        str, ValidatorDatum
-    ],  # Chỉ còn self-update {uid_hex: ValidatorDatum mới}
-    current_utxo_map: Dict[str, UTxO],  # Map từ uid_hex -> UTxO object ở đầu chu kỳ
+    validator_updates: Dict[str, ValidatorDatum],  # Should contain only the self-update
+    current_utxo_map: Dict[
+        str, UTxO
+    ],  # Map from uid_hex -> UTxO object at start of cycle
     context: BlockFrostChainContext,
-    signing_key: ExtendedSigningKey,  # Khóa ký của validator chạy node
-    stake_signing_key: Optional[ExtendedSigningKey],  # Khóa stake nếu có
-    settings: Any,  # Đối tượng settings đầy đủ
+    signing_key: ExtendedSigningKey,  # Owner's (node runner's) payment signing key
+    stake_signing_key: Optional[ExtendedSigningKey],  # Owner's stake key, if any
+    settings: Any,  # Full settings object
     script_hash: ScriptHash,
     script_bytes: PlutusV3Script,
     network: Network,
-) -> Dict[str, Any]:  # Kiểu trả về có thể là dict chứa kết quả commit
+) -> Dict[str, Any]:
     """
-    Commit cập nhật ValidatorDatum (CHỈ CHO CHÍNH MÌNH) lên blockchain.
-    Loại bỏ hoàn toàn việc commit cho miner hoặc commit phạt cho validator khác.
+    Builds and submits the transaction to commit the self-validator update.
+
+    Takes the prepared ValidatorDatum update for the node itself, finds its
+    corresponding input UTXO from the `current_utxo_map`, constructs a
+    transaction spending that UTXO and creating a new one at the script address
+    with the new Datum, signs it with the owner's keys, and submits it.
+
+    Args:
+        validator_updates (Dict[str, ValidatorDatum]): Dictionary containing the single
+                                                     self-update datum, keyed by UID hex.
+        current_utxo_map (Dict[str, UTxO]): Map of UIDs to their UTxOs at the start of the cycle.
+        context (BlockFrostChainContext): Cardano chain context.
+        signing_key (ExtendedSigningKey): Payment key of the node operator (owner).
+        stake_signing_key (Optional[ExtendedSigningKey]): Stake key of the node operator.
+        settings (Any): Application settings.
+        script_hash (ScriptHash): Hash of the validator Plutus script.
+        script_bytes (PlutusV3Script): The compiled Plutus script.
+        network (Network): The Cardano network.
+
+    Returns:
+        Dict[str, Any]: A dictionary summarizing the commit attempt, including:
+                        'status': 'completed', 'completed_with_errors', 'completed_with_skips', 'failed'.
+                        'submitted_count': Number of transactions submitted (0 or 1).
+                        'failed_count': Number of failures (0 or 1).
+                        'skipped_count': Number skipped due to missing input UTxO (0 or 1).
+                        'submitted_txs': Dict mapping internal ID to submitted TxID string.
+                        'failures': Dict mapping UID to error message for failures.
+                        'skips': Dict mapping UID to reason for skipping.
+
+    Raises:
+        ApiError: If Blockfrost submission fails.
+        Exception: For unexpected errors during transaction building or signing.
     """
     logger.info(f"Starting blockchain commit process (SELF Validator Update Only)...")
 
@@ -1086,7 +1251,7 @@ async def commit_updates_logic(
         logger.debug(f"{log_prefix}: Added script input: {input_utxo.input}")
 
         # b. Thêm Output mới (trả về contract với datum mới)
-        #    Giữ nguyên giá trị (coin + multi-asset) của input UTXO
+        #    Giữ nguyên giá trị (coin + multi-asset) của input UTxO
         output_value: Value = input_utxo.output.amount
         builder.add_output(
             TransactionOutput(
@@ -1173,7 +1338,7 @@ async def commit_updates_logic(
     total_failed = len(failed_updates)
     total_skipped = len(skipped_updates)  # Sẽ là 0 hoặc 1 ở đây
     logger.info(
-        f"Validator Self-Commit process finished. Submitted: {total_submitted}, Failed: {total_failed}, Skipped (No Input UTXO): {total_skipped}"
+        f"Validator Self-Commit process finished. Submitted: {total_submitted}, Failed: {total_failed}, Skipped (No Input UTxO): {total_skipped}"
     )
     if failed_updates:
         logger.warning(f"Failed self-update details: {failed_updates}")

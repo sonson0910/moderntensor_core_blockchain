@@ -96,7 +96,7 @@ class Settings(BaseSettings):
 
     # --- Encryption Settings ---
     ENCRYPTION_PBKDF2_ITERATIONS: int = Field(
-        default=480000,  # Standard default for PBKDF2HMAC
+        default=100_000,  # Standard default for PBKDF2HMAC
         alias="ENCRYPTION_PBKDF2_ITERATIONS",
         description="Number of iterations for PBKDF2 key derivation.",
     )
