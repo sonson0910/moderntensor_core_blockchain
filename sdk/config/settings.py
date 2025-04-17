@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     )
     CARDANO_NETWORK: str = Field(default="TESTNET", alias="CARDANO_NETWORK")
 
+    # --- Encryption Settings ---
+    ENCRYPTION_PBKDF2_ITERATIONS: int = Field(
+        default=480000,  # Standard default for PBKDF2HMAC
+        alias="ENCRYPTION_PBKDF2_ITERATIONS",
+        description="Number of iterations for PBKDF2 key derivation.",
+    )
+
     # --- Thêm các trường cấu hình Node (Ví dụ) ---
     API_PORT: int = Field(8001, alias="API_PORT", description="Port cho FastAPI server")
     VALIDATOR_UID: Optional[str] = Field(

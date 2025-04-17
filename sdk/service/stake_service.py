@@ -29,9 +29,44 @@ logger = logging.getLogger(__name__)
 
 
 class Wallet:
-    def __init__(self, coldkey_name, hotkey_name, password):
+    """
+    Represents a Cardano wallet derived from a specific coldkey/hotkey pair.
+
+    This class handles the decryption of hotkey signing keys and provides
+    access to derived addresses and keys (payment, stake).
+    It also interacts with the BlockFrost API to fetch UTxOs and balances.
+
+    Attributes:
+        network (Network): The Cardano network (Testnet or Mainnet).
+        api (BlockFrostApi): An instance of the BlockFrost API client.
+        chain_context (BlockFrostChainContext): The chain context for transactions.
+        base_dir (str): Base directory for key storage.
+        payment_sk (ExtendedSigningKey): The payment extended signing key.
+        stake_sk (Optional[ExtendedSigningKey]): The stake extended signing key (if applicable).
+        payment_vk (ExtendedVerificationKey): The payment extended verification key.
+        stake_vk (Optional[ExtendedVerificationKey]): The stake extended verification key.
+        payment_key_hash (VerificationKeyHash): Hash of the payment verification key.
+        stake_key_hash (Optional[VerificationKeyHash]): Hash of the stake verification key.
+        payment_address (Address): The base address using only the payment key.
+        stake_address (Optional[Address]): The reward address derived from the stake key.
+        main_address (Address): The primary address combining payment and stake keys.
+    """
+
+    def __init__(self, coldkey_name: str, hotkey_name: str, password: str):
         """
-        Khởi tạo ví bằng cách giải mã khóa hotkey.
+        Initializes the Wallet by decrypting the specified hotkey.
+
+        Args:
+            coldkey_name (str): The name of the parent coldkey.
+            hotkey_name (str): The name of the hotkey to load.
+            password (str): The password to decrypt the hotkey.
+
+        Raises:
+            ValueError: If hotkey decryption fails, the payment key is missing,
+                        or the configured CARDANO_NETWORK setting is invalid.
+            FileNotFoundError: If the hotkey file or related key files are not found.
+            KeyError: If expected keys are missing in the hotkey file structure.
+            cryptography.fernet.InvalidToken: If decryption fails due to an incorrect password.
         """
         # Resolve network setting to enum
         network_setting = settings.CARDANO_NETWORK
@@ -103,6 +138,13 @@ class Wallet:
         logger.debug(f"[WalletInit] Stake address: {self.stake_address}")
 
     def get_utxos(self):
+        """
+        Fetches UTxOs for the main address of the wallet from BlockFrost.
+
+        Returns:
+            The raw response from the BlockFrost API containing UTxO information,
+                     or an empty list if no UTxOs are found or an error occurs.
+        """
         try:
             utxos_raw = self.api.address_utxos(str(self.main_address))
             return utxos_raw
@@ -126,7 +168,12 @@ class Wallet:
             )
             return []
 
-    def get_balances(self):
+    def get_balances(self) -> None:
+        """
+        Fetches UTxOs and prints a summary of ADA and token balances to the logger.
+
+        This method does not return a value but logs the balance information.
+        """
         bf_utxos = self.get_utxos()
         if not bf_utxos:
             logger.info("[get_balances] No UTxOs found to calculate balance.")
@@ -191,9 +238,20 @@ class Wallet:
 
     def sign_transaction(self, tx_body: TransactionBody) -> Transaction:
         """
-        Ký giao dịch bằng khóa của ví.
-        NOTE: This method might be redundant if TransactionBuilder.build_and_sign is used.
-        It manually creates the witness set.
+        Signs a transaction body using the wallet's signing keys.
+
+        Manually creates the witness set including payment key witness and
+        stake key witness (if the stake key exists).
+
+        Note:
+            This might be redundant if using TransactionBuilder.build_and_sign,
+            which handles witness creation automatically.
+
+        Args:
+            tx_body (TransactionBody): The transaction body to sign.
+
+        Returns:
+            Transaction: The fully signed transaction object.
         """
         # Create witnesses manually
         payment_witness = VerificationKeyWitness(
@@ -217,20 +275,59 @@ class Wallet:
         return signed_tx
 
     def submit_transaction(self, signed_tx: Transaction) -> str:
+        """
+        Submits a signed transaction to the Cardano network via the chain context.
+
+        Args:
+            signed_tx (Transaction): The signed transaction to submit.
+
+        Returns:
+            str: The transaction ID (tx_id) of the submitted transaction.
+
+        Raises:
+            pycardano.exception.ApiError: If the submission to the node/API fails.
+        """
         return self.chain_context.submit_tx(signed_tx.to_cbor())
 
 
 class StakingService:
+    """
+    Provides services related to staking operations like delegation and withdrawal.
+
+    Requires an initialized Wallet object to access keys and addresses.
+    """
+
     def __init__(self, wallet: Wallet):
         """
-        Khởi tạo dịch vụ staking với ví của người dùng.
+        Initializes the StakingService with a user's wallet.
+
+        Args:
+            wallet (Wallet): An initialized Wallet object containing the necessary keys.
         """
         self.chain_context = get_chain_context()
         self.wallet = wallet
 
-    def delegate_stake(self, pool_id: str):
+    def delegate_stake(self, pool_id: str) -> Optional[str]:
         """
-        Ủy quyền stake đến một pool cụ thể.
+        Delegates stake to a specific pool.
+
+        Builds and submits a transaction that includes:
+        - Stake key registration certificate (if not already registered).
+        - Stake delegation certificate pointing to the target pool.
+
+        Requires the wallet to have a stake key.
+
+        Args:
+            pool_id (str): The Bech32 or hex-encoded Pool ID to delegate to.
+
+        Returns:
+            Optional[str]: The transaction ID (tx_id) if successful, None otherwise.
+
+        Raises:
+            ValueError: If the pool_id format is invalid.
+            pycardano.exception.ApiError: If interaction with the network fails
+                                      (fetching UTxOs, submitting transaction).
+            Exception: For other errors during transaction building or signing.
         """
         logger.info(f"[delegate_stake] Attempting delegation to pool: {pool_id}")
         # Ensure stake key exists before proceeding
@@ -285,7 +382,27 @@ class StakingService:
             )
             return None
 
-    def re_delegate_stake(self, new_pool_id: str):
+    def re_delegate_stake(self, new_pool_id: str) -> Optional[str]:
+        """
+        Re-delegates stake from the current pool to a new pool.
+
+        Builds and submits a transaction containing only a stake delegation
+        certificate pointing to the new target pool. Assumes the stake key
+        is already registered.
+
+        Requires the wallet to have a stake key.
+
+        Args:
+            new_pool_id (str): The Bech32 or hex-encoded Pool ID of the new pool.
+
+        Returns:
+            Optional[str]: The transaction ID (tx_id) if successful, None otherwise.
+
+        Raises:
+            ValueError: If the new_pool_id format is invalid.
+            pycardano.exception.ApiError: If interaction with the network fails.
+            Exception: For other errors during transaction building or signing.
+        """
         logger.info(
             f"[re_delegate_stake] Attempting re-delegation to pool: {new_pool_id}"
         )
@@ -341,9 +458,21 @@ class StakingService:
             )
             return None
 
-    def withdrawal_reward(self):
+    def withdrawal_reward(self) -> Optional[str]:
         """
-        Rút phần thưởng staking về ví chính.
+        Withdraws accumulated staking rewards to the main wallet address.
+
+        Fetches the withdrawable amount from BlockFrost for the wallet's stake address.
+        Builds and submits a transaction with a withdrawal action.
+
+        Requires the wallet to have a stake key and address.
+
+        Returns:
+            Optional[str]: The transaction ID (tx_id) if successful, None otherwise.
+
+        Raises:
+            pycardano.exception.ApiError: If fetching account info or submitting tx fails.
+            Exception: For other errors during transaction building or signing.
         """
         if not self.wallet.stake_address:
             logger.error(

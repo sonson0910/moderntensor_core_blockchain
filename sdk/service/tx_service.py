@@ -28,7 +28,7 @@ def send_ada(
     stake_xsk: Optional[ExtendedSigningKey] = None,
     to_address_str: str = "",
     lovelace_amount: int = 1_000_000,
-    network: Network = None, # type: ignore
+    network: Network = None,  # type: ignore
     change_address_str: Optional[str] = None,
 ) -> str:
     """
@@ -53,16 +53,41 @@ def send_ada(
     Returns:
         str: The transaction ID (tx_id) upon successful submission.
     """
-    network = network or settings.CARDANO_NETWORK
+    # Ensure network is a Network object
+    resolved_network: Network
+    if network is not None:
+        resolved_network = network
+    elif isinstance(settings.CARDANO_NETWORK, Network):  # Check if already converted
+        resolved_network = settings.CARDANO_NETWORK
+    elif isinstance(settings.CARDANO_NETWORK, str):
+        # Manually convert based on string value (handle potential invalid strings)
+        net_str = settings.CARDANO_NETWORK.upper()
+        if net_str == "MAINNET":
+            resolved_network = Network.MAINNET
+        elif net_str == "TESTNET":
+            resolved_network = Network.TESTNET
+        else:
+            logger.warning(
+                f"Invalid CARDANO_NETWORK string '{settings.CARDANO_NETWORK}'. Defaulting to TESTNET."
+            )
+            resolved_network = Network.TESTNET
+    else:
+        # Fallback if settings value is unexpected type
+        logger.warning(
+            f"Unexpected type for CARDANO_NETWORK: {type(settings.CARDANO_NETWORK)}. Defaulting to TESTNET."
+        )
+        resolved_network = Network.TESTNET
 
     pay_xvk = payment_xsk.to_verification_key()
     if stake_xsk:
         stk_xvk = stake_xsk.to_verification_key()
         from_address = Address(
-            payment_part=pay_xvk.hash(), staking_part=stk_xvk.hash(), network=network
+            payment_part=pay_xvk.hash(),
+            staking_part=stk_xvk.hash(),
+            network=resolved_network,
         )
     else:
-        from_address = Address(payment_part=pay_xvk.hash(), network=network)
+        from_address = Address(payment_part=pay_xvk.hash(), network=resolved_network)
 
     # Determine destination (default to from_address if blank)
     to_address = (
@@ -78,7 +103,7 @@ def send_ada(
     # Build transaction
     builder = TransactionBuilder(chain_context)
     builder.add_input_address(from_address)
-    builder.add_output(TransactionOutput(to_address, lovelace_amount)) # type: ignore
+    builder.add_output(TransactionOutput(to_address, lovelace_amount))  # type: ignore
 
     # Sign transaction (with payment_xsk only)
     signed_tx = builder.build_and_sign(
@@ -102,7 +127,7 @@ def send_token(
     asset_name: str,
     token_amount: int,
     fee: int = 200_000,
-    network: Network = None, # type: ignore
+    network: Network = None,  # type: ignore
 ) -> str:
     """
     Sends a specified native token (policy_id + asset_name) plus a small amount of ADA (e.g. 2 ADA)
@@ -134,7 +159,29 @@ def send_token(
         str: The transaction ID if successfully submitted.
     """
 
-    network = network or settings.CARDANO_NETWORK
+    # Ensure network is a Network object
+    resolved_network: Network
+    if network is not None:
+        resolved_network = network
+    elif isinstance(settings.CARDANO_NETWORK, Network):  # Check if already converted
+        resolved_network = settings.CARDANO_NETWORK
+    elif isinstance(settings.CARDANO_NETWORK, str):
+        # Manually convert based on string value
+        net_str = settings.CARDANO_NETWORK.upper()
+        if net_str == "MAINNET":
+            resolved_network = Network.MAINNET
+        elif net_str == "TESTNET":
+            resolved_network = Network.TESTNET
+        else:
+            logger.warning(
+                f"Invalid CARDANO_NETWORK string '{settings.CARDANO_NETWORK}'. Defaulting to TESTNET."
+            )
+            resolved_network = Network.TESTNET
+    else:
+        logger.warning(
+            f"Unexpected type for CARDANO_NETWORK: {type(settings.CARDANO_NETWORK)}. Defaulting to TESTNET."
+        )
+        resolved_network = Network.TESTNET
 
     # 1) Decode the hotkey
     payment_xsk, stake_xsk = decode_hotkey_skey(
@@ -143,14 +190,14 @@ def send_token(
     if not payment_xsk:
         raise ValueError(f"Failed to decode Payment XSK for hotkey '{hotkey_name}'")
 
-    pay_xvk = payment_xsk.to_verification_key() # type: ignore
-    stake_xvk = stake_xsk.to_verification_key() if stake_xsk else None # type: ignore
+    pay_xvk = payment_xsk.to_verification_key()  # type: ignore
+    stake_xvk = stake_xsk.to_verification_key() if stake_xsk else None  # type: ignore
 
     # Construct from_address
     from_address = Address(
         payment_part=pay_xvk.hash(),
         staking_part=stake_xvk.hash() if stake_xvk else None,
-        network=network,
+        network=resolved_network,  # Use resolved_network
     )
     logger.info(f"[send_token] from_address={from_address}")
 
@@ -237,7 +284,7 @@ def send_token(
     )
 
     # 8) Sign
-    signature = payment_xsk.sign(tx_body.hash()) # type: ignore
+    signature = payment_xsk.sign(tx_body.hash())  # type: ignore
     vk_witness = VerificationKeyWitness(pay_xvk, signature)
     witness_set = TransactionWitnessSet(vkey_witnesses=[vk_witness])
 

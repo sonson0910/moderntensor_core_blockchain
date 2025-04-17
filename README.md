@@ -127,6 +127,29 @@ mtcli query contract-utxo --contract-address <contract_address> --uid <miner_uid
 mtcli query lowest-performance --contract-address <contract_address>
 ```
 
+### Staking Commands (`mtcli stake`)
+
+**Examples:**
+
+```bash
+# 1. Delegate stake for a specific hotkey to a pool
+# (Requires the hotkey to have been generated with a stake key)
+# (You will be prompted for the coldkey password)
+mtcli stake delegate --coldkey <coldkey_name> --hotkey <hotkey_name> --pool-id <pool_id_bech32_or_hex>
+
+# 2. Change delegation to a different pool
+# (You will be prompted for the coldkey password)
+mtcli stake redelegate --coldkey <coldkey_name> --hotkey <hotkey_name> --pool-id <new_pool_id>
+
+# 3. Withdraw available staking rewards for the hotkey's stake address
+# (You will be prompted for the coldkey password)
+mtcli stake withdraw --coldkey <coldkey_name> --hotkey <hotkey_name>
+
+# 4. Show staking information (delegated pool, rewards) for the hotkey's stake address
+# (You will be prompted for the coldkey password)
+mtcli stake info --coldkey <coldkey_name> --hotkey <hotkey_name>
+```
+
 ## 🏗️ Architecture (Preliminary)
 
 *   `sdk/`: Core toolkit (Python SDK)
