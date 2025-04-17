@@ -28,12 +28,23 @@ def select_miners_logic(
     """
     Logic chọn miners dựa trên trust score và thời gian chờ.
 
+    Selects miners using a weighted random choice mechanism where the probability
+    factor for each miner is calculated based on their trust score and the time
+    since they were last selected (using `calculate_selection_probability`).
+    Only active miners are considered.
+
+    Handles edge cases:
+    - No miners or no active miners: Returns empty list.
+    - Zero total probability factor: Selects randomly among active miners.
+    - Fails to select the requested number of unique miners within max attempts:
+      Returns the miners selected so far with a warning.
+
     Args:
-        miners_info: Dictionary chứa thông tin các miner hiện có.
+        miners_info: Dictionary chứa thông tin các miner hiện có ({uid: MinerInfo}).
         current_cycle: Chu kỳ hiện tại.
         num_to_select: Số lượng miner cần chọn.
-        beta: Hệ số bonus công bằng (từ settings).
-        max_time_bonus: Giới hạn bonus thời gian chờ (từ settings).
+        beta: Hệ số bonus công bằng (ảnh hưởng đến bonus thời gian chờ).
+        max_time_bonus: Giới hạn bonus thời gian chờ (tính bằng số chu kỳ).
 
     Returns:
         Danh sách các MinerInfo đã được chọn.

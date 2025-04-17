@@ -16,7 +16,9 @@ from sdk.consensus.node import ValidatorNode
 from sdk.network.app.dependencies import get_validator_node
 
 # Import hàm serialize từ P2P
-from sdk.consensus.p2p import canonical_json_serialize
+# from sdk.consensus.p2p import canonical_json_serialize
+from sdk.consensus.scoring import canonical_json_serialize
+
 
 # Import các kiểu PyCardano và PyNaCl
 from pycardano import (

@@ -377,7 +377,7 @@ async def broadcast_scores_logic(
                     peer_endpoint,
                     json=payload_dict,
                     headers={"Content-Type": "application/json"},
-                    timeout=getattr(settings, "CONSENSUS_P2P_TIMEOUT", 40.0),  # type: ignore[attr-defined]
+                    timeout=settings.CONSENSUS_NETWORK_TIMEOUT_SECONDS,
                 )
                 if response.status_code == 200:
                     logger.info(

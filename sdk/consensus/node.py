@@ -77,8 +77,7 @@ from pycardano import (
 
 # --- Import các hàm logic đã tách ra ---
 from .selection import select_miners_logic
-from .scoring import score_results_logic
-from .p2p import broadcast_scores_logic
+from .scoring import score_results_logic, broadcast_scores_logic
 from .state import (
     run_consensus_logic,
     verify_and_penalize_logic,
