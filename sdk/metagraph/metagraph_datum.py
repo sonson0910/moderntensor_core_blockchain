@@ -120,7 +120,7 @@ class SubnetDynamicDatum(PlutusData):
     scaled_weight: int  # Đã scale (x DIVISOR)
     scaled_performance: int  # Đã scale (x DIVISOR)
     current_epoch: int
-    registration_open: bool
+    registration_open: int
     reg_cost: int
     scaled_incentive_ratio: int  # Đã scale (x DIVISOR)
     last_update_slot: int

@@ -52,14 +52,14 @@ def read_validator(script_filename: str = "plutus.json"):
         return None
 
 
-def read_validator_static_subnet(script_filename: str = "plutus_static_subnet.json"):
+def read_validator_static_subnet(script_filename: str = "static_datum_subnet.json"):
     """
     Reads the Plutus script details (script CBOR hex and script hash)
     from a JSON file located in the same directory as this script.
 
     Args:
         script_filename (str): The name of the JSON file containing the script details.
-                                Defaults to "plutus_static_subnet.json".
+                                Defaults to "static_datum_subnet.json".
 
     Returns:
         dict: A dictionary containing 'script' (PlutusV3Script object) and
@@ -97,14 +97,14 @@ def read_validator_static_subnet(script_filename: str = "plutus_static_subnet.js
         return None
 
 
-def read_validator_dynamic_subnet(script_filename: str = "plutus_dynamic_subnet.json"):
+def read_validator_dynamic_subnet(script_filename: str = "dynamic_datum_subnet.json"):
     """
     Reads the Plutus script details (script CBOR hex and script hash)
     from a JSON file located in the same directory as this script.
 
     Args:
         script_filename (str): The name of the JSON file containing the script details.
-                                Defaults to "plutus_dynamic_subnet.json".
+                                Defaults to "dynamic_datum_subnet.json".
 
     Returns:
         dict: A dictionary containing 'script' (PlutusV3Script object) and

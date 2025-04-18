@@ -2,8 +2,11 @@
 import click
 from rich.console import Console
 from rich.table import Table
-from pycardano import Address, Network, UTxO, PlutusData
+from pycardano import Address, Network, UTxO, PlutusData, RawPlutusData
+from pycardano.serialization import RawCBOR
 from typing import Optional, Any
+import asyncio
+from collections import defaultdict
 
 from sdk.config.settings import settings, logger
 from sdk.service.context import get_chain_context
@@ -12,7 +15,15 @@ from sdk.service.stake_service import Wallet  # For balance/utxo query
 from sdk.service.utxos import get_utxo_from_str, get_utxo_with_lowest_performance
 from sdk.metagraph.metagraph_datum import (
     MinerDatum,
+    SubnetStaticDatum,
+    SubnetDynamicDatum,
+    DATUM_INT_DIVISOR,
 )  # Assuming this is the default datum for contract queries
+from sdk.smartcontract.validator import (
+    read_validator_static_subnet,
+    read_validator_dynamic_subnet,
+)
+from rich.panel import Panel
 
 
 # ------------------------------------------------------------------------------
@@ -420,3 +431,468 @@ def lowest_perf_cmd(contract_address, network):
             f":cross_mark: [bold red]Error querying lowest performance UTxO:[/bold red] {e}"
         )
         logger.exception("Lowest performance UTxO query failed")
+
+
+# ------------------------------------------------------------------------------
+# QUERY SUBNET
+# ------------------------------------------------------------------------------
+@query_cli.command("subnet")
+@click.option(
+    "--subnet-uid",
+    type=int,
+    required=True,
+    help="The numeric UID of the subnet to query.",
+)
+@click.pass_context
+def query_subnet(ctx, subnet_uid):
+    """Query and display the Static and Dynamic Datum for a specific Subnet UID."""
+    console = Console()
+    # Import and use the global logger from settings
+    from sdk.config.settings import logger
+
+    # --- Helper display functions (nested inside command) ---
+    def _display_static_datum(datum: SubnetStaticDatum):
+        title = (
+            f"📊 [bold magenta]Subnet Static Data (UID: {datum.net_uid})[/bold magenta]"
+        )
+        table = Table(
+            title=title,
+            show_header=True,
+            header_style="bold magenta",
+            border_style="dim blue",
+        )
+        table.add_column("Field", style="dim cyan", width=25)
+        table.add_column("Value", style="bright_white")
+        try:
+            table.add_row(
+                "Name",
+                datum.name.decode("utf-8", errors="replace") if datum.name else "N/A",
+            )
+        except AttributeError:
+            table.add_row("Name", "[red]Error decoding[/red]")
+        try:
+            table.add_row(
+                "Owner Address Hash",
+                datum.owner_addr_hash.hex() if datum.owner_addr_hash else "N/A",
+            )
+        except AttributeError:
+            table.add_row("Owner Address Hash", "[red]Invalid[/red]")
+        table.add_row("Max Miners", str(datum.max_miners))
+        table.add_row("Max Validators", str(datum.max_validators))
+        table.add_row("Immunity Period (slots)", str(datum.immunity_period_slots))
+        table.add_row("Creation Slot", str(datum.creation_slot))
+        table.add_row(
+            "Min Stake Miner (ADA)", f"{datum.min_stake_miner / 1_000_000:.2f}"
+        )
+        table.add_row(
+            "Min Stake Validator (ADA)", f"{datum.min_stake_validator / 1_000_000:.2f}"
+        )
+        try:
+            table.add_row(
+                "Description",
+                (
+                    datum.description.decode("utf-8", errors="replace")
+                    if datum.description
+                    else "N/A"
+                ),
+            )
+        except AttributeError:
+            table.add_row("Description", "[red]Error decoding[/red]")
+        table.add_row("Version", str(datum.version))
+        console.print(table)
+
+    def _display_dynamic_datum(datum: SubnetDynamicDatum):
+        title = f"⚡ [bold cyan]Subnet Dynamic Data (UID: {datum.net_uid})[/bold cyan]"
+        table = Table(
+            title=title,
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim blue",
+        )
+        table.add_column("Field", style="dim cyan", width=25)
+        table.add_column("Value", style="bright_white")
+        table.add_row(
+            "Scaled Weight",
+            f"{datum.scaled_weight} [dim](~{datum.scaled_weight / DATUM_INT_DIVISOR:.4f})[/dim]",
+        )
+        table.add_row(
+            "Scaled Performance",
+            f"{datum.scaled_performance} [dim](~{datum.scaled_performance / DATUM_INT_DIVISOR:.4f})[/dim]",
+        )
+        table.add_row("Current Epoch", str(datum.current_epoch))
+        table.add_row(
+            "Registration Open",
+            "[green]✅ Yes[/green]" if datum.registration_open else "[red]❌ No[/red]",
+        )
+        table.add_row(
+            "Registration Cost (ADA)",
+            f"[yellow]{datum.reg_cost / 1_000_000:.2f}[/yellow]",
+        )
+        table.add_row(
+            "Scaled Incentive Ratio",
+            f"{datum.scaled_incentive_ratio} [dim](~{datum.scaled_incentive_ratio / DATUM_INT_DIVISOR:.4f})[/dim]",
+        )
+        table.add_row("Last Update Slot", str(datum.last_update_slot))
+        table.add_row(
+            "Total Stake (ADA)", f"[yellow]{datum.total_stake / 1_000_000:.2f}[/yellow]"
+        )
+        table.add_row("Validator Count", str(datum.validator_count))
+        table.add_row("Miner Count", str(datum.miner_count))
+        console.print(table)
+
+    # --- Async query logic (nested inside command) ---
+    async def _query_subnet_async(subnet_uid_to_query: int):
+        console.print(
+            f"[cyan]🔍 Attempting to query state for Subnet UID:[/cyan] [bold yellow]{subnet_uid_to_query}[/bold yellow]"
+        )
+        found_static = False
+        found_dynamic = False
+
+        try:
+            context = get_chain_context()
+            network = context.network
+
+            # Load script addresses
+            static_info = None
+            dynamic_info = None
+            try:
+                static_info = read_validator_static_subnet()
+                dynamic_info = read_validator_dynamic_subnet()
+                if not static_info or not dynamic_info:
+                    logger.error(
+                        "Failed to load one or both subnet script definitions."
+                    )
+                    console.print(
+                        "[bold red]Error:[/bold red] Could not load subnet script definitions. Check configuration."
+                    )
+                    return
+
+                static_addr = Address(static_info["script_hash"], network=network)  # type: ignore[index]
+                dynamic_addr = Address(dynamic_info["script_hash"], network=network)  # type: ignore[index]
+                logger.info(f"Static script address: {static_addr}")
+                logger.info(f"Dynamic script address: {dynamic_addr}")
+                console.print(
+                    f"  [dim]Static Script Address :[/dim] [blue]{static_addr}[/blue]"
+                )
+                console.print(
+                    f"  [dim]Dynamic Script Address:[/dim] [blue]{dynamic_addr}[/blue]"
+                )
+            except Exception as script_err:
+                logger.error(
+                    f"Failed to load subnet script addresses: {script_err}",
+                    exc_info=True,
+                )
+                console.print(
+                    f"[bold red]Error:[/bold red] Could not load subnet script addresses. Check configuration."
+                )
+                return
+
+            # Query Static Datum
+            logger.info(f"Querying UTxOs at static address: {static_addr}")
+            console.print(f"[cyan]🔎 Querying Static UTxOs at {static_addr}...[/cyan]")
+            static_utxos = await asyncio.to_thread(context.utxos, str(static_addr))
+            logger.info(f"Found {len(static_utxos)} UTxOs at static address.")
+            for utxo in static_utxos:
+                datum_field = utxo.output.datum
+                datum_cbor: Optional[bytes] = None
+
+                # Simplified check: If datum_field exists and has a .cbor attribute, use it.
+                if datum_field is not None and hasattr(datum_field, "cbor"):
+                    datum_cbor = datum_field.cbor  # type: ignore[attr-defined]
+                elif datum_field is not None:
+                    # Log only if datum_field exists but doesn't have .cbor (unexpected)
+                    logger.warning(
+                        f"Unexpected datum type or structure in static UTxO {utxo.input}: {type(datum_field)}. Lacks .cbor attribute."
+                    )
+
+                if datum_cbor:
+                    logger.debug(
+                        f"Found static UTxO {utxo.input} with datum CBOR: {datum_cbor.hex()}"
+                    )
+                    try:
+                        datum = SubnetStaticDatum.from_cbor(datum_cbor)
+                        if isinstance(datum, SubnetStaticDatum) and datum.net_uid == subnet_uid_to_query:  # type: ignore[attr-defined]
+                            logger.info(
+                                f"Found matching Static Datum in UTxO: {utxo.input}"
+                            )
+                            console.print(
+                                f"✅ [green]Found matching Static Datum in UTxO:[/green] {utxo.input}"
+                            )
+                            _display_static_datum(datum)  # type: ignore[arg-type]
+                            found_static = True
+                            break
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not decode Static Datum from UTxO {utxo.input}: {e}",
+                            exc_info=False,
+                        )
+
+            if not found_static:
+                console.print(
+                    Panel(
+                        f"[yellow]Warning:[/yellow] No valid Static Datum found for Subnet UID {subnet_uid_to_query} at {static_addr}",
+                        border_style="yellow",
+                    )
+                )
+
+            # Query Dynamic Datum
+            logger.info(f"Querying UTxOs at dynamic address: {dynamic_addr}")
+            console.print(
+                f"[cyan]🔎 Querying Dynamic UTxOs at {dynamic_addr}...[/cyan]"
+            )
+            dynamic_utxos = await asyncio.to_thread(context.utxos, str(dynamic_addr))
+            logger.info(f"Found {len(dynamic_utxos)} UTxOs at dynamic address.")
+            for utxo in dynamic_utxos:
+                datum_field = utxo.output.datum
+                datum_cbor: Optional[bytes] = None
+
+                # Simplified check: If datum_field exists and has a .cbor attribute, use it.
+                if datum_field is not None and hasattr(datum_field, "cbor"):
+                    datum_cbor = datum_field.cbor  # type: ignore[attr-defined]
+                elif datum_field is not None:
+                    # Log only if datum_field exists but doesn't have .cbor (unexpected)
+                    logger.warning(
+                        f"Unexpected datum type or structure in dynamic UTxO {utxo.input}: {type(datum_field)}. Lacks .cbor attribute."
+                    )
+
+                if datum_cbor:
+                    logger.debug(
+                        f"Found dynamic UTxO {utxo.input} with datum CBOR: {datum_cbor.hex()}"
+                    )
+                    try:
+                        datum = SubnetDynamicDatum.from_cbor(datum_cbor)
+                        if isinstance(datum, SubnetDynamicDatum) and datum.net_uid == subnet_uid_to_query:  # type: ignore[attr-defined]
+                            logger.info(
+                                f"Found matching Dynamic Datum in UTxO: {utxo.input}"
+                            )
+                            console.print(
+                                f"✅ [green]Found matching Dynamic Datum in UTxO:[/green] {utxo.input}"
+                            )
+                            _display_dynamic_datum(datum)  # type: ignore[arg-type]
+                            found_dynamic = True
+                            break
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not decode Dynamic Datum from UTxO {utxo.input}: {e}",
+                            exc_info=False,
+                        )
+
+            if not found_dynamic:
+                console.print(
+                    Panel(
+                        f"[yellow]Warning:[/yellow] No valid Dynamic Datum found for Subnet UID {subnet_uid_to_query} at {dynamic_addr}",
+                        border_style="yellow",
+                    )
+                )
+
+        except Exception as e:
+            logger.error(f"Error during subnet query: {e}", exc_info=True)
+            console.print(f"[bold red]Error querying subnet state:[/bold red] {e}")
+
+    # --- Run the async function ---
+    try:
+        asyncio.run(_query_subnet_async(subnet_uid))
+    except Exception as e:
+        logger.error(f"Failed to run async query function: {e}", exc_info=True)
+        console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
+
+
+# ------------------------------------------------------------------------------
+# QUERY LIST SUBNETS
+# ------------------------------------------------------------------------------
+@query_cli.command("list-subnets")
+@click.pass_context
+def list_subnets_cmd(ctx):
+    """📋 List summary information for all detected subnets."""
+    console = Console()
+    from sdk.config.settings import logger
+
+    # --- Async query logic ---
+    async def _list_subnets_async():
+        console.print("[cyan]🔍 Querying all subnet datums...[/cyan]")
+        subnet_data = defaultdict(dict)  # Use defaultdict for easier updates
+
+        try:
+            context = get_chain_context()
+            network = context.network
+
+            # Load script addresses
+            static_info = None
+            dynamic_info = None
+            try:
+                static_info = read_validator_static_subnet()
+                dynamic_info = read_validator_dynamic_subnet()
+                if not static_info or not dynamic_info:
+                    logger.error(
+                        "Failed to load one or both subnet script definitions."
+                    )
+                    console.print(
+                        "[bold red]Error:[/bold red] Could not load subnet script definitions."
+                    )
+                    return
+
+                static_addr = Address(static_info["script_hash"], network=network)  # type: ignore[index]
+                dynamic_addr = Address(dynamic_info["script_hash"], network=network)  # type: ignore[index]
+                logger.info(f"Static script address: {static_addr}")
+                logger.info(f"Dynamic script address: {dynamic_addr}")
+            except Exception as script_err:
+                logger.error(
+                    f"Failed to load subnet script addresses: {script_err}",
+                    exc_info=True,
+                )
+                console.print(
+                    f"[bold red]Error:[/bold red] Could not load subnet script addresses."
+                )
+                return
+
+            # --- Query and process Static Datums ---
+            console.print(
+                f"[cyan]🔎 Querying all Static UTxOs at {static_addr}...[/cyan]"
+            )
+            static_utxos = await asyncio.to_thread(context.utxos, str(static_addr))
+            logger.info(f"Found {len(static_utxos)} potential Static UTxOs.")
+            processed_static = 0
+            for utxo in static_utxos:
+                datum_field = utxo.output.datum
+                datum_cbor: Optional[bytes] = None
+                if datum_field is not None and hasattr(datum_field, "cbor"):
+                    datum_cbor = datum_field.cbor  # type: ignore[attr-defined]
+
+                if datum_cbor:
+                    try:
+                        datum = SubnetStaticDatum.from_cbor(datum_cbor)
+                        if isinstance(datum, SubnetStaticDatum):
+                            uid = datum.net_uid
+                            subnet_data[uid]["name"] = (
+                                datum.name.decode("utf-8", errors="replace")
+                                if datum.name
+                                else "N/A"
+                            )
+                            processed_static += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not decode Static Datum from UTxO {utxo.input}: {e}",
+                            exc_info=False,
+                        )
+
+            logger.info(f"Successfully processed {processed_static} Static Datums.")
+
+            # --- Query and process Dynamic Datums ---
+            console.print(
+                f"[cyan]🔎 Querying all Dynamic UTxOs at {dynamic_addr}...[/cyan]"
+            )
+            dynamic_utxos = await asyncio.to_thread(context.utxos, str(dynamic_addr))
+            logger.info(f"Found {len(dynamic_utxos)} potential Dynamic UTxOs.")
+            processed_dynamic = 0
+            for utxo in dynamic_utxos:
+                datum_field = utxo.output.datum
+                datum_cbor: Optional[bytes] = None
+                if datum_field is not None and hasattr(datum_field, "cbor"):
+                    datum_cbor = datum_field.cbor  # type: ignore[attr-defined]
+
+                if datum_cbor:
+                    try:
+                        datum = SubnetDynamicDatum.from_cbor(datum_cbor)
+                        if isinstance(datum, SubnetDynamicDatum):
+                            uid = datum.net_uid
+                            subnet_data[uid]["scaled_weight"] = datum.scaled_weight
+                            subnet_data[uid]["reg_cost"] = datum.reg_cost
+                            subnet_data[uid][
+                                "scaled_incentive_ratio"
+                            ] = datum.scaled_incentive_ratio
+                            subnet_data[uid][
+                                "last_update_slot"
+                            ] = datum.last_update_slot
+                            subnet_data[uid]["total_stake"] = datum.total_stake
+                            processed_dynamic += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not decode Dynamic Datum from UTxO {utxo.input}: {e}",
+                            exc_info=False,
+                        )
+
+            logger.info(f"Successfully processed {processed_dynamic} Dynamic Datums.")
+
+            # --- Display Results ---
+            num_subnets = len(subnet_data)
+            console.print(
+                f"\n[bold green]📊 Found {num_subnets} subnet(s) in total.[/bold green]"
+            )
+
+            if num_subnets > 0:
+                table = Table(
+                    title="Subnet Overview",
+                    show_header=True,
+                    header_style="bold blue",
+                    border_style="dim green",
+                )
+                table.add_column("UID", style="dim", justify="right")
+                table.add_column("Name", style="cyan")
+                table.add_column("Weight (Scaled)", style="magenta", justify="right")
+                table.add_column("Reg Cost (ADA)", style="yellow", justify="right")
+                table.add_column("Incentive (Scaled)", style="green", justify="right")
+                table.add_column("Last Update Slot", style="blue", justify="right")
+                table.add_column("Total Stake (ADA)", style="yellow", justify="right")
+
+                # Sort by UID for consistent display
+                sorted_uids = sorted(subnet_data.keys())
+
+                for uid in sorted_uids:
+                    data = subnet_data[uid]
+                    name = data.get("name", "[dim i]N/A[/dim i]")
+                    weight = data.get("scaled_weight", None)
+                    reg_cost_lovelace = data.get("reg_cost", None)
+                    incentive = data.get("scaled_incentive_ratio", None)
+                    last_update = data.get("last_update_slot", "[dim i]N/A[/dim i]")
+                    stake_lovelace = data.get("total_stake", None)
+
+                    # Format scaled values
+                    weight_str = (
+                        f"{weight} [dim](~{weight / DATUM_INT_DIVISOR:.3f})[/dim]"
+                        if weight is not None
+                        else "[dim i]N/A[/dim i]"
+                    )
+                    incentive_str = (
+                        f"{incentive} [dim](~{incentive / DATUM_INT_DIVISOR:.3f})[/dim]"
+                        if incentive is not None
+                        else "[dim i]N/A[/dim i]"
+                    )
+
+                    # Format ADA values
+                    reg_cost_ada = (
+                        f"{reg_cost_lovelace / 1_000_000:.2f}"
+                        if reg_cost_lovelace is not None
+                        else "[dim i]N/A[/dim i]"
+                    )
+                    stake_ada = (
+                        f"{stake_lovelace / 1_000_000:.2f}"
+                        if stake_lovelace is not None
+                        else "[dim i]N/A[/dim i]"
+                    )
+
+                    table.add_row(
+                        str(uid),
+                        name,
+                        weight_str,
+                        reg_cost_ada,
+                        incentive_str,
+                        str(last_update),
+                        stake_ada,
+                    )
+
+                console.print(table)
+            else:
+                console.print(
+                    "[yellow]No subnet information could be retrieved.[/yellow]"
+                )
+
+        except Exception as e:
+            logger.error(f"Error during subnet listing: {e}", exc_info=True)
+            console.print(f"[bold red]Error listing subnets:[/bold red] {e}")
+
+    # --- Run the async function ---
+    try:
+        asyncio.run(_list_subnets_async())
+    except Exception as e:
+        logger.error(f"Failed to run async list function: {e}", exc_info=True)
+        console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
