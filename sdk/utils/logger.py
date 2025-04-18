@@ -17,7 +17,7 @@ DEFAULT_LOGGING_DICT = {
         }
     },
     "loggers": {
-        "moderntensor": {"level": "INFO", "handlers": ["console"], "propagate": False}
+        "moderntensor": {"level": "DEBUG", "handlers": ["console"], "propagate": False}
     },
 }
 

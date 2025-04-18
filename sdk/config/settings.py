@@ -117,7 +117,7 @@ class Settings(BaseSettings):
 
     # ======== THÊM TRƯỜNG LOG_LEVEL ========
     LOG_LEVEL: str = Field(
-        default="INFO",
+        default="DEBUG",
         alias="LOG_LEVEL",
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
@@ -447,6 +447,15 @@ except Exception as log_e:
     print(f"Warning: Error processing LOG_LEVEL setting: {log_e}. Defaulting to INFO.")
     LOG_LEVEL_CONFIG = logging.INFO
 
+# <<< CLEAR EXISTING ROOT HANDLERS >>>
+root_logger = logging.getLogger()
+if root_logger.hasHandlers():
+    # Use logging.debug directly as logger instance is not yet defined
+    logging.debug(f"Root logger has handlers: {root_logger.handlers}. Removing them.")
+    for handler in root_logger.handlers[:]:  # Iterate over a copy
+        root_logger.removeHandler(handler)
+# <<< END CLEAR >>>
+
 # Define styles once
 DEFAULT_LEVEL_STYLES = {
     "debug": {"color": "green"},
@@ -477,11 +486,15 @@ highlight_formatter = HighlightFormatter(
 coloredlogs.install(
     level=LOG_LEVEL_CONFIG,
     formatter=highlight_formatter,
+    reconfigure=True,
     # fmt, level_styles, field_styles are now handled by the formatter instance
 )
 
 # Lấy logger và ghi log ban đầu
 logger = logging.getLogger(__name__)
+# <<< FORCE DEBUG LEVEL FOR SDK CONSENSUS NODE >>>
+logging.getLogger("sdk.consensus.node").setLevel(LOG_LEVEL_CONFIG)
+
 logger.info(
     f"Settings loaded. Log level set to {logging.getLevelName(LOG_LEVEL_CONFIG)}."
 )

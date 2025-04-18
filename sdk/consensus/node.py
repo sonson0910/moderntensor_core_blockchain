@@ -288,19 +288,28 @@ class ValidatorNode:
                     state_data = json.load(f)
                     last_completed_cycle = state_data.get("last_completed_cycle", -1)
                     next_cycle = last_completed_cycle + 1
-                    # Use success icon and color
+                    # <<< LOGGING ADDED >>>
+                    logger.info(
+                        f"{prefix} State file read: last_completed_cycle={last_completed_cycle}, calculated next_cycle={next_cycle}"
+                    )
                     logger.info(
                         f"{prefix} :inbox_tray: Loaded state from [blue]{self.state_file}[/blue]. Last completed cycle: [yellow]{last_completed_cycle}[/yellow]. Starting next: [yellow]{next_cycle}[/yellow]"
                     )
                     return next_cycle
             else:
-                # Use warning icon and color
+                # <<< LOGGING ADDED >>>
+                logger.warning(
+                    f"{prefix} State file not found at {self.state_file}. Returning 0."
+                )
                 logger.warning(
                     f"{prefix} :warning: State file [blue]{self.state_file}[/blue] not found. Starting from cycle 0."
                 )
                 return 0
         except Exception as e:
-            # Use error icon and color
+            # <<< LOGGING ADDED >>>
+            logger.error(
+                f"{prefix} Error reading state file {self.state_file}: {e}. Returning 0."
+            )
             logger.error(
                 f"{prefix} :x: Error loading state file [blue]{self.state_file}[/blue]: {e}. Starting from cycle 0."
             )
@@ -2097,7 +2106,15 @@ class ValidatorNode:
                 batch_num = 0
                 tasks_sent_this_cycle = 0
                 while True:
+                    # <<< LOGGING ADDED >>>
+                    logger.debug(
+                        f"Tasking loop: Iteration start. Target end slot: {tasking_end_target_slot}"
+                    )
                     current_slot_in_tasking = await self._get_current_slot()
+                    # <<< LOGGING ADDED >>>
+                    logger.debug(
+                        f"Tasking loop: _get_current_slot returned: {current_slot_in_tasking}"
+                    )
 
                     if current_slot_in_tasking is None:
                         logger.warning(
@@ -2109,7 +2126,14 @@ class ValidatorNode:
                         continue  # Thử lại ở lần lặp sau
 
                     # Điều kiện dừng chính của giai đoạn tasking
-                    if current_slot_in_tasking >= tasking_end_target_slot:
+                    # <<< LOGGING ADDED >>>
+                    exit_condition_met = (
+                        current_slot_in_tasking >= tasking_end_target_slot
+                    )
+                    logger.debug(
+                        f"Tasking loop: Checking exit condition: current={current_slot_in_tasking}, target={tasking_end_target_slot}, condition_met={exit_condition_met}"
+                    )
+                    if exit_condition_met:
                         logger.info(
                             f"Reached tasking end slot ({tasking_end_target_slot} vs current {current_slot_in_tasking}). Ending tasking phase."
                         )

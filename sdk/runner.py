@@ -245,6 +245,8 @@ class ValidatorRunner:
         )
         try:
             # Sử dụng app instance của class này
-            uvicorn.run(self.app, host=host, port=port, log_level=log_level)
+            uvicorn.run(
+                self.app, host=host, port=port, log_level=log_level, log_config=None
+            )
         except Exception as e:
             logger.exception(f"Runner: Failed to run Uvicorn: {e}")
