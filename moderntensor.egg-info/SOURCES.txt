@@ -78,11 +78,11 @@ sdk/network/app/repository/base_repository.py
 sdk/network/app/repository/user_repository.py
 sdk/network/app/schema/base_schema.py
 sdk/network/app/schema/user_schema.py
-sdk/network/app/services/__init__.py
-sdk/network/app/services/base_service.py
-sdk/network/app/services/user_service.py
 sdk/network/app/util/class_object.py
 sdk/network/app/util/schema.py
+sdk/network/app/util/services/__init__.py
+sdk/network/app/util/services/base_service.py
+sdk/network/app/util/services/user_service.py
 sdk/node/__init__.py
 sdk/node/cardano_client.py
 sdk/node/cardano_contract.py
