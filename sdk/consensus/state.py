@@ -1012,21 +1012,31 @@ async def prepare_validator_updates_logic(
     api_endpoint_current = self_validator_info.api_endpoint
     status_current = getattr(self_validator_info, "status", STATUS_ACTIVE)
 
-    # Hash địa chỉ và endpoint thay vì dùng bytes gốc
+    # Hash địa chỉ thay vì dùng bytes gốc
     wallet_addr_hash_bytes = getattr(self_validator_info, "wallet_addr_hash", None)
     if not isinstance(wallet_addr_hash_bytes, bytes):
         wallet_addr_hash_bytes = hashlib.sha256(
             validator_address_str.encode("utf-8")
         ).digest()
 
-    # Use EMPTY_HASH_BYTES as default
-    api_endpoint_bytes_hashed = getattr(self_validator_info, "api_endpoint_hash", None)
-    if not isinstance(api_endpoint_bytes_hashed, bytes):
-        api_endpoint_bytes_hashed = (
-            hashlib.sha256(api_endpoint_current.encode("utf-8")).digest()
-            if api_endpoint_current
-            else EMPTY_HASH_BYTES
+    # Mã hóa endpoint string thành bytes UTF-8, không hash nữa
+    api_endpoint_bytes_utf8 = b""  # Default là bytes rỗng
+    if api_endpoint_current and isinstance(api_endpoint_current, str):
+        try:
+            api_endpoint_bytes_utf8 = api_endpoint_current.encode("utf-8")
+            logger.debug(
+                f"Self-update: Encoding endpoint '{api_endpoint_current}' to bytes."
+            )
+        except Exception as enc_err:
+            logger.error(
+                f"Self-update: Failed to encode endpoint '{api_endpoint_current}': {enc_err}. Using empty bytes."
+            )
+            api_endpoint_bytes_utf8 = b""
+    elif api_endpoint_current:  # Nếu không phải string hợp lệ
+        logger.warning(
+            f"Self-update: api_endpoint is not a valid string ('{type(api_endpoint_current)}'). Using empty bytes."
         )
+        api_endpoint_bytes_utf8 = b""
 
     # Lấy performance history hash, default to empty bytes
     perf_history_hash_bytes = getattr(
@@ -1037,7 +1047,6 @@ async def prepare_validator_updates_logic(
 
     # Lấy accumulated_rewards cũ
     pending_rewards_old = int(state.get("accumulated_rewards_old", 0))
-    # logger.debug(f"Using old accumulated rewards: {pending_rewards_old} for self ({self_uid_hex})")
 
     # Tính phần thưởng mới tích lũy
     calculated_reward = state.get("reward", 0.0)
@@ -1060,7 +1069,7 @@ async def prepare_validator_updates_logic(
             wallet_addr_hash=wallet_addr_hash_bytes,  # Pass bytes
             status=current_status,
             registration_slot=registration_slot_current,
-            api_endpoint=api_endpoint_bytes_hashed,  # Pass bytes
+            api_endpoint=api_endpoint_bytes_utf8,  # <<< GÁN BYTES UTF-8 VÀO ĐÂY
         )
         validator_updates[self_uid_hex] = new_datum
         logger.info(
