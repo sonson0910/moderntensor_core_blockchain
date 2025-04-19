@@ -371,22 +371,25 @@ async def broadcast_scores_logic(
             )
 
     async def send_score(peer_uid: str, peer_endpoint: str, payload_dict: dict):
+        """Gửi payload điểm số đến một peer cụ thể."""
         try:
-            async with http_client as client:  # Sử dụng http_client từ validator_node
-                response = await client.post(
-                    peer_endpoint,
-                    json=payload_dict,
-                    headers={"Content-Type": "application/json"},
-                    timeout=settings.CONSENSUS_NETWORK_TIMEOUT_SECONDS,
+            # === FIX: Remove incorrect async with for shared client ===
+            # async with http_client as client:  # Sử dụng http_client từ validator_node
+            # Use the shared http_client directly
+            response = await http_client.post(  # <<< Use http_client directly
+                peer_endpoint,
+                json=payload_dict,
+                headers={"Content-Type": "application/json"},
+                timeout=settings.CONSENSUS_NETWORK_TIMEOUT_SECONDS,
+            )
+            if response.status_code == 200:
+                logger.info(
+                    f"[V:{self_uid}] Successfully sent scores to peer {peer_uid} at {peer_endpoint}"
                 )
-                if response.status_code == 200:
-                    logger.info(
-                        f"[V:{self_uid}] Successfully sent scores to peer {peer_uid} at {peer_endpoint}"
-                    )
-                else:
-                    logger.warning(
-                        f"[V:{self_uid}] Failed to send scores to peer {peer_uid} at {peer_endpoint}: Status {response.status_code} - {response.text[:100]}..."
-                    )
+            else:
+                logger.warning(
+                    f"[V:{self_uid}] Failed to send scores to peer {peer_uid} at {peer_endpoint}: Status {response.status_code} - {response.text[:100]}..."
+                )
         except httpx.RequestError as req_err:
             logger.warning(
                 f"[V:{self_uid}] HTTP request error sending scores to peer {peer_uid} at {peer_endpoint}: {req_err}"

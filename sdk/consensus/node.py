@@ -17,6 +17,7 @@ import sys  # <<< Import sys module
 from typing import List, Dict, Any, Tuple, Optional, Set
 from collections import defaultdict, OrderedDict
 import logging
+import string
 
 # --- Import Settings ---
 from sdk.config.settings import settings
@@ -633,12 +634,31 @@ class ValidatorNode:
                     )
                     # ------------------------------------------
 
+                    # <<< ADDED: Sanitize api_endpoint >>>
+                    raw_endpoint = datum_dict.get("api_endpoint")
+                    clean_endpoint: Optional[str] = None
+                    if isinstance(raw_endpoint, str):
+                        # Basic check for common protocols and printable chars
+                        if raw_endpoint.startswith(("http://", "https://")) and all(
+                            c in string.printable for c in raw_endpoint
+                        ):
+                            clean_endpoint = raw_endpoint
+                        else:
+                            logger.warning(
+                                f"Validator {uid_hex}: Invalid format or characters in api_endpoint: '{raw_endpoint}'. Setting to None."
+                            )
+                    elif raw_endpoint is not None:
+                        logger.warning(
+                            f"Validator {uid_hex}: api_endpoint is not a string (type: {type(raw_endpoint)}). Setting to None."
+                        )
+                    # <<< END ADDED >>>
+
                     temp_validators_info[uid_hex] = ValidatorInfo(
                         uid=uid_hex,
                         address=datum_dict.get(
                             "address", f"addr_validator_{uid_hex[:8]}..."
                         ),
-                        api_endpoint=datum_dict.get("api_endpoint"),
+                        api_endpoint=clean_endpoint,  # <<< Use sanitized endpoint
                         trust_score=float(datum_dict.get("trust_score", 0.0)),
                         weight=float(datum_dict.get("weight", 0.0)),
                         stake=float(datum_dict.get("stake", 0)),

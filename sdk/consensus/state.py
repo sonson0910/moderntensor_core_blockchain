@@ -1281,7 +1281,7 @@ async def commit_updates_logic(
             f":arrow_up: {log_prefix}: Submitting self-update transaction to the blockchain..."
         )
         # submit_tx của BlockFrostContext trả về TransactionId
-        tx_id: TransactionId = await context.submit_tx(signed_tx)  # type: ignore
+        tx_id: TransactionId = context.submit_tx(signed_tx)  # type: ignore
         tx_id_str = str(tx_id)
         logger.info(
             f":white_check_mark: {log_prefix}: Successfully submitted self-update! TxID: [yellow]{tx_id_str}[/yellow]"

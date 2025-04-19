@@ -33,7 +33,7 @@ ASCII_ART = r"""
 PROJECT_DESCRIPTION = """[bright_yellow]⭐ Moderntensor is a decentralized model training project built on the Cardano blockchain platform.
 The project is developed by Vietnamese 🇻🇳  engineers from the Moderntensor Foundation.[/bright_yellow]"""
 REPO_URL = "https://github.com/sonson0910/moderntensor.git"  # Replace
-DOCS_URL = "https://github.com/sonson0910/moderntensor/blob/main/docs/Mechanisms%20used%20in%20the%20project.pdf"  # Replace
+DOCS_URL = "https://github.com/sonson0910/moderntensor/blob/development_consensus/docs/WhitePaper.pdf"  # Replace
 CHAT_URL = "https://t.me/+pDRlNXTi1wY2NTY1"  # Replace
 CONTRIBUTE_URL = f"https://github.com/sonson0910/moderntensor/blob/main/docs/README.md"  # Adjust if needed
 
