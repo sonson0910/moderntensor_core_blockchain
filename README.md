@@ -43,111 +43,166 @@ mtcli query <command_name> --help # Example: mtcli query address --help
 
 ### Wallet Commands (`mtcli w`)
 
+Manage Coldkeys & Hotkeys.
+
 **Examples:**
 
 ```bash
-# 1. Create a new coldkey named 'my_main_coldkey'
-mtcli w create-coldkey --name my_main_coldkey
+# 1. Create a new coldkey named 'my_coldkey' in the './wallets' directory
+#    - You will be prompted for a password to encrypt the mnemonic.
+#    - !! SAVE THE DISPLAYED MNEMONIC PHRASE SECURELY !!
+mtcli w create-coldkey --name my_coldkey --base-dir ./wallets
 
-# 2. Generate a new hotkey named 'miner_hk1' from the coldkey above
-# (You will be prompted for the coldkey password)
-mtcli w generate-hotkey --coldkey my_main_coldkey --hotkey-name miner_hk1
+# 2. Restore a coldkey named 'restored_key' from its mnemonic phrase
+#    - You will be prompted for the mnemonic phrase (12-24 words).
+#    - You will be prompted to set a NEW password for the restored key.
+mtcli w restore-coldkey --name restored_key --base-dir ./wallets
 
-# 3. List all wallets
-mtcli w list
+# 3. Generate a new hotkey named 'miner_hk1' derived from 'my_coldkey'
+#    - You will be prompted for the password of 'my_coldkey'.
+#    - Note the 'derivation_index' shown, needed for 'regen-hotkey'.
+mtcli w generate-hotkey --coldkey my_coldkey --hotkey-name miner_hk1 --base-dir ./wallets
 
-# 4. Register hotkey 'miner_hk1' as a miner on subnet 1
-# (You will be prompted for the coldkey password)
-mtcli w register-hotkey \
-    --coldkey my_main_coldkey \
-    --hotkey miner_hk1 \
+# 4. Import an exported encrypted hotkey string for 'my_coldkey'
+#    - Replace "BASE64..." with the actual exported string.
+mtcli w import-hotkey --coldkey my_coldkey --hotkey-name imported_hk \
+    --encrypted-hotkey "BASE64_ENCRYPTED_STRING_HERE" \
+    --base-dir ./wallets
+
+# 5. Regenerate hotkey 'miner_hk1' using its derivation index (e.g., 0)
+#    - Useful if hotkeys.json is lost but you have the coldkey mnemonic/password and index.
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli w regen-hotkey --coldkey my_coldkey --hotkey-name miner_hk1 --index 0 --base-dir ./wallets
+
+# 6. List all coldkey names found in the './wallets' directory
+mtcli w list --base-dir ./wallets
+
+# 7. Register hotkey 'miner_hk1' as a miner for subnet 1 on testnet
+#    - Sends a transaction to the subnet's smart contract.
+#    - Requires 10 ADA (10,000,000 Lovelace) initial stake and an API endpoint.
+#    - You will be prompted for the password of 'my_coldkey'.
+#    - Use '--yes' to skip the final confirmation.
+mtcli w register-hotkey --coldkey my_coldkey --hotkey miner_hk1 \
     --subnet-uid 1 \
-    --initial-stake 5000000 \
+    --initial-stake 10000000 \
     --api-endpoint "http://123.45.67.89:8080" \
-    --network testnet # or mainnet
+    --base-dir ./wallets \
+    --network testnet \
+    --yes
 
-# 5. Restore a coldkey from mnemonic (if needed)
-mtcli w restore-coldkey --name recovered_coldkey --mnemonic "word1 word2 ... word24"
+# 8. Show locally stored information for 'miner_hk1' (address, index, etc.)
+#    - Reads from the local hotkeys.json file, no password needed.
+mtcli w show-hotkey --coldkey my_coldkey --hotkey miner_hk1 --base-dir ./wallets
 
-# 6. Regenerate hotkey 'miner_hk1' if hotkeys.json is lost (knowing the index is 0)
-mtcli w regen-hotkey --coldkey my_main_coldkey --hotkey-name miner_hk1 --index 0
+# 9. List all hotkey names associated with 'my_coldkey'
+#    - Reads from the local hotkeys.json file.
+mtcli w list-hotkeys --coldkey my_coldkey --base-dir ./wallets
 
-# 7. Show the derived address for a hotkey
-# (You will be prompted for the coldkey password)
-mtcli w show-address --coldkey my_main_coldkey --hotkey miner_hk1
+# 10. Query balance and UTxOs of the *coldkey's main address* on testnet
+#     - This address is derived directly from the mnemonic, often used for funding.
+#     - You will be prompted for the password of 'my_coldkey'.
+mtcli w query-address --coldkey my_coldkey --base-dir ./wallets --network testnet
+
+# 11. Show the payment and stake addresses derived from 'my_coldkey' / 'miner_hk1' pair
+#     - You will be prompted for the password of 'my_coldkey'.
+mtcli w show-address --coldkey my_coldkey --hotkey miner_hk1 --base-dir ./wallets --network testnet
 ```
 
 ### Transaction Commands (`mtcli tx`)
 
+Create and send transactions.
+
 **Examples:**
 
 ```bash
-# Send 5 ADA from kickoff/hk1 to another address on testnet
-# (You will be prompted for the coldkey password)
-mtcli tx send \
-    --coldkey kickoff \
-    --hotkey hk1 \
-    --to <recipient_address> \
+# 1. Send 5 ADA (5,000,000 Lovelace) from 'miner_hk1' to a recipient address on testnet
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli tx send --coldkey my_coldkey --hotkey miner_hk1 \
+    --to addr_test1...recipient_address... \
     --amount 5000000 \
+    --token lovelace \
+    --base-dir ./wallets \
     --network testnet
 
-# Send 100 units of a specific token from kickoff/hk1 to wallet2/hk2 on testnet
-# (You will be prompted for the coldkey password)
-mtcli tx send \
-    --coldkey kickoff \
-    --hotkey hk1 \
-    --to wallet2/hk2 \
+# 2. Send 100 units of a native token from 'miner_hk1' to another wallet ('other_coldkey/other_hk')
+#    - Replace policy_id and asset_name_hex with actual values.
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli tx send --coldkey my_coldkey --hotkey miner_hk1 \
+    --to other_coldkey/other_hk \
     --amount 100 \
-    --token <policy_id_hex>.<asset_name_hex> \
+    --token your_policy_id.YOUR_ASSET_NAME_HEX \
+    --base-dir ./wallets \
     --network testnet
 ```
 
 ### Query Commands (`mtcli query`)
 
+Query blockchain information.
+
 **Examples:**
 
 ```bash
-# 1. Get detailed info (ADA, tokens, UTxO count) for a specific Cardano address
-mtcli query address <cardano_address>
+# 1. Get detailed info (ADA, tokens, UTxO count) for any Cardano address on testnet
+mtcli query address addr_test1...some_address... --network testnet
 
-# 2. Get the balance (ADA, tokens) for a specific hotkey
-# (You will be prompted for the coldkey password)
-mtcli query balance --coldkey <coldkey_name> --hotkey <hotkey_name>
+# 2. Get the balance (ADA, tokens) for the 'miner_hk1' hotkey on testnet
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli query balance --coldkey my_coldkey --hotkey miner_hk1 --base-dir ./wallets --network testnet
 
-# 3. List the UTxOs held by a specific hotkey address
-# (You will be prompted for the coldkey password)
-mtcli query utxos --coldkey <coldkey_name> --hotkey <hotkey_name>
+# 3. List the UTxOs held by the 'miner_hk1' hotkey address on testnet
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli query utxos --coldkey my_coldkey --hotkey miner_hk1 --base-dir ./wallets --network testnet
 
-# 4. (Advanced) Find a specific UTxO at a smart contract address using its UID (hex)
-# This assumes the datum format is MinerDatum
-mtcli query contract-utxo --contract-address <contract_address> --uid <miner_uid_hex>
+# 4. Find a UTxO at a smart contract address containing a specific miner UID (hex) in its datum
+mtcli query contract-utxo --contract-address addr_test1...validator_address... \
+    --uid HEX_UID_STRING \
+    --network testnet
 
-# 5. (Advanced) Find the UTxO with the lowest performance score at a smart contract address
-# This assumes the datum format is MinerDatum
-mtcli query lowest-performance --contract-address <contract_address>
+# 5. Find the UTxO with the lowest performance score at a smart contract address
+#    - Assumes MinerDatum format with a 'performance_score' field.
+mtcli query lowest-performance --contract-address addr_test1...validator_address... \
+    --network testnet
+
+# 6. Query detailed static and dynamic information for Subnet UID 1 on testnet
+mtcli query subnet --subnet-uid 1 --network testnet
+
+# 7. List the UIDs of all registered subnets found on testnet
+mtcli query list-subnets --network testnet
 ```
 
 ### Staking Commands (`mtcli stake`)
 
+Manage Cardano staking operations (delegation, withdrawal). Requires hotkeys generated with stake keys.
+
 **Examples:**
 
 ```bash
-# 1. Delegate stake for a specific hotkey to a pool
-# (Requires the hotkey to have been generated with a stake key)
-# (You will be prompted for the coldkey password)
-mtcli stake delegate --coldkey <coldkey_name> --hotkey <hotkey_name> --pool-id <pool_id_bech32_or_hex>
+# 1. Delegate stake from 'staker_hotkey' to a specific pool on testnet
+#    - Registers the stake key if needed first.
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli stake delegate --coldkey my_coldkey --hotkey staker_hotkey \
+    --pool-id pool1...pool_id_bech32_or_hex... \
+    --base-dir ./wallets \
+    --network testnet
 
-# 2. Change delegation to a different pool
-# (You will be prompted for the coldkey password)
-mtcli stake redelegate --coldkey <coldkey_name> --hotkey <hotkey_name> --pool-id <new_pool_id>
+# 2. Change delegation for 'staker_hotkey' to a different pool on testnet
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli stake redelegate --coldkey my_coldkey --hotkey staker_hotkey \
+    --pool-id pool1...new_pool_id_bech32_or_hex... \
+    --base-dir ./wallets \
+    --network testnet
 
-# 3. Withdraw available staking rewards for the hotkey's stake address
-# (You will be prompted for the coldkey password)
-mtcli stake withdraw --coldkey <coldkey_name> --hotkey <hotkey_name>
+# 3. Withdraw available staking rewards for 'staker_hotkey' to its main address on testnet
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli stake withdraw --coldkey my_coldkey --hotkey staker_hotkey \
+    --base-dir ./wallets \
+    --network testnet
 
-# 4. Show staking information (delegated pool, rewards) for the hotkey's stake address
-# (You will be prompted for the coldkey password)
-mtcli stake info --coldkey <coldkey_name> --hotkey <hotkey_name>
+# 4. Show current staking info (delegated pool, rewards) for 'staker_hotkey' on testnet
+#    - You will be prompted for the password of 'my_coldkey'.
+mtcli stake info --coldkey my_coldkey --hotkey staker_hotkey \
+    --base-dir ./wallets \
+    --network testnet
 ```
 
 ## 🏗️ Architecture (Preliminary)
