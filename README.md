@@ -1,269 +1,530 @@
-# ModernTensor ✨
+# ModernTensor Aptos 🚀
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) <!-- Or Apache 2.0, depending on your choice -->
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**ModernTensor** is a decentralized machine intelligence network built on the Cardano blockchain, inspired by the architecture and vision of Bittensor. The project aims to create an open marketplace for AI/ML services, where models compete and are rewarded based on their performance and contribution value to the network, leveraging Cardano's unique features like the EUTXO model and native assets.
+**ModernTensor Aptos** là phiên bản của ModernTensor được xây dựng trên blockchain Aptos, mang đến một nền tảng huấn luyện mô hình AI phi tập trung với hiệu suất và bảo mật cao. Dự án tận dụng Move - ngôn ngữ lập trình của Aptos để triển khai các smart contract an toàn và hiệu quả.
 
-![moderntensor.png](https://github.com/sonson0910/moderntensor/blob/main/moderntensor.png)
+## 📋 Tính năng chính
 
-## 🚀 Introduction
+* **Quản lý tài khoản:** Tạo, lưu trữ và quản lý các tài khoản Aptos an toàn với mã hóa mạnh.
+* **Đăng ký Miner/Validator:** Tham gia vào mạng ModernTensor với tư cách là Miner hoặc Validator.
+* **Đồng thuận phi tập trung:** Các miner cung cấp dịch vụ AI và nhận phần thưởng dựa trên hiệu suất.
+* **Quản lý Subnet:** Tạo và quản lý các subnet có thể tùy chỉnh cho các tác vụ AI cụ thể.
+* **Tương tác Blockchain:** Tích hợp đầy đủ với các tính năng của blockchain Aptos.
 
-In the ModernTensor ecosystem:
+## 🔧 Cấu trúc dự án
 
-*   **Miners:** Provide AI/ML services/models via API endpoints. They register their hotkey (representing the miner's identifier - UID) onto the network.
-*   **Validators:** (Future) Evaluate the quality and performance of Miners, contributing to the consensus mechanism and reward distribution.
-*   **Cardano Blockchain:** Serves as the secure and decentralized foundation layer to record the network state (miner registrations, stake, rewards, etc.) through smart contracts (Plutus).
+* `contracts/`: Smart contracts Move của ModernTensor
+* `sdk/`: Bộ công cụ phát triển phần mềm (SDK) Python
+  * `aptos_core/`: Thành phần cốt lõi và kiểu dữ liệu
+  * `keymanager/`: Quản lý tài khoản và khóa
+  * `cli/`: Giao diện dòng lệnh (Đang phát triển)
+* `examples/`: Ví dụ cách sử dụng SDK
 
-This project includes an SDK toolkit and a command-line interface (CLI) for interacting with the network.
+## 🚀 Bắt đầu
 
-## 📋 Current Features
+### Cài đặt
 
-*   **Wallet Management CLI (`mtcli w`):**
-    *   Create Coldkey (`create-coldkey`): Generates a secure mnemonic phrase and encrypts it for storing the root key.
-    *   Restore Coldkey (`restore-coldkey`): Recreates a coldkey from a saved mnemonic phrase.
-    *   Generate Hotkey (`generate-hotkey`): Generates child keys (hotkeys) from the coldkey using standard HD derivation, used for Miner identification and signing operational transactions.
-    *   Import Hotkey (`import-hotkey`): Imports an encrypted hotkey from an external source.
-    *   Regenerate Hotkey (`regen-hotkey`): Recovers hotkey information if the `hotkeys.json` file is lost, requiring only the coldkey and the derivation index.
-    *   List Wallets (`list`): Displays a list of coldkeys and their corresponding hotkeys.
-    *   Register Hotkey (`register-hotkey`): Registers a hotkey as a Miner on the ModernTensor network, creating/updating a UTxO at the smart contract address with Miner information (UID, stake, API endpoint,...).
+1. **Cài đặt các phụ thuộc:**
+   ```bash
+   pip install aptos-sdk cryptography
+   ```
 
-## 💡 Using the CLI (`mtcli`)
-
-The main command-line tool is `mtcli`. The `w` (`wallet`) subcommand is used for wallet management, `tx` for transactions, and `query` for blockchain information.
-
-**Help:**
-```bash
-mtcli --help
-mtcli w --help
-mtcli tx --help
-mtcli query --help
-mtcli w <command_name> --help # Example: mtcli w create-coldkey --help
-mtcli query <command_name> --help # Example: mtcli query address --help
-```
-
-### Wallet Commands (`mtcli w`)
-
-Manage Coldkeys & Hotkeys.
-
-**Examples:**
-
-```bash
-# 1. Create a new coldkey named 'my_coldkey' in the './wallets' directory
-#    - You will be prompted for a password to encrypt the mnemonic.
-#    - !! SAVE THE DISPLAYED MNEMONIC PHRASE SECURELY !!
-mtcli w create-coldkey --name my_coldkey --base-dir ./wallets
-
-# 2. Restore a coldkey named 'restored_key' from its mnemonic phrase
-#    - You will be prompted for the mnemonic phrase (12-24 words).
-#    - You will be prompted to set a NEW password for the restored key.
-mtcli w restore-coldkey --name restored_key --base-dir ./wallets
-
-# 3. Generate a new hotkey named 'miner_hk1' derived from 'my_coldkey'
-#    - You will be prompted for the password of 'my_coldkey'.
-#    - Note the 'derivation_index' shown, needed for 'regen-hotkey'.
-mtcli w generate-hotkey --coldkey my_coldkey --hotkey-name miner_hk1 --base-dir ./wallets
-
-# 4. Import an exported encrypted hotkey string for 'my_coldkey'
-#    - Replace "BASE64..." with the actual exported string.
-mtcli w import-hotkey --coldkey my_coldkey --hotkey-name imported_hk \
-    --encrypted-hotkey "BASE64_ENCRYPTED_STRING_HERE" \
-    --base-dir ./wallets
-
-# 5. Regenerate hotkey 'miner_hk1' using its derivation index (e.g., 0)
-#    - Useful if hotkeys.json is lost but you have the coldkey mnemonic/password and index.
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli w regen-hotkey --coldkey my_coldkey --hotkey-name miner_hk1 --index 0 --base-dir ./wallets
-
-# 6. List all coldkey names found in the './wallets' directory
-mtcli w list --base-dir ./wallets
-
-# 7. Register hotkey 'miner_hk1' as a miner for subnet 1 on testnet
-#    - Sends a transaction to the subnet's smart contract.
-#    - Requires 10 ADA (10,000,000 Lovelace) initial stake and an API endpoint.
-#    - You will be prompted for the password of 'my_coldkey'.
-#    - Use '--yes' to skip the final confirmation.
-mtcli w register-hotkey --coldkey my_coldkey --hotkey miner_hk1 \
-    --subnet-uid 1 \
-    --initial-stake 10000000 \
-    --api-endpoint "http://123.45.67.89:8080" \
-    --base-dir ./wallets \
-    --network testnet \
-    --yes
-
-# 8. Show locally stored information for 'miner_hk1' (address, index, etc.)
-#    - Reads from the local hotkeys.json file, no password needed.
-mtcli w show-hotkey --coldkey my_coldkey --hotkey miner_hk1 --base-dir ./wallets
-
-# 9. List all hotkey names associated with 'my_coldkey'
-#    - Reads from the local hotkeys.json file.
-mtcli w list-hotkeys --coldkey my_coldkey --base-dir ./wallets
-
-# 10. Query balance and UTxOs of the *coldkey's main address* on testnet
-#     - This address is derived directly from the mnemonic, often used for funding.
-#     - You will be prompted for the password of 'my_coldkey'.
-mtcli w query-address --coldkey my_coldkey --base-dir ./wallets --network testnet
-
-# 11. Show the payment and stake addresses derived from 'my_coldkey' / 'miner_hk1' pair
-#     - You will be prompted for the password of 'my_coldkey'.
-mtcli w show-address --coldkey my_coldkey --hotkey miner_hk1 --base-dir ./wallets --network testnet
-```
-
-### Transaction Commands (`mtcli tx`)
-
-Create and send transactions.
-
-**Examples:**
-
-```bash
-# 1. Send 5 ADA (5,000,000 Lovelace) from 'miner_hk1' to a recipient address on testnet
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli tx send --coldkey my_coldkey --hotkey miner_hk1 \
-    --to addr_test1...recipient_address... \
-    --amount 5000000 \
-    --token lovelace \
-    --base-dir ./wallets \
-    --network testnet
-
-# 2. Send 100 units of a native token from 'miner_hk1' to another wallet ('other_coldkey/other_hk')
-#    - Replace policy_id and asset_name_hex with actual values.
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli tx send --coldkey my_coldkey --hotkey miner_hk1 \
-    --to other_coldkey/other_hk \
-    --amount 100 \
-    --token your_policy_id.YOUR_ASSET_NAME_HEX \
-    --base-dir ./wallets \
-    --network testnet
-```
-
-### Query Commands (`mtcli query`)
-
-Query blockchain information.
-
-**Examples:**
-
-```bash
-# 1. Get detailed info (ADA, tokens, UTxO count) for any Cardano address on testnet
-mtcli query address addr_test1...some_address... --network testnet
-
-# 2. Get the balance (ADA, tokens) for the 'miner_hk1' hotkey on testnet
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli query balance --coldkey my_coldkey --hotkey miner_hk1 --base-dir ./wallets --network testnet
-
-# 3. List the UTxOs held by the 'miner_hk1' hotkey address on testnet
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli query utxos --coldkey my_coldkey --hotkey miner_hk1 --base-dir ./wallets --network testnet
-
-# 4. Find a UTxO at a smart contract address containing a specific miner UID (hex) in its datum
-mtcli query contract-utxo --contract-address addr_test1...validator_address... \
-    --uid HEX_UID_STRING \
-    --network testnet
-
-# 5. Find the UTxO with the lowest performance score at a smart contract address
-#    - Assumes MinerDatum format with a 'performance_score' field.
-mtcli query lowest-performance --contract-address addr_test1...validator_address... \
-    --network testnet
-
-# 6. Query detailed static and dynamic information for Subnet UID 1 on testnet
-mtcli query subnet --subnet-uid 1 --network testnet
-
-# 7. List the UIDs of all registered subnets found on testnet
-mtcli query list-subnets --network testnet
-```
-
-### Staking Commands (`mtcli stake`)
-
-Manage Cardano staking operations (delegation, withdrawal). Requires hotkeys generated with stake keys.
-
-**Examples:**
-
-```bash
-# 1. Delegate stake from 'staker_hotkey' to a specific pool on testnet
-#    - Registers the stake key if needed first.
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli stake delegate --coldkey my_coldkey --hotkey staker_hotkey \
-    --pool-id pool1...pool_id_bech32_or_hex... \
-    --base-dir ./wallets \
-    --network testnet
-
-# 2. Change delegation for 'staker_hotkey' to a different pool on testnet
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli stake redelegate --coldkey my_coldkey --hotkey staker_hotkey \
-    --pool-id pool1...new_pool_id_bech32_or_hex... \
-    --base-dir ./wallets \
-    --network testnet
-
-# 3. Withdraw available staking rewards for 'staker_hotkey' to its main address on testnet
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli stake withdraw --coldkey my_coldkey --hotkey staker_hotkey \
-    --base-dir ./wallets \
-    --network testnet
-
-# 4. Show current staking info (delegated pool, rewards) for 'staker_hotkey' on testnet
-#    - You will be prompted for the password of 'my_coldkey'.
-mtcli stake info --coldkey my_coldkey --hotkey staker_hotkey \
-    --base-dir ./wallets \
-    --network testnet
-```
-
-## 🏗️ Architecture (Preliminary)
-
-*   `sdk/`: Core toolkit (Python SDK)
-    *   `keymanager/`: Logic for managing coldkeys, hotkeys, encryption, derivation.
-    *   `cli/`: Command-line interface (`mtcli`).
-    *   `service/`: High-level interaction services (e.g., key registration).
-    *   `smartcontract/`: Interaction with Plutus scripts (reading, transaction building).
-    *   `metagraph/`: Logic related to network state (datum, hashing,...).
-    *   `config/`: Project configuration.
-    *   `consensus/`, `agent/`: (Potential) Components related to consensus and agent behavior.
-*   `contracts/`: (Potential) Location for Plutus script source code.
-*   `README.md`: This documentation.
-*   `requirements.txt`: List of required Python libraries.
-*   `.env`, `settings.toml`: (Potential) Environment configuration files.
-
-## ⚙️ Installation
-
-1.  **Requirements:**
-    *   Python 3.9+
-    *   pip
-
-2.  **Clone Repository:**
+2.  **Clone repository:**
     ```bash
-    git clone <your_repository_url>
-    cd moderntensor
+    git clone https://github.com/sonson0910/moderntensor_aptos.git
+    cd moderntensor_aptos
     ```
 
-3.  **Create Virtual Environment (Recommended):**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Linux/macOS
-    # venv\Scripts\activate   # On Windows
-    ```
+### Quản lý tài khoản
 
-4.  **Install Dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-    *(Note: Ensure you have a complete `requirements.txt` file with libraries like `click`, `rich`, `pycardano`, `blockfrost-python`, `cbor2`, `cryptography`, etc...)*
+```python
+from moderntensor.sdk.keymanager import AccountKeyManager
 
-5.  **(Optional) Install in Editable Mode:** If you want the `mtcli` CLI to be runnable from anywhere and reflect code changes immediately. Requires a suitable `setup.py` or `pyproject.toml` file.
-    ```bash
-    pip install -e .
-    ```
+# Tạo quản lý tài khoản
+key_manager = AccountKeyManager(base_dir="./wallets")
 
-## 🤝 Contributing
+# Tạo tài khoản mới
+account = key_manager.create_account("my_account", "secure_password")
+print(f"Địa chỉ mới: {account.address().hex()}")
 
-We welcome contributions from the community! Please refer to `CONTRIBUTING.md` (if available) or follow standard procedures:
+# Tải tài khoản hiện có
+account = key_manager.load_account("my_account", "secure_password")
+```
 
-1.  Fork the repository.
-2.  Create a new branch (`git checkout -b feature/AmazingFeature`).
-3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
-4.  Push to the branch (`git push origin feature/AmazingFeature`).
-5.  Open a Pull Request.
+### Tương tác với contracts ModernTensor
 
-## 📄 License
+```python
+import asyncio
+from aptos_sdk.client import RestClient
+from moderntensor.sdk.aptos_core import ModernTensorClient
 
-This project is licensed under the MIT License - see the `LICENSE` file (if available) for details. (Or change to your chosen license, e.g., Apache 2.0)
+async def main():
+    # Khởi tạo client
+    rest_client = RestClient("https://fullnode.devnet.aptoslabs.com")
+    client = ModernTensorClient(
+        account=account,
+        client=rest_client,
+        moderntensor_address="0xcafe"  # Địa chỉ contract
+    )
+    
+    # Đăng ký một miner mới
+    txn_hash = await client.register_miner(
+        uid=b"my_unique_identifier",
+        subnet_uid=1,
+        stake_amount=10_000_000, # 0.1 APT
+        api_endpoint="http://my-api-endpoint.com",
+    )
+    print(f"Đăng ký thành công! Hash giao dịch: {txn_hash}")
 
-## 📞 Contact
+# Chạy hàm bất đồng bộ
+asyncio.run(main())
+```
 
-(Optional: Add contact information, Discord links, Twitter, etc.)
+## 🧠 Smart Contracts
+
+Smart contracts Move của ModernTensor được thiết kế để quản lý thông tin Miner, Validator và Subnet. Các contracts này có thể được triển khai và tương tác thông qua Aptos CLI hoặc SDK.
+
+Ví dụ triển khai:
+
+```bash
+# Compile the Move package
+cd contracts
+aptos move compile
+
+# Publish the Move package
+aptos move publish --named-addresses moderntensor=<your-address>
+```
+
+## 🤝 Đóng góp
+
+Chúng tôi hoan nghênh đóng góp vào ModernTensor Aptos! Bạn có thể:
+
+1. Fork repository
+2. Tạo nhánh tính năng mới (`git checkout -b feature/amazing-feature`)
+3. Commit các thay đổi (`git commit -m 'Add some amazing feature'`)
+4. Push nhánh (`git push origin feature/amazing-feature`)
+5. Mở một Pull Request
+
+## 📜 Giấy phép
+
+Dự án này được cấp phép theo Giấy phép MIT - xem tệp `LICENSE` để biết chi tiết.
+
+## 📞 Liên hệ
+
+Để biết thêm thông tin, vui lòng liên hệ:
+- GitHub: [https://github.com/sonson0910/moderntensor_aptos](https://github.com/sonson0910/moderntensor_aptos)
+
+# Hướng Dẫn Triển Khai ModernTensor trên Aptos
+
+## 1. Thiết lập Môi trường
+
+### Cài đặt Aptos CLI
+```bash
+# Tải và cài đặt Aptos CLI từ https://aptos.dev/cli-tools/aptos-cli/install-cli/
+```
+
+### Cấu trúc Dự án
+```
+moderntensor/
+  ├── Move.toml              # Cấu hình package Move
+  ├── sources/               # Các module Move
+  │   └── basic_modules/     # Module cơ bản
+  │       ├── miner.move
+  │       ├── subnet.move
+  │       └── validator.move
+  ├── scripts/               # Script giao dịch
+  ├── build/                 # Thư mục build (tự động tạo)
+  ├── aptos_core/            # Thư viện SDK
+  ├── keymanager/            # Quản lý khóa
+  └── examples/              # Ví dụ
+```
+
+## 2. Tạo Tài Khoản và Nhận Token
+
+### Tạo Khóa và Tài Khoản
+```bash
+# Tạo khóa mới
+aptos key generate --output-file my_aptos
+
+# Khởi tạo cấu hình với khóa đã tạo
+aptos init --private-key <private_key> --profile main_profile --network testnet
+
+# Kiểm tra thông tin tài khoản
+aptos account list --profile main_profile
+```
+
+### Nhận Token Testnet
+```bash
+# Kiểm tra cấu hình profile
+aptos config show-profiles
+
+# Nhận token từ faucet (thường qua website)
+# Hoặc sử dụng lệnh (nếu được hỗ trợ)
+aptos account fund-with-faucet --account <address> --url https://faucet.testnet.aptoslabs.com
+
+# Kiểm tra số dư
+aptos account list --profile main_profile
+```
+
+## 3. Cấu hình Smart Contract
+
+### Cấu hình Move.toml
+```toml
+[package]
+name = "moderntensor"
+version = "1.0.0"
+authors = []
+
+[addresses]
+moderntensor = "<địa_chỉ_tài_khoản>"
+
+[dev-addresses]
+moderntensor = "<địa_chỉ_tài_khoản>"
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-framework"
+
+[dev-dependencies]
+```
+
+### Module Chính
+Tạo các file sau trong thư mục `sources/basic_modules/`:
+- miner.move
+- validator.move
+- subnet.move
+
+## 4. Biên dịch và Triển khai Contract
+
+### Biên dịch Smart Contract
+```bash
+# Xóa thư mục build cũ (nếu cần)
+rm -rf build/
+
+# Biên dịch các contract
+aptos move compile
+```
+
+### Triển khai lên Testnet
+```bash
+# Xuất bản package
+aptos move publish --profile main_profile
+```
+
+## 5. Khởi tạo Hệ thống ModernTensor
+
+### Tạo Script Khởi tạo
+Tạo file `scripts/initialize_moderntensor.move`:
+```move
+script {
+    use moderntensor::miner;
+    use moderntensor::validator;
+    use moderntensor::subnet;
+    use std::string;
+    
+    fun initialize_moderntensor(owner: signer) {
+        // Khởi tạo registry cho subnet
+        subnet::initialize_registry(&owner);
+        
+        // Khởi tạo registry cho miner
+        miner::initialize_registry(&owner);
+        
+        // Khởi tạo registry cho validator
+        validator::initialize_registry(&owner);
+        
+        // Tạo subnet mặc định
+        subnet::create_subnet(
+            &owner,
+            1, // Subnet UID 1 - mặc định
+            string::utf8(b"Default Subnet"),
+            string::utf8(b"Default subnet for ModernTensor testing"),
+            1000, // Số miners tối đa
+            100,  // Số validators tối đa
+            86400, // Thời gian miễn nhiễm (1 ngày tính bằng giây)
+            10000000, // Stake tối thiểu cho miners (10 APT)
+            50000000, // Stake tối thiểu cho validators (50 APT)
+            1000000,  // Chi phí đăng ký (1 APT)
+        );
+    }
+}
+```
+
+### Biên dịch Script Khởi tạo
+```bash
+rm -rf build/ && aptos move compile
+```
+
+### Thực thi Script Khởi tạo
+Nếu có lỗi ENOT_AUTHORIZED, nghĩa là registry đã được khởi tạo trước đó.
+
+#### Khởi tạo Từng Phần (sử dụng nếu có lỗi)
+Nếu không thể khởi tạo tất cả registry cùng lúc, hãy tạo script create_subnet.move:
+```move
+script {
+    use moderntensor::subnet;
+    use std::string;
+    
+    fun create_subnet(owner: signer) {
+        subnet::create_subnet(
+            &owner,
+            1, // Subnet UID 1
+            string::utf8(b"Default Subnet"),
+            string::utf8(b"Default subnet for ModernTensor testing"),
+            1000, // Max miners
+            100,  // Max validators
+            86400, // Immunity period
+            10000000, // Min stake miners
+            50000000, // Min stake validators
+            1000000,  // Registration cost
+        );
+    }
+}
+```
+
+```bash
+# Chạy script tạo subnet
+aptos move run-script --compiled-script-path build/moderntensor/bytecode_scripts/create_subnet_0.mv --profile main_profile
+```
+
+## 6. Đăng ký Miner và Validator
+
+### Đăng ký Miner
+Tạo file `scripts/register_my_miner.move`:
+```move
+script {
+    use moderntensor::miner;
+    use std::string;
+    
+    fun register_my_miner(account: signer) {
+        miner::register_miner(
+            &account,
+            b"miner001", // UID dạng bytes
+            1,           // Subnet UID
+            10000000,    // Stake amount (10 APT)
+            string::utf8(b"http://localhost:8000") // API endpoint
+        );
+    }
+}
+```
+
+```bash
+# Biên dịch và chạy script
+rm -rf build/ && aptos move compile
+aptos move run-script --compiled-script-path build/moderntensor/bytecode_scripts/register_my_miner_X.mv --profile main_profile
+```
+
+### Đăng ký Validator
+Tạo file `scripts/register_my_validator.move`:
+```move
+script {
+    use moderntensor::validator;
+    use std::string;
+    
+    fun register_my_validator(account: signer) {
+        validator::register_validator(
+            &account,
+            b"validator001", // UID dạng bytes
+            1,               // Subnet UID
+            50000000,        // Stake amount (50 APT)
+            string::utf8(b"http://localhost:9000") // API endpoint
+        );
+    }
+}
+```
+
+```bash
+# Biên dịch và chạy script
+rm -rf build/ && aptos move compile
+aptos move run-script --compiled-script-path build/moderntensor/bytecode_scripts/register_my_validator_X.mv --profile main_profile
+```
+
+## 7. Làm việc với Nhiều Tài khoản
+
+### Tạo Tài khoản Mới
+```bash
+# Tạo khóa mới
+aptos key generate --output-file new_miner_key
+
+# Khởi tạo profile với khóa mới
+aptos init --private-key <private_key> --profile new_miner_profile --network testnet
+```
+
+### Chuyển Token
+Tạo script `scripts/register_with_transfer.move`:
+```move
+script {
+    use aptos_framework::coin;
+    use aptos_framework::aptos_coin::AptosCoin;
+    
+    fun register_with_transfer(
+        source_account: signer, 
+        receiver_address: address,
+        amount: u64
+    ) {
+        coin::transfer<AptosCoin>(&source_account, receiver_address, amount);
+    }
+}
+```
+
+```bash
+# Biên dịch và chạy script
+rm -rf build/ && aptos move compile
+aptos move run-script --compiled-script-path build/moderntensor/bytecode_scripts/register_with_transfer_X.mv --args address:<địa_chỉ_nhận> u64:100000000 --profile main_profile
+```
+
+### Đăng ký Miner với Tài khoản Mới
+Tạo file `scripts/register_new_account_miner.move`:
+```move
+script {
+    use moderntensor::miner;
+    use std::string;
+    
+    fun register_new_account_miner(account: signer) {
+        miner::register_miner(
+            &account,
+            b"miner003", // UID dạng bytes
+            1,           // Subnet UID
+            10000000,    // Stake amount (10 APT)
+            string::utf8(b"http://example.com/miner3") // API endpoint
+        );
+    }
+}
+```
+
+```bash
+# Biên dịch và chạy script với tài khoản mới
+rm -rf build/ && aptos move compile
+aptos move run-script --compiled-script-path build/moderntensor/bytecode_scripts/register_new_account_miner_X.mv --profile new_miner_profile
+```
+
+### Đăng ký Validator với Tài khoản Mới
+Tạo file `scripts/register_new_account_validator.move`:
+```move
+script {
+    use moderntensor::validator;
+    use std::string;
+    
+    fun register_new_account_validator(account: signer) {
+        validator::register_validator(
+            &account,
+            b"validator003", // UID dạng bytes
+            1,               // Subnet UID
+            50000000,        // Stake amount (50 APT)
+            string::utf8(b"http://example.com/validator3") // API endpoint
+        );
+    }
+}
+```
+
+```bash
+# Biên dịch và chạy script với tài khoản mới
+rm -rf build/ && aptos move compile
+aptos move run-script --compiled-script-path build/moderntensor/bytecode_scripts/register_new_account_validator_X.mv --profile new_miner_profile
+```
+
+## 8. Xử lý Lỗi Phổ biến
+
+### Lỗi ENOT_AUTHORIZED
+- Đảm bảo bạn đang sử dụng đúng tài khoản
+- Kiểm tra xem resource đã tồn tại chưa
+
+### Lỗi Serializer
+- Đối với lỗi Serializer trong SDK Python, hãy sử dụng đúng loại serializer cho từng kiểu dữ liệu
+
+### Lỗi Profile Not Found
+- Kiểm tra file cấu hình `~/.aptos/config.yaml`
+- Sử dụng lệnh `aptos config show-profiles` để xem các profile có sẵn
+
+### Các Địa chỉ Module
+- Khi triển khai lại, cập nhật địa chỉ trong Move.toml
+- Cập nhật tham số contract_address trong mã Python để khớp với địa chỉ mới
+
+## 9. Tương tác với SDK Python
+
+### Cấu trúc SDK
+```
+aptos_core/
+  ├── __init__.py
+  ├── contract_client.py
+  └── datatypes.py
+```
+
+### Import Tài khoản từ Khóa
+```python
+from keymanager import AccountKeyManager
+
+# Khởi tạo key manager
+key_manager = AccountKeyManager(base_dir="./examples/wallets")
+
+# Import private key
+private_key = "CEBFFEE02B18741D2F6467E0A82684F32C68CEF26B68095D8BBC5C6881555587"
+account_name = "myaptos"
+password = "password123"
+
+account = key_manager.import_private_key(account_name, private_key, password)
+print(f"Địa chỉ: {account.address().hex()}")
+```
+
+### Đăng ký Miner qua SDK
+```python
+import asyncio
+from keymanager import AccountKeyManager
+from aptos_sdk.client import RestClient
+from aptos_core import ModernTensorClient
+
+async def register_miner():
+    # Cấu hình
+    NODE_URL = "https://fullnode.testnet.aptoslabs.com/v1"
+    CONTRACT_ADDRESS = "0x49efdb1b13ba49c9624ab17ac21cfa9d2b891871727e39a309457b63f42518b2"
+    
+    # Tải tài khoản
+    key_manager = AccountKeyManager(base_dir="./examples/wallets")
+    account = key_manager.load_account("myaptos", "password123")
+    
+    # Khởi tạo client
+    rest_client = RestClient(NODE_URL)
+    client = ModernTensorClient(
+        account=account,
+        client=rest_client,
+        moderntensor_address=CONTRACT_ADDRESS,
+    )
+    
+    # Đăng ký miner
+    txn_hash = await client.register_miner(
+        uid=b"my_unique_id",
+        subnet_uid=1,
+        stake_amount=10_000_000,
+        api_endpoint="http://example.com/api/miner",
+    )
+    print(f"Đã đăng ký thành công! Hash giao dịch: {txn_hash}")
+
+# Chạy hàm asynchronous
+asyncio.run(register_miner())
+```
+
+## 10. Giám sát và Quản lý
+
+### Kiểm tra Trạng thái Giao dịch
+```bash
+# Kiểm tra trạng thái giao dịch
+aptos transaction show --hash <transaction_hash> --profile main_profile
+```
+
+### Xem Tài khoản Trên Explorer
+```
+https://explorer.aptoslabs.com/account/<địa_chỉ_tài_khoản>?network=testnet
+```
+
+### Xem Lịch sử Giao dịch
+```
+https://explorer.aptoslabs.com/txn/<transaction_hash>?network=testnet
+```
+
+## 11. Tài liệu Tham khảo
+
+- [Aptos Move Documentation](https://aptos.dev/move/move-on-aptos/)
+- [Aptos CLI Reference](https://aptos.dev/cli-tools/aptos-cli/use-cli/commands/)
+- [Aptos TypeScript SDK](https://aptos.dev/sdks/ts-sdk/)
+- [Aptos Python SDK](https://aptos.dev/sdks/python-sdk/)

@@ -1,0 +1,17 @@
+[package]
+name = "moderntensor"
+version = "1.0.0"
+authors = []
+
+[addresses]
+moderntensor = "0x49efdb1b13ba49c9624ab17ac21cfa9d2b891871727e39a309457b63f42518b2"
+
+[dev-addresses]
+moderntensor = "0x49efdb1b13ba49c9624ab17ac21cfa9d2b891871727e39a309457b63f42518b2"
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-framework"
+
+[dev-dependencies] 
