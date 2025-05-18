@@ -29,7 +29,7 @@ class MinerInfo:
     # --- Thêm các trường tương ứng từ MinerDatum nếu cần cho logic ---
     status: int = STATUS_ACTIVE  # <<<--- THÊM TRƯỜNG STATUS
     subnet_uid: int = 0  # UID của Subnet miner thuộc về
-    registration_slot: int = 0  # Slot đăng ký
+    registration_time: int = 0  # Thời điểm đăng ký
     wallet_addr_hash: Optional[bytes] = None  # Hash của địa chỉ ví liên kết (nếu có)
     performance_history_hash: Optional[bytes] = (
         None  # Hash của lịch sử hiệu suất (nếu có)
@@ -50,12 +50,10 @@ class ValidatorInfo:
     last_performance: float = 0.0  # <<<--- THÊM LẠI TRƯỜNG NÀY
     status: int = STATUS_ACTIVE  # Giả định mặc định là Active
     subnet_uid: int = 0
-    registration_slot: int = 0
+    registration_time: int = 0
     wallet_addr_hash: Optional[bytes] = None  # Giữ bytes hoặc hex tùy chuẩn
     performance_history: List[float] = field(default_factory=list)
     performance_history_hash: Optional[bytes] = None
-
-    # Remove pycardano property
 
 
 @dataclass
@@ -92,7 +90,6 @@ class ValidatorScore:
     timestamp: float = field(default_factory=time.time)  # Thời điểm chấm điểm
 
 
-# === Dán định nghĩa ScoreSubmissionPayload vào đây ===
 class ScoreSubmissionPayload(BaseModel):
     """Dữ liệu điểm số gửi qua API, bao gồm thông tin xác thực."""
 
@@ -104,15 +101,14 @@ class ScoreSubmissionPayload(BaseModel):
         ..., description="UID (dạng hex) của validator gửi điểm"
     )
     cycle: int = Field(..., description="Chu kỳ đồng thuận mà điểm số này thuộc về")
-    # Remove Cardano-specific verification key
-    # Replace with Aptos public key if needed for verification
     signature: Optional[str] = Field(
         None,
         description="Chữ ký (dạng hex) của hash(canonical_json(scores)) để xác thực người gửi",
     )
-
-
-# ====================================================
+    public_key_hex: Optional[str] = Field(
+        None,
+        description="Public key của validator (dạng hex) để xác thực chữ ký",
+    )
 
 
 class MinerConsensusResult(BaseModel):

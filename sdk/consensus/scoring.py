@@ -219,9 +219,9 @@ async def broadcast_scores_logic(
        by this validator (`self_uid`).
     3. If no local scores generated, logs a debug message and returns.
     4. Serializes the filtered list of scores into a canonical JSON string.
-    5. Signs the serialized data using the validator's signing key (PyNaCl).
+    5. Signs the serialized data using the validator's signing key.
     6. Creates a `ScoreSubmissionPayload` containing the scores, signature (hex),
-       and the validator's payment verification key (CBOR hex).
+       and the validator's public key.
     7. Iterates through the list of active validator peers (excluding self).
     8. Sends the payload via HTTP POST to the `/submit_scores` endpoint of each peer.
 
@@ -243,8 +243,8 @@ async def broadcast_scores_logic(
     try:
         # Lấy thông tin cần thiết từ validator_node
         self_validator_info = validator_node.info
-        # Cần ExtendedSigningKey để ký (hoặc PaymentSigningKey nếu node chỉ lưu key đó)
-        signing_key: Union[ExtendedSigningKey, PaymentSigningKey] = validator_node.signing_key  # type: ignore
+        # Lấy signing key từ validator_node
+        signing_key = validator_node.signing_key  # type: ignore
         # Lấy danh sách validator *active* từ node
         active_validator_peers = await validator_node._get_active_validators()
         current_cycle = validator_node.current_cycle
@@ -282,39 +282,24 @@ async def broadcast_scores_logic(
 
     # --- Ký Dữ liệu ---
     signature_hex: Optional[str] = None
-    submitter_vkey_cbor_hex: Optional[str] = None
+    public_key_hex: Optional[str] = None
     try:
-        # Lấy verification key (cần xử lý cả Extended và Payment)
-        verification_key = signing_key.to_verification_key()
-
-        # Chỉ lấy PaymentVerificationKey để gửi đi
-        payment_vkey: PaymentVerificationKey
-        if isinstance(verification_key, ExtendedVerificationKey):
-            primitive_key = verification_key.to_primitive()[:32]
-            payment_vkey = cast(
-                PaymentVerificationKey,
-                PaymentVerificationKey.from_primitive(primitive_key),
-            )
-        elif isinstance(verification_key, PaymentVerificationKey):
-            payment_vkey = verification_key
-        else:
-            raise TypeError(
-                f"Unexpected verification key type derived: {type(verification_key)}"
-            )
-
-        submitter_vkey_cbor_hex = payment_vkey.to_cbor_hex()
-
         # Serialize list điểm ĐÃ LỌC VÀ FLATTEN bằng hàm canonical
         data_to_sign_str = canonical_json_serialize(local_scores_list)
         data_to_sign_bytes = data_to_sign_str.encode("utf-8")
 
-        # Ký bằng PyNaCl
-        sk_primitive = signing_key.to_primitive()
-        nacl_signing_key = nacl.signing.SigningKey(sk_primitive[:32])
-        signed_pynacl = nacl_signing_key.sign(data_to_sign_bytes)
-        signature_bytes = signed_pynacl.signature
-
+        # Ký bằng PyNaCl hoặc Aptos SDK (tùy vào validator_node.signing_key là gì)
+        # Ví dụ sử dụng PyNaCl
+        nacl_signing_key = nacl.signing.SigningKey(signing_key.private_key)
+        signed_data = nacl_signing_key.sign(data_to_sign_bytes)
+        signature_bytes = signed_data.signature
+        
+        # Lấy public key
+        public_key_bytes = nacl_signing_key.verify_key.encode()
+        
         signature_hex = binascii.hexlify(signature_bytes).decode("utf-8")
+        public_key_hex = binascii.hexlify(public_key_bytes).decode("utf-8")
+        
         logger.debug(f"[V:{self_uid}] Payload signed successfully.")
     except TypeError as type_e:
         logger.error(
@@ -334,9 +319,9 @@ async def broadcast_scores_logic(
 
     # --- Tạo Payload ---
     # Đảm bảo các biến cần thiết đã được gán giá trị
-    if signature_hex is None or submitter_vkey_cbor_hex is None:
+    if signature_hex is None or public_key_hex is None:
         logger.error(
-            f"[V:{self_uid}] Failed to obtain signature or verification key CBOR. Aborting broadcast."
+            f"[V:{self_uid}] Failed to obtain signature or public key. Aborting broadcast."
         )
         return
 
@@ -345,7 +330,7 @@ async def broadcast_scores_logic(
         cycle=current_cycle,
         scores=local_scores_list,
         signature=signature_hex,
-        submitter_vkey_cbor_hex=submitter_vkey_cbor_hex,
+        public_key_hex=public_key_hex,  # Sử dụng trường public_key_hex thay vì submitter_vkey_cbor_hex
     )
     logger.debug(
         f"[V:{self_uid}] ScoreSubmissionPayload created. Scores count: {len(payload.scores)}, Cycle: {payload.cycle}"
