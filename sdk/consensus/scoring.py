@@ -13,12 +13,8 @@ import httpx
 import json
 import nacl.signing
 from nacl.exceptions import CryptoError
-from pycardano import (
-    PaymentVerificationKey,
-    ExtendedVerificationKey,
-    ExtendedSigningKey,
-    PaymentSigningKey,
-)
+# Replace pycardano imports with Aptos SDK
+from aptos_sdk.account import Account
 
 # Giả định các kiểu dữ liệu này đã được import hoặc định nghĩa đúng
 try:

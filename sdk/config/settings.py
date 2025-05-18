@@ -9,7 +9,6 @@ import re
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pycardano import Network
 
 # ANSI color codes
 RED = "\033[91m"
@@ -72,28 +71,31 @@ class Settings(BaseSettings):
         env_prefix="MODERNTENSOR_",  # Giữ nguyên tiền tố (hoặc bỏ nếu không muốn)
     )
 
-    # --- Các trường cấu hình gốc của bạn ---
-    BLOCKFROST_PROJECT_ID: str = Field(
-        default="preprod06dzhzKlynuTInzvxHDH5cXbdHo524DE", alias="BLOCKFROST_PROJECT_ID"
+    # --- Các trường cấu hình cho Aptos ---
+    APTOS_NODE_URL: str = Field(
+        default="https://fullnode.testnet.aptoslabs.com/v1", 
+        alias="APTOS_NODE_URL"
     )
+    APTOS_FAUCET_URL: str = Field(
+        default="https://faucet.testnet.aptoslabs.com", 
+        alias="APTOS_FAUCET_URL"
+    )
+    APTOS_CONTRACT_ADDRESS: str = Field(
+        default="0x1", 
+        alias="APTOS_CONTRACT_ADDRESS"
+    )
+    APTOS_NETWORK: str = Field(
+        default="testnet", 
+        alias="APTOS_NETWORK"
+    )
+    
+    # --- Các trường cấu hình gốc của bạn ---
     HOTKEY_BASE_DIR: str = Field(default="moderntensor", alias="HOTKEY_BASE_DIR")
     COLDKEY_NAME: str = Field(default="kickoff", alias="COLDKEY_NAME")
     HOTKEY_NAME: str = Field(default="hk1", alias="HOTKEY_NAME")
     HOTKEY_PASSWORD: str = Field(default="sonlearn2003", alias="HOTKEY_PASSWORD")
-    TEST_RECEIVER_ADDRESS: str = Field(
-        default="addr_test1qpkxr3kpzex93m646qr7w82d56md2kchtsv9jy39dykn4cmcxuuneyeqhdc4wy7de9mk54fndmckahxwqtwy3qg8pums5vlxhz",
-        alias="TEST_RECEIVER_ADDRESS",
-    )
-    TEST_POLICY_ID_HEX: str = Field(
-        default="b9107b627e28700da1c5c2077c40b1c7d1fe2e9b23ff20e0e6b8fec1",
-        alias="TEST_POLICY_ID_HEX",
-    )
-    TEST_CONTRACT_ADDRESS: str = Field(
-        default="addr_test1wqlerxnfzfcgx72zpuepgchl6p5mnjsxm27cwjxqq9wuthch489d5",
-        alias="TEST_CONTRACT_ADDRESS",
-    )
-    CARDANO_NETWORK: str = Field(default="TESTNET", alias="CARDANO_NETWORK")
-
+    ACCOUNT_BASE_DIR: str = Field(default="accounts", alias="ACCOUNT_BASE_DIR")
+    
     # --- Encryption Settings ---
     ENCRYPTION_PBKDF2_ITERATIONS: int = Field(
         default=100_000,  # Standard default for PBKDF2HMAC
@@ -107,7 +109,7 @@ class Settings(BaseSettings):
         None, alias="VALIDATOR_UID", description="UID của validator này (nếu chạy node)"
     )
     VALIDATOR_ADDRESS: Optional[str] = Field(
-        None, alias="VALIDATOR_ADDRESS", description="Địa chỉ Cardano của validator này"
+        None, alias="VALIDATOR_ADDRESS", description="Địa chỉ Aptos của validator này"
     )
     VALIDATOR_API_ENDPOINT: Optional[str] = Field(
         None,
@@ -125,34 +127,32 @@ class Settings(BaseSettings):
     # --- Cấu hình Đồng thuận (Consensus) - Tham số & Hằng số ---
 
     # === Slot-Based Cycle Timing ===
-    CONSENSUS_CYCLE_SLOT_LENGTH: int = Field(
-        default=600,  # Ví dụ: 7200 slots = 2 giờ (nếu 1 slot = 1 giây)
-        alias="CONSENSUS_CYCLE_SLOT_LENGTH",
-        description="Độ dài của một chu kỳ đồng thuận tính bằng số slot Cardano.",
+    CONSENSUS_CYCLE_LENGTH: int = Field(
+        default=600,  # Ví dụ: 600 giây = 10 phút
+        alias="CONSENSUS_CYCLE_LENGTH",
+        description="Độ dài của một chu kỳ đồng thuận tính bằng giây.",
     )
-    CONSENSUS_SLOT_QUERY_INTERVAL_SECONDS: float = Field(
+    CONSENSUS_QUERY_INTERVAL_SECONDS: float = Field(
         default=0.5,
-        alias="CONSENSUS_SLOT_QUERY_INTERVAL_SECONDS",
-        description="Khoảng thời gian (giây) giữa các lần kiểm tra slot hiện tại khi chờ đợi.",
+        alias="CONSENSUS_QUERY_INTERVAL_SECONDS",
+        description="Khoảng thời gian (giây) giữa các lần kiểm tra thời gian hiện tại khi chờ đợi.",
     )
 
-    # Các offset tính bằng SỐ SLOT tính từ **cuối** chu kỳ mục tiêu
-    # Ví dụ: Nếu chu kỳ dài 7200 slot, kết thúc ở slot X.
-    # Commit xảy ra ở slot X - CONSENSUS_COMMIT_SLOTS_OFFSET
-    CONSENSUS_COMMIT_SLOTS_OFFSET: int = Field(
-        default=30,  # Ví dụ: Commit 30 slot trước khi kết thúc chu kỳ
-        alias="CONSENSUS_COMMIT_SLOTS_OFFSET",
-        description="Số slot trước khi kết thúc chu kỳ để bắt đầu commit.",
+    # Các offset tính bằng GIÂY tính từ **cuối** chu kỳ mục tiêu
+    CONSENSUS_COMMIT_OFFSET_SECONDS: int = Field(
+        default=30,
+        alias="CONSENSUS_COMMIT_OFFSET_SECONDS",
+        description="Số giây trước khi kết thúc chu kỳ để bắt đầu commit.",
     )
-    CONSENSUS_TIMEOUT_SLOTS_OFFSET: int = Field(
-        default=60,  # Ví dụ: Chờ điểm P2P đến 60 slot trước khi kết thúc
-        alias="CONSENSUS_TIMEOUT_SLOTS_OFFSET",
-        description="Số slot trước khi kết thúc chu kỳ để dừng chờ điểm P2P.",
+    CONSENSUS_TIMEOUT_OFFSET_SECONDS: int = Field(
+        default=60,
+        alias="CONSENSUS_TIMEOUT_OFFSET_SECONDS",
+        description="Số giây trước khi kết thúc chu kỳ để dừng chờ điểm P2P.",
     )
-    CONSENSUS_BROADCAST_SLOTS_OFFSET: int = Field(
-        default=90,  # Ví dụ: Broadcast điểm 120 slot trước khi kết thúc
-        alias="CONSENSUS_BROADCAST_SLOTS_OFFSET",
-        description="Số slot trước khi kết thúc chu kỳ để broadcast điểm cục bộ.",
+    CONSENSUS_BROADCAST_OFFSET_SECONDS: int = Field(
+        default=90,
+        alias="CONSENSUS_BROADCAST_OFFSET_SECONDS",
+        description="Số giây trước khi kết thúc chu kỳ để broadcast điểm cục bộ.",
     )
 
     # Tỉ lệ thời gian cho giai đoạn Tasking (vẫn giữ dựa trên thời gian thực tương đối)
@@ -189,10 +189,6 @@ class Settings(BaseSettings):
     CONSENSUS_CONSENSUS_TIMEOUT_OFFSET_MINUTES: int = Field(
         1,
         description="Chờ điểm P2P đến trước thời điểm cập nhật metagraph bao nhiêu phút (phải nhỏ hơn SEND_SCORE_OFFSET).",
-    )
-    CONSENSUS_COMMIT_OFFSET_SECONDS: int = Field(
-        15,
-        description="Commit lên blockchain trước thời điểm cập nhật metagraph bao nhiêu giây (phải nhỏ hơn CONSENSUS_TIMEOUT_OFFSET).",
     )
     CONSENSUS_COMMIT_DELAY_SECONDS: float = Field(
         1.5,
@@ -397,14 +393,14 @@ class Settings(BaseSettings):
     )  # Đổi sang giây
 
     # Giữ nguyên validator của bạn
-    @field_validator("CARDANO_NETWORK", mode="before")
+    @field_validator("APTOS_NETWORK", mode="before")
     def validate_network(cls, value: Optional[str]):
         if value is None:
-            value = "TESTNET"
-        normalized = str(value).upper().strip()
-        if normalized == "MAINNET":
-            return Network.MAINNET
-        return Network.TESTNET
+            value = "testnet"
+        normalized = str(value).lower().strip()
+        if normalized == "mainnet":
+            return "mainnet"
+        return "testnet"
 
 
 # --- Tạo một instance để sử dụng trong toàn bộ ứng dụng ---

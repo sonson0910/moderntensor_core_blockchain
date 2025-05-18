@@ -3,9 +3,9 @@
 import os
 import json
 from cryptography.fernet import Fernet
-from pycardano import Address, Network, ExtendedSigningKey
+from aptos_sdk.account import Account
 from rich.console import Console
-from typing import cast
+from typing import cast, Dict, Optional
 import binascii
 
 from sdk.config.settings import settings, logger
@@ -13,28 +13,23 @@ from sdk.config.settings import settings, logger
 
 class HotKeyManager:
     """
-    Manages hotkeys by deriving two ExtendedSigningKeys (payment and stake),
-    converting them to CBOR (hex format), and then encrypting that data
-    into 'hotkeys.json'.
+    Manages hotkeys for Aptos accounts, storing them securely with encryption.
     """
 
     def __init__(
         self,
-        coldkeys_dict: dict,  # {coldkey_name -> {"wallet": HDWallet, "cipher_suite": ..., "hotkeys": {...}}}
+        coldkeys_dict: dict,  # {coldkey_name -> {"account": Account, "cipher_suite": ..., "hotkeys": {...}}}
         base_dir: str = None,  # type: ignore
-        network: Network = Network.TESTNET,
     ):
         """
         Initializes the HotKeyManager.
 
         Args:
             coldkeys_dict (dict): A dictionary holding data for existing coldkeys,
-                                  including the associated HDWallet, a Fernet cipher_suite,
+                                  including the associated Aptos Account, a Fernet cipher_suite,
                                   and any existing hotkeys.
             base_dir (str, optional): Base directory for coldkeys. If None,
                                       defaults to settings.HOTKEY_BASE_DIR.
-            network (Network, optional): Indicates which Cardano network to use.
-                                         Defaults to settings.CARDANO_NETWORK if None.
         """
         self.coldkeys = coldkeys_dict
         # Determine the base directory explicitly for type checking
@@ -55,21 +50,13 @@ class HotKeyManager:
         # Use cast to satisfy the linter
         self.base_dir = cast(str, final_base_dir)
 
-        self.network = Network.TESTNET
-
     def generate_hotkey(self, coldkey_name: str, hotkey_name: str) -> str:
         """
-        Creates a new hotkey by:
-          1) Deriving payment_xsk & stake_xsk from the coldkey's HDWallet using child paths.
-          2) Converting them to CBOR (hex) for storage.
-          3) Generating an address from these keys.
-          4) Encrypting and writing the hotkey data (CBOR hex) into 'hotkeys.json'.
+        Creates a new hotkey by generating a new Aptos account.
 
         Steps in detail:
-          - Uses the next available index (based on how many hotkeys exist) to derive paths.
-          - Derives child keys for payment (m/1852'/1815'/0'/0/idx) and stake (m/1852'/1815'/0'/2/idx).
-          - Builds an Address object from payment & stake verification keys.
-          - Stores extended signing keys in CBOR hex form, encrypts them, and writes to disk.
+          - Generates a new Aptos account
+          - Stores the account details encrypted in the hotkeys.json file
 
         Args:
             coldkey_name (str): The name of the coldkey under which this hotkey will be generated.
@@ -89,9 +76,8 @@ class HotKeyManager:
                 f"Coldkey '{coldkey_name}' does not exist in self.coldkeys."
             )
 
-        # Extract HDWallet, cipher_suite, and hotkeys dict from the coldkeys data
+        # Extract Account, cipher_suite, and hotkeys dict from the coldkeys data
         wallet_info = self.coldkeys[coldkey_name]
-        hd_wallet = wallet_info["wallet"]
         cipher_suite: Fernet = wallet_info["cipher_suite"]
         hotkeys_dict = wallet_info["hotkeys"]
 
@@ -101,36 +87,20 @@ class HotKeyManager:
                 f"Hotkey '{hotkey_name}' already exists for coldkey '{coldkey_name}'."
             )
 
-        # Use the count of existing hotkeys as the derivation index
-        idx = len(hotkeys_dict)
+        # Generate a new Aptos account
+        account = Account.generate()
+        address = account.address().hex()
+        if not address.startswith("0x"):
+            address = f"0x{address}"
 
-        # 1) Derive payment extended signing key from HDWallet
-        payment_child = hd_wallet.derive_from_path(f"m/1852'/1815'/0'/0/{idx}")
-        payment_xsk = ExtendedSigningKey.from_hdwallet(payment_child)
-        payment_xvk = payment_xsk.to_verification_key()
-
-        # 2) Derive stake extended signing key
-        stake_child = hd_wallet.derive_from_path(f"m/1852'/1815'/0'/2/{idx}")
-        stake_xsk = ExtendedSigningKey.from_hdwallet(stake_child)
-        stake_xvk = stake_xsk.to_verification_key()
-
-        # 3) Construct the Address using the derived payment & stake verification keys
-        hotkey_address = Address(
-            payment_part=payment_xvk.hash(),
-            staking_part=stake_xvk.hash(),
-            network=self.network,
-        )
-
-        # 4) Convert the extended signing keys to CBOR bytes and then to hex
-        pay_cbor_hex = binascii.hexlify(payment_xsk.to_cbor()).decode("utf-8")
-        stk_cbor_hex = binascii.hexlify(stake_xsk.to_cbor()).decode("utf-8")
+        # Get private key as hex
+        private_key_hex = account.private_key.hex()
 
         # Prepare the hotkey data for encryption
         hotkey_data = {
             "name": hotkey_name,
-            "address": str(hotkey_address),
-            "payment_xsk_cbor_hex": pay_cbor_hex,
-            "stake_xsk_cbor_hex": stk_cbor_hex,
+            "address": address,
+            "private_key_hex": private_key_hex,
         }
 
         # Encrypt the hotkey JSON
@@ -139,7 +109,7 @@ class HotKeyManager:
 
         # Update the in-memory dictionary
         hotkeys_dict[hotkey_name] = {
-            "address": str(hotkey_address),
+            "address": address,
             "encrypted_data": encrypted_hotkey,
         }
 
@@ -152,7 +122,7 @@ class HotKeyManager:
 
         # Decorated logger info
         logger.info(
-            f":sparkles: [green]Generated hotkey[/green] '{hotkey_name}' => address=[blue]{hotkey_address}[/blue]"
+            f":sparkles: [green]Generated hotkey[/green] '{hotkey_name}' => address=[blue]{address}[/blue]"
         )
         return encrypted_hotkey
 
@@ -168,8 +138,8 @@ class HotKeyManager:
         the resulting address info into 'hotkeys.json'.
 
         Steps:
-          - Decrypts the hotkey JSON (which includes payment_xsk_cbor_hex and stake_xsk_cbor_hex).
-          - Reconstructs the extended signing keys from the hex-encoded CBOR.
+          - Decrypts the hotkey JSON (which includes private_key_hex)
+          - Recreates the Aptos account
           - (Optionally) prompts the user if a hotkey with the same name already exists
             and overwrite is disabled.
           - Writes the final data to 'hotkeys.json'.
@@ -182,9 +152,6 @@ class HotKeyManager:
 
         Raises:
             ValueError: If the specified coldkey doesn't exist in memory.
-
-        Returns:
-            None
         """
         # Ensure the coldkey exists in memory
         if coldkey_name not in self.coldkeys:
@@ -219,25 +186,20 @@ class HotKeyManager:
         hotkey_data = json.loads(dec_bytes.decode("utf-8"))
         hotkey_data["name"] = hotkey_name
 
-        pay_cbor_hex = hotkey_data["payment_xsk_cbor_hex"]
-        stk_cbor_hex = hotkey_data["stake_xsk_cbor_hex"]
-
-        # Convert CBOR hex back to ExtendedSigningKey objects
-        # Cast the result of from_cbor to ExtendedSigningKey
-        payment_xsk_obj = ExtendedSigningKey.from_cbor(binascii.unhexlify(pay_cbor_hex))
-        stake_xsk_obj = ExtendedSigningKey.from_cbor(binascii.unhexlify(stk_cbor_hex))
-
-        payment_xsk = cast(ExtendedSigningKey, payment_xsk_obj)
-        stake_xsk = cast(ExtendedSigningKey, stake_xsk_obj)
-
-        # Reconstruct the address if needed
-        pay_xvk = payment_xsk.to_verification_key()
-        stake_xvk = stake_xsk.to_verification_key()
-        final_address = hotkey_data["address"]
+        # Extract the private key hex from the decrypted data
+        private_key_hex = hotkey_data["private_key_hex"]
+        
+        # Recreate Aptos account from private key
+        account = Account.load_key(bytes.fromhex(private_key_hex))
+        
+        # Get the address
+        address = account.address().hex()
+        if not address.startswith("0x"):
+            address = f"0x{address}"
 
         # Update the in-memory dictionary
         hotkeys_dict[hotkey_name] = {
-            "address": final_address,
+            "address": address,
             "encrypted_data": encrypted_hotkey,
         }
 
@@ -249,127 +211,73 @@ class HotKeyManager:
 
         # Decorated logger info
         logger.info(
-            f":inbox_tray: [green]Imported hotkey[/green] '{hotkey_name}' => address=[blue]{final_address}[/blue]"
+            f":inbox_tray: [green]Imported hotkey[/green] '{hotkey_name}' => address=[blue]{address}[/blue]"
         )
 
-    def regenerate_hotkey(
-        self, coldkey_name: str, hotkey_name: str, index: int, force: bool = False
-    ):
+    def get_hotkey_account(
+        self, coldkey_name: str, hotkey_name: str
+    ) -> Optional[Account]:
         """
-        Regenerates a hotkey's keys and address from the parent coldkey and index,
-        then encrypts and saves the entry to hotkeys.json.
+        Loads and returns the Aptos Account object for a specific hotkey.
 
         Args:
-            coldkey_name (str): Name of the parent coldkey (must be loaded).
-            hotkey_name (str): Name to assign to the regenerated hotkey entry.
-            index (int): The non-negative derivation index.
-            force (bool): Overwrite if the hotkey entry already exists.
+            coldkey_name (str): The name of the coldkey containing this hotkey.
+            hotkey_name (str): The name of the hotkey to load.
 
-        Raises:
-            ValueError: If coldkey is not loaded, index is negative, or derivation fails.
-            Exception: If the hotkey name already exists and force is False.
+        Returns:
+            Optional[Account]: The Aptos Account for the hotkey, or None if it can't be loaded.
         """
-        console = Console()
-
-        # Validate index
-        if index < 0:
-            raise ValueError("Derivation index cannot be negative.")
-
-        # Ensure the coldkey exists in memory (already checked by WalletManager, but good practice)
+        # Ensure the coldkey exists
         if coldkey_name not in self.coldkeys:
-            # This shouldn't be reached if called via WalletManager
-            raise ValueError(
-                f"Coldkey '{coldkey_name}' not found in internal dictionary."
-            )
+            logger.error(f"Coldkey '{coldkey_name}' does not exist in self.coldkeys.")
+            return None
 
-        # Retrieve coldkey info
+        # Get the cipher suite and hotkeys
         wallet_info = self.coldkeys[coldkey_name]
-        hd_wallet = wallet_info["wallet"]
-        cipher_suite: Fernet = wallet_info["cipher_suite"]
+        cipher_suite = wallet_info["cipher_suite"]
         hotkeys_dict = wallet_info["hotkeys"]
 
-        # Check if hotkey name already exists and handle force flag
-        if hotkey_name in hotkeys_dict and not force:
-            console.print(
-                f":warning: [yellow]Hotkey entry '{hotkey_name}' already exists for coldkey '{coldkey_name}'.[/yellow]"
+        # Find the hotkey
+        if hotkey_name not in hotkeys_dict:
+            logger.error(
+                f"Hotkey '{hotkey_name}' does not exist in coldkey '{coldkey_name}'."
             )
-            raise Exception(
-                f"Hotkey entry '{hotkey_name}' already exists. Use --force to overwrite."
-            )
-        elif hotkey_name in hotkeys_dict and force:
-            console.print(
-                f":warning: [yellow]Overwriting existing hotkey entry '{hotkey_name}' due to --force flag.[/yellow]"
-            )
+            return None
 
-        # Derive Keys using the provided index
+        # Decrypt and load the hotkey
         try:
-            logger.debug(f"Deriving keys for index {index}...")
-            payment_child = hd_wallet.derive_from_path(f"m/1852'/1815'/0'/0/{index}")
-            payment_xsk = ExtendedSigningKey.from_hdwallet(payment_child)
-            payment_xvk = payment_xsk.to_verification_key()
-
-            stake_child = hd_wallet.derive_from_path(f"m/1852'/1815'/0'/2/{index}")
-            stake_xsk = ExtendedSigningKey.from_hdwallet(stake_child)
-            stake_xvk = stake_xsk.to_verification_key()
-            logger.debug(f"Keys derived successfully.")
+            encrypted_data = hotkeys_dict[hotkey_name]["encrypted_data"]
+            dec_bytes = cipher_suite.decrypt(encrypted_data.encode("utf-8"))
+            hotkey_data = json.loads(dec_bytes.decode("utf-8"))
+            
+            # Extract private key and create account
+            private_key_hex = hotkey_data["private_key_hex"]
+            account = Account.load_key(bytes.fromhex(private_key_hex))
+            
+            return account
         except Exception as e:
-            logger.exception(
-                f"Failed to derive keys for coldkey '{coldkey_name}' at index {index}: {e}"
-            )
-            raise ValueError(
-                f"Failed to derive keys for index {index}. Check if index is valid for this wallet."
-            ) from e
+            logger.error(f"Error loading hotkey '{hotkey_name}': {e}")
+            return None
 
-        # Generate Address
-        hotkey_address = Address(
-            payment_part=payment_xvk.hash(),
-            staking_part=stake_xvk.hash(),
-            network=self.network,
-        )
-        logger.debug(f"Regenerated address: {hotkey_address}")
+    def get_hotkeys_info(self, coldkey_name: str) -> Dict[str, str]:
+        """
+        Get all hotkeys for a coldkey with their addresses.
 
-        # Convert keys to CBOR hex
-        pay_cbor_hex = binascii.hexlify(payment_xsk.to_cbor()).decode("utf-8")
-        stk_cbor_hex = binascii.hexlify(stake_xsk.to_cbor()).decode("utf-8")
+        Args:
+            coldkey_name (str): Name of the coldkey.
 
-        # Prepare data for encryption
-        hotkey_data = {
-            "name": hotkey_name,  # Include name in encrypted data? Maybe not necessary.
-            "address": str(hotkey_address),
-            "payment_xsk_cbor_hex": pay_cbor_hex,
-            "stake_xsk_cbor_hex": stk_cbor_hex,
-            "derivation_index": index,  # Store the index used!
-        }
+        Returns:
+            Dict[str, str]: Dictionary mapping hotkey names to addresses.
+        """
+        if coldkey_name not in self.coldkeys:
+            return {}
 
-        # Encrypt data
-        enc_bytes = cipher_suite.encrypt(json.dumps(hotkey_data).encode("utf-8"))
-        encrypted_hotkey_str = enc_bytes.decode("utf-8")
-
-        # Update in-memory dictionary
-        hotkeys_dict[hotkey_name] = {
-            "address": str(hotkey_address),
-            "encrypted_data": encrypted_hotkey_str,
-        }
-
-        # Persist changes to hotkeys.json
-        coldkey_dir = os.path.join(self.base_dir, coldkey_name)
-        # Ensure directory exists (might be needed if hotkeys.json was deleted)
-        os.makedirs(coldkey_dir, exist_ok=True)
-        hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
-        try:
-            with open(hotkey_path, "w") as f:
-                json.dump({"hotkeys": hotkeys_dict}, f, indent=2)
-            logger.debug(
-                f":floppy_disk: Saved regenerated hotkey entry '{hotkey_name}' to {hotkey_path}"
-            )
-        except OSError as e:
-            console.print(
-                f":cross_mark: [bold red]Error:[/bold red] Failed to write hotkeys file: {e}"
-            )
-            # Raise exception as this is critical
-            raise
-
-        console.print(
-            f":heavy_check_mark: [bold green]Hotkey '{hotkey_name}' (Index: {index}) regenerated successfully for coldkey '{coldkey_name}'.[/bold green]"
-        )
-        console.print(f"   Address: [blue]{hotkey_address}[/blue]")
+        wallet_info = self.coldkeys[coldkey_name]
+        hotkeys_dict = wallet_info["hotkeys"]
+        
+        # Create a map of hotkey_name -> address
+        result = {}
+        for name, info in hotkeys_dict.items():
+            result[name] = info.get("address", "unknown_address")
+            
+        return result

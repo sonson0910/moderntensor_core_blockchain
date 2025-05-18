@@ -19,15 +19,15 @@ class WalletManager:
 
     def __init__(self, network=None, base_dir=None):
         """
-        Initializes WalletManager with a specific Cardano network and a base directory.
+        Initializes WalletManager with a specific Aptos network and a base directory.
 
         Args:
-            network (Network, optional): The Cardano network to use (TESTNET or MAINNET).
-                                         Defaults to settings.CARDANO_NETWORK if None.
+            network (str, optional): The Aptos network to use (mainnet, testnet, devnet, local).
+                                     Defaults to settings.APTOS_NETWORK if None.
             base_dir (str, optional): The folder for storing coldkey and hotkey data.
                                       Defaults to settings.HOTKEY_BASE_DIR if None.
         """
-        self.network = network or settings.CARDANO_NETWORK
+        self.network = network or settings.APTOS_NETWORK
         self.base_dir = base_dir or settings.HOTKEY_BASE_DIR
 
         # Initialize the ColdKeyManager with the chosen base directory
@@ -37,7 +37,7 @@ class WalletManager:
         self.hk_manager = HotKeyManager(
             coldkeys_dict=self.ck_manager.coldkeys,
             base_dir=self.base_dir,
-            network=self.network,  # type: ignore
+            network=self.network,
         )
 
     def create_coldkey(self, name: str, password: str):

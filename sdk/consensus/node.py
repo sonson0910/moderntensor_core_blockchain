@@ -13,7 +13,7 @@ import json
 import math
 import asyncio
 import httpx
-import sys  # <<< Import sys module
+import sys
 from typing import List, Dict, Any, Tuple, Optional, Set
 from collections import defaultdict, OrderedDict
 import logging
@@ -40,7 +40,14 @@ from sdk.metagraph.metagraph_datum import (
 from sdk.smartcontract.validator import read_validator
 from sdk.metagraph.hash.hash_datum import hash_data  # Import hàm hash thật sự
 from sdk.keymanager.decryption_utils import decode_hotkey_skey
+from aptos_sdk.async_client import RestClient
+from aptos_sdk.account import Account
 
+# Aptos imports
+from sdk.aptos_core.contract_client import AptosContractClient, create_aptos_client
+from sdk.aptos_core.context import get_aptos_context
+from sdk.aptos_core.account_service import check_account_exists, get_account_balance
+from sdk.aptos_core.validator_helper import get_validator_info, get_all_validators
 
 # from sdk.metagraph.hash import hash_data, decode_history_from_hash # Cần hàm hash/decode
 async def decode_history_from_hash(hash_str):
@@ -58,22 +65,6 @@ from sdk.core.datatypes import (
     TaskAssignment,
     MinerResult,
     ValidatorScore,
-)
-from sdk.service.context import get_chain_context
-
-# Pydantic model for API communication
-# from sdk.network.app.api.v1.endpoints.consensus import ScoreSubmissionPayload
-# PyCardano types
-from pycardano import (
-    Network,
-    Address,
-    ScriptHash,
-    BlockFrostChainContext,
-    PaymentSigningKey,
-    StakeSigningKey,
-    TransactionId,
-    UTxO,
-    ExtendedSigningKey,
 )
 
 # --- Import các hàm logic đã tách ra ---
@@ -108,7 +99,7 @@ class ValidatorNode:
         network (Network): The Cardano network (Testnet or Mainnet) the node operates on.
         miners_info (Dict[str, MinerInfo]): Information about known miners, loaded from the metagraph.
         validators_info (Dict[str, ValidatorInfo]): Information about known validators, loaded from the metagraph.
-        current_utxo_map (Dict[str, UTxO]): Maps entity UIDs (hex) to their current UTxO.
+        # Remove UTxO related attribute since we're using Aptos account-based model
         tasks_sent (Dict[str, TaskAssignment]): Tracks tasks sent to miners in the current cycle.
         cycle_scores (Dict[str, List[ValidatorScore]]): Accumulates local scores assigned in the current cycle.
         miner_is_busy (Set[str]): UIDs (hex) of miners currently processing a task.
@@ -128,9 +119,9 @@ class ValidatorNode:
     def __init__(
         self,
         validator_info: ValidatorInfo,
-        cardano_context: BlockFrostChainContext,
-        signing_key: ExtendedSigningKey,
-        stake_signing_key: Optional[ExtendedSigningKey] = None,
+        aptos_client: RestClient,
+        account: Account,
+        contract_address: str,
         state_file="validator_state.json",
     ):
         """
@@ -138,142 +129,75 @@ class ValidatorNode:
 
         Args:
             validator_info (ValidatorInfo): Information for this validator (UID, Address, API Endpoint).
-            cardano_context (BlockFrostChainContext): Context for Cardano interactions.
-            signing_key (ExtendedSigningKey): The validator's payment signing key.
-            stake_signing_key (Optional[ExtendedSigningKey]): The validator's stake signing key, if any.
+            aptos_client (RestClient): Aptos REST client for blockchain interactions.
+            account (Account): Aptos account for signing transactions.
+            contract_address (str): ModernTensor contract address on Aptos.
             state_file (str): Path to the file for saving/loading the last completed cycle.
 
         Raises:
-            ValueError: If essential arguments (validator_info, context, signing_key) are missing,
-                        or if validator_info lacks a UID, or if script details cannot be loaded.
+            ValueError: If essential arguments are missing or invalid.
         """
         if not validator_info or not validator_info.uid:
             raise ValueError("Valid ValidatorInfo with a UID must be provided.")
-        if not cardano_context:
-            raise ValueError(
-                "Cardano context (e.g., BlockFrostChainContext) must be provided."
-            )
-        if not signing_key:
-            raise ValueError("PaymentSigningKey must be provided.")
+        if not aptos_client:
+            raise ValueError("Aptos client must be provided.")
+        if not account:
+            raise ValueError("Aptos account must be provided.")
+        if not contract_address:
+            raise ValueError("ModernTensor contract address must be provided.")
 
         self.info = validator_info
         # Define prefix early for use in initial logs
         self.uid_prefix = f"[{self.info.uid}]"  # Base prefix with UID
-        init_prefix = f"[bold green][Init:{self.uid_prefix}][/bold green]"  # Specific prefix for init
+        init_prefix = f"[Init:{self.uid_prefix}]"  # Specific prefix for init
 
-        self.context = cardano_context
-        self.signing_key = signing_key
-        self.stake_signing_key = stake_signing_key
+        self.client = aptos_client
+        self.account = account
+        self.contract_address = contract_address
         self.settings = settings
         self.state_file = state_file
         # Use DEBUG for file path setting
-        logger.debug(
-            f"{init_prefix} :floppy_disk: State file set to: [blue]{self.state_file}[/blue]"
-        )
-        self.miners_selected_for_cycle: Set[str] = set()
+        logger.debug(f"{init_prefix} State file set to: {self.state_file}")
+        self.miners_selected_for_cycle = set()
 
         # Load initial cycle
-        self.current_cycle = (
-            self._load_last_cycle()
-        )  # This method now uses its own prefix
+        self.current_cycle = self._load_last_cycle()  # This method now uses its own prefix
         self.slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH
 
-        # Determine and log network (assuming settings.CARDANO_NETWORK is reliable)
-        if settings.CARDANO_NETWORK == Network.MAINNET:
-            self.network = Network.MAINNET
-            network_name = "[bold magenta]MAINNET[/bold magenta]"
-        elif settings.CARDANO_NETWORK == Network.TESTNET:
-            self.network = Network.TESTNET
-            network_name = "[bold yellow]TESTNET[/bold yellow]"
-        else:
-            # Fallback or raise error if setting is invalid type/value
-            logger.error(
-                f"{init_prefix} :stop_sign: Invalid CARDANO_NETWORK setting: {settings.CARDANO_NETWORK}. Defaulting to TESTNET."
-            )
-            self.network = Network.TESTNET
-            network_name = "[bold red]UNKNOWN (defaulting to TESTNET)[/bold red]"
-
-        # State variables initialization (remains the same structurally)
-        self.miners_info: Dict[str, MinerInfo] = {}
-        self.validators_info: Dict[str, ValidatorInfo] = {}
-        self.current_utxo_map: Dict[str, UTxO] = {}  # Map: uid_hex -> UTxO object
-        self.tasks_sent: Dict[str, TaskAssignment] = {}
-        self.cycle_scores: Dict[str, List[ValidatorScore]] = defaultdict(
-            list
-        )  # Điểm tích lũy của cả chu kỳ
-        self.miner_is_busy: Set[str] = set()  # UID hex của miner đang bận
-        self.results_buffer: Dict[str, MinerResult] = {}  # {task_id: MinerResult}
+        # State variables initialization
+        self.miners_info = {}
+        self.validators_info = {}
+        self.tasks_sent = {}
+        self.cycle_scores = defaultdict(list)
+        self.miner_is_busy = set()
+        self.results_buffer = {}
         self.results_buffer_lock = asyncio.Lock()
-        self.validator_scores: Dict[str, List[ValidatorScore]] = {}  # Điểm do mình chấm
-        self.consensus_results_cache: OrderedDict[int, CycleConsensusResults] = (
-            OrderedDict()
-        )
+        self.validator_scores = defaultdict(list)
+        self.consensus_results_cache = OrderedDict()
         self.consensus_results_cache_lock = asyncio.Lock()
-        self.max_cache_cycles = 3  # Có thể cấu hình qua settings
-
-        # P2P score sharing state
-        self.received_validator_scores: Dict[
-            int, Dict[str, Dict[str, ValidatorScore]]
-        ] = defaultdict(lambda: defaultdict(dict))
+        self.received_validator_scores = defaultdict(lambda: defaultdict(dict))
         self.received_scores_lock = asyncio.Lock()
-
-        # State for cross-cycle verification
-        self.previous_cycle_results: Dict[str, Any] = {
-            "final_miner_scores": {},
-            "calculated_validator_states": {},
-        }
-
-        # HTTP client for P2P communication
-        timeout = getattr(
-            self.settings, "HTTP_TIMEOUT_SECONDS", 30.0
-        )  # Lấy từ settings hoặc mặc định
-        self.http_client = httpx.AsyncClient(timeout=timeout)
-
-        # Load script details once
-        logger.debug(f"{init_prefix} Loading validator script details...")
-        try:
-            validator_details = read_validator()
-            if (
-                not validator_details
-                or "script_hash" not in validator_details
-                or "script_bytes" not in validator_details
-            ):
-                raise ValueError(
-                    "Failed to load valid script details (hash or bytes missing)."
-                )
-            self.script_hash: ScriptHash = validator_details["script_hash"]
-            self.script_bytes = validator_details["script_bytes"]
-            logger.debug(
-                f"{init_prefix} :scroll: Script details loaded. Hash: [yellow]{self.script_hash.to_primitive()[:10]}...[/yellow]"
-            )
-        except Exception as e:
-            # Log exception with error style
-            logger.exception(
-                f"{init_prefix} :stop_sign: [bold red]Failed to read validator script details during node initialization.[/bold red]"
-            )
-            # Re-raise a more informative error
-            raise ValueError(
-                f"Could not initialize node due to script loading error: {e}"
-            ) from e
-
-        # Final initialization logs with enhanced formatting
-        logger.info(f"{init_prefix} :rocket: ValidatorNode initialized successfully.")
-        logger.info(f"{init_prefix}   UID:             [cyan]{self.info.uid}[/cyan]")
-        logger.info(
-            f"{init_prefix}   API Endpoint:    [link={self.info.api_endpoint}]{self.info.api_endpoint}[/link]"
+        self.previous_cycle_results = {}
+        
+        # HTTP client for network communications
+        self.http_client = httpx.AsyncClient(
+            timeout=self.settings.HTTP_CLIENT_TIMEOUT,
+            limits=httpx.Limits(max_connections=self.settings.HTTP_CLIENT_MAX_CONNECTIONS),
         )
-        logger.info(
-            f"{init_prefix}   Wallet Address:  [blue]{self.info.address}[/blue]"
+        
+        # Import aptos client module
+        from sdk.aptos_core.contract_client import AptosContractClient
+        
+        # Create contract client for high-level Aptos interactions
+        self.contract_client = AptosContractClient(
+            client=self.client,
+            account=self.account,
+            contract_address=self.contract_address,
         )
-        logger.info(
-            f"{init_prefix}   Script Hash:     [yellow]{self.script_hash.to_primitive()}[/yellow]"
-        )
-        logger.info(
-            f"{init_prefix}   Cardano Network: {network_name}"
-        )  # Use resolved network name
-        logger.info(
-            f"{init_prefix}   Starting Cycle:  [yellow]{self.current_cycle}[/yellow]"
-        )
+        
+        logger.info(f"{init_prefix} Validator node initialized with UID: {self.info.uid}")
+        logger.info(f"{init_prefix} Connected to Aptos network with contract: {self.contract_address}")
+        logger.info(f"{init_prefix} Starting at cycle: {self.current_cycle}")
 
     def _load_last_cycle(self) -> int:
         """Loads the last completed cycle number from the state file."""
@@ -424,76 +348,77 @@ class ValidatorNode:
     # --- Tương tác Metagraph ---
     async def load_metagraph_data(self):
         """
-        Loads miner and validator data from the Metagraph (blockchain).
+        Tải dữ liệu miner và validator từ blockchain Aptos.
 
-        Fetches all miner and validator datums associated with the script hash,
-        parses them, verifies performance history hashes against local state (if available),
-        and updates the node's internal state (self.miners_info, self.validators_info,
-        self.current_utxo_map).
+        Lấy tất cả thông tin miner và validator từ smart contract ModernTensor,
+        phân tích dữ liệu, xác minh lịch sử hiệu suất so với trạng thái cục bộ (nếu có),
+        và cập nhật trạng thái nội bộ của node (self.miners_info, self.validators_info).
 
         Raises:
-            RuntimeError: If critical errors occur during data fetching or processing,
-                          preventing the node from proceeding with the cycle.
+            RuntimeError: Nếu xảy ra lỗi nghiêm trọng khi lấy hoặc xử lý dữ liệu,
+                          khiến node không thể tiếp tục chu kỳ.
         """
         logger.info(
-            f"[V:{self.info.uid}] Loading Metagraph data for cycle {self.current_cycle}..."
+            f"[V:{self.info.uid}] Đang tải dữ liệu từ Aptos blockchain cho chu kỳ {self.current_cycle}..."
         )
         start_time = time.time()
-        network = self.network
-        datum_divisor = self.settings.METAGRAPH_DATUM_INT_DIVISOR
-        max_history_len = self.settings.CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN
-
+        
+        # Lưu trữ trạng thái miners và validators trước đó để so sánh
         previous_miners_info = self.miners_info.copy()
         previous_validators_info = self.validators_info.copy()
 
-        self.current_utxo_map = {}
         temp_miners_info = {}
         temp_validators_info = {}
         try:
-            # Gọi đồng thời để tải dữ liệu
-            miner_data_task = get_all_miner_data(
-                self.context, self.script_hash, network
+            # Gọi song song để lấy dữ liệu miners và validators từ Aptos
+            from sdk.aptos_core.validator_helper import get_all_validators, get_all_miners
+            
+            miner_data_task = get_all_miners(
+                client=self.client,
+                contract_address=self.contract_address
             )
-            validator_data_task = get_all_validator_data(self.context, self.script_hash, network)  # type: ignore
-            # TODO: Thêm task load Subnet/Foundation data nếu cần
-
-            all_miner_dicts, all_validator_dicts = await asyncio.gather(
+            validator_data_task = get_all_validators(
+                client=self.client,
+                contract_address=self.contract_address
+            )
+                
+            # Đợi các task hoàn thành
+            miners_data, validators_data = await asyncio.gather(
                 miner_data_task, validator_data_task, return_exceptions=True
             )
 
             # Xử lý lỗi fetch
-            if isinstance(all_miner_dicts, Exception):
-                logger.error(f"Failed to fetch miner data: {all_miner_dicts}")
-                all_miner_dicts = []
-            if isinstance(all_validator_dicts, Exception):
-                logger.error(f"Failed to fetch validator data: {all_validator_dicts}")
-                all_validator_dicts = []
+            if isinstance(miners_data, Exception):
+                logger.error(f"Lỗi khi lấy dữ liệu miners: {miners_data}")
+                miners_data = []
+            if isinstance(validators_data, Exception):
+                logger.error(f"Lỗi khi lấy dữ liệu validators: {validators_data}")
+                validators_data = []
 
-            logger.info(f"Fetched {len(all_miner_dicts)} miner entries and {len(all_validator_dicts)} validator entries.")  # type: ignore
+            logger.info(f"Đã lấy {len(miners_data)} miner và {len(validators_data)} validator.")
 
-            # --- Chuyển đổi Miner dicts sang MinerInfo ---
-            for utxo_object, datum_dict in all_miner_dicts:  # type: ignore
+            # --- Chuyển đổi dữ liệu miners thành MinerInfo ---
+            for miner_data in miners_data:
                 try:
-                    uid_hex = datum_dict.get("uid")
+                    uid_hex = miner_data.get("uid")
                     if not uid_hex:
                         continue
 
-                    on_chain_history_hash_hex = datum_dict.get(
-                        "performance_history_hash"
-                    )
+                    # Lấy history hash từ dữ liệu (nếu có)
+                    on_chain_history_hash_hex = miner_data.get("performance_history_hash")
                     on_chain_history_hash_bytes = (
                         bytes.fromhex(on_chain_history_hash_hex)
                         if on_chain_history_hash_hex
                         else None
                     )
 
+                    # Lấy lịch sử hiệu suất từ thông tin cũ (nếu có)
                     current_local_history = []  # Mặc định là rỗng
                     previous_info = previous_miners_info.get(uid_hex)
                     if previous_info:
-                        current_local_history = (
-                            previous_info.performance_history
-                        )  # Lấy lịch sử cũ từ bộ nhớ
+                        current_local_history = previous_info.performance_history  # Lấy lịch sử cũ từ bộ nhớ
 
+                    # Xác minh lịch sử hiệu suất
                     verified_history = []  # Lịch sử sẽ được lưu vào MinerInfo mới
                     if on_chain_history_hash_bytes:
                         # Nếu có hash on-chain, thử xác minh lịch sử cục bộ
@@ -507,7 +432,7 @@ class ValidatorNode:
                                     )
                                 else:
                                     logger.warning(
-                                        f"Miner {uid_hex}: Local history hash mismatch! Resetting history. (Local: {local_history_hash.hex()}, OnChain: {on_chain_history_hash_bytes.hex()})"
+                                        f"Miner {uid_hex}: Local history hash mismatch! Resetting history."
                                     )
                                     verified_history = []  # Hash không khớp, reset
                             except Exception as hash_err:
@@ -516,68 +441,61 @@ class ValidatorNode:
                                 )
                                 verified_history = []
                         else:
-                            # Có hash on-chain nhưng không có lịch sử cục bộ -> không thể xác minh
                             logger.warning(
                                 f"Miner {uid_hex}: On-chain history hash found, but no local history available. Resetting history."
                             )
                             verified_history = []
                     else:
-                        # Không có hash on-chain (có thể là miner mới)
                         logger.debug(
-                            f"Miner {uid_hex}: No on-chain history hash found. Using current local (likely empty)."
+                            f"Miner {uid_hex}: No on-chain history hash found. Using current local history."
                         )
                         verified_history = current_local_history  # Giữ lại lịch sử cục bộ (thường là rỗng)
 
-                    # Đảm bảo giới hạn độ dài
+                    # Đảm bảo giới hạn độ dài lịch sử
+                    max_history_len = settings.CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN
                     verified_history = verified_history[-max_history_len:]
 
-                    wallet_addr_hash_hex = datum_dict.get("wallet_addr_hash")
+                    # Lấy wallet_addr_hash nếu có
+                    wallet_addr_hash_hex = miner_data.get("wallet_addr_hash")
                     wallet_addr_hash_bytes = (
                         bytes.fromhex(wallet_addr_hash_hex)
                         if wallet_addr_hash_hex
                         else None
                     )
 
+                    # Tạo đối tượng MinerInfo
                     temp_miners_info[uid_hex] = MinerInfo(
                         uid=uid_hex,
-                        address=datum_dict.get(
-                            "address", f"addr_miner_{uid_hex[:8]}..."
-                        ),
-                        api_endpoint=datum_dict.get("api_endpoint"),
-                        trust_score=float(datum_dict.get("trust_score", 0.0)),
-                        weight=float(datum_dict.get("weight", 0.0)),
-                        stake=float(datum_dict.get("stake", 0)),
-                        last_selected_time=int(
-                            datum_dict.get("last_selected_time", -1)
-                        ),
-                        performance_history=verified_history,  # <<< SỬ DỤNG LỊCH SỬ ĐÃ XÁC MINH
-                        subnet_uid=int(datum_dict.get("subnet_uid", -1)),
-                        status=int(datum_dict.get("status", STATUS_INACTIVE)),
-                        registration_slot=int(datum_dict.get("registration_slot", 0)),
+                        address=miner_data.get("address", f"0x{uid_hex[:8]}..."),
+                        api_endpoint=miner_data.get("api_endpoint"),
+                        trust_score=float(miner_data.get("trust_score", 0.0)),
+                        weight=float(miner_data.get("weight", 0.0)),
+                        stake=float(miner_data.get("stake", 0)),
+                        last_selected_time=int(miner_data.get("last_selected_time", -1)),
+                        performance_history=verified_history,
+                        subnet_uid=int(miner_data.get("subnet_uid", -1)),
+                        status=int(miner_data.get("status", STATUS_INACTIVE)),
+                        registration_slot=int(miner_data.get("registration_slot", 0)),
                         wallet_addr_hash=wallet_addr_hash_bytes,
-                        performance_history_hash=on_chain_history_hash_bytes,  # Lưu lại hash on-chain (bytes)
+                        performance_history_hash=on_chain_history_hash_bytes,
                     )
 
-                    # --- Lưu UTXO vào map ---
-                    self.current_utxo_map[uid_hex] = utxo_object
                 except Exception as e:
                     logger.warning(
-                        f"Failed to parse Miner data dict for UID {datum_dict.get('uid', 'N/A')}: {e}",
+                        f"Lỗi khi phân tích dữ liệu Miner cho UID {miner_data.get('uid', 'N/A')}: {e}",
                         exc_info=False,
                     )
-                    logger.debug(f"Problematic miner data dict: {datum_dict}")
+                    logger.debug(f"Dữ liệu miner gặp vấn đề: {miner_data}")
 
-            # --- Chuyển đổi Validator dicts sang ValidatorInfo ---
-            for utxo_object, datum_dict in all_validator_dicts:  # type: ignore
+            # --- Tương tự, chuyển đổi dữ liệu validator thành ValidatorInfo ---
+            for validator_data in validators_data:
                 try:
-                    uid_hex = datum_dict.get("uid")
+                    uid_hex = validator_data.get("uid")
                     if not uid_hex:
                         continue
 
-                    # Lấy hash từ datum (bytes)
-                    on_chain_history_hash_hex = datum_dict.get(
-                        "performance_history_hash"
-                    )
+                    # Xử lý tương tự như với miners để lấy và xác minh history
+                    on_chain_history_hash_hex = validator_data.get("performance_history_hash")
                     on_chain_history_hash_bytes = (
                         bytes.fromhex(on_chain_history_hash_hex)
                         if on_chain_history_hash_hex
@@ -586,12 +504,11 @@ class ValidatorNode:
 
                     current_local_history = []
                     previous_info = previous_validators_info.get(uid_hex)
-                    if previous_info and hasattr(
-                        previous_info, "performance_history"
-                    ):  # Kiểm tra có thuộc tính không
+                    if previous_info and hasattr(previous_info, "performance_history"):
                         current_local_history = previous_info.performance_history
 
                     verified_history = []
+                    # Xác minh history tương tự như với miners
                     if on_chain_history_hash_bytes:
                         if current_local_history:
                             try:
@@ -626,7 +543,7 @@ class ValidatorNode:
 
                     # --- Lấy address bytes từ datum và decode ---
                     # Lấy các hash khác
-                    wallet_addr_hash_hex = datum_dict.get("wallet_addr_hash")
+                    wallet_addr_hash_hex = validator_data.get("wallet_addr_hash")
                     wallet_addr_hash_bytes = (
                         bytes.fromhex(wallet_addr_hash_hex)
                         if wallet_addr_hash_hex
@@ -635,7 +552,7 @@ class ValidatorNode:
                     # ------------------------------------------
 
                     # <<< ADDED: Sanitize api_endpoint >>>
-                    raw_endpoint = datum_dict.get("api_endpoint")
+                    raw_endpoint = validator_data.get("api_endpoint")
                     clean_endpoint: Optional[str] = None
                     if isinstance(raw_endpoint, str):
                         # Basic check for common protocols and printable chars
@@ -655,31 +572,30 @@ class ValidatorNode:
 
                     temp_validators_info[uid_hex] = ValidatorInfo(
                         uid=uid_hex,
-                        address=datum_dict.get(
+                        address=validator_data.get(
                             "address", f"addr_validator_{uid_hex[:8]}..."
                         ),
                         api_endpoint=clean_endpoint,  # <<< Use sanitized endpoint
-                        trust_score=float(datum_dict.get("trust_score", 0.0)),
-                        weight=float(datum_dict.get("weight", 0.0)),
-                        stake=float(datum_dict.get("stake", 0)),
-                        last_performance=float(datum_dict.get("last_performance", 0.0)),
+                        trust_score=float(validator_data.get("trust_score", 0.0)),
+                        weight=float(validator_data.get("weight", 0.0)),
+                        stake=float(validator_data.get("stake", 0)),
+                        last_performance=float(validator_data.get("last_performance", 0.0)),
                         performance_history=verified_history,
-                        subnet_uid=int(datum_dict.get("subnet_uid", -1)),
-                        status=int(datum_dict.get("status", STATUS_INACTIVE)),
-                        registration_slot=int(datum_dict.get("registration_slot", 0)),
+                        subnet_uid=int(validator_data.get("subnet_uid", -1)),
+                        status=int(validator_data.get("status", STATUS_INACTIVE)),
+                        registration_slot=int(validator_data.get("registration_slot", 0)),
                         wallet_addr_hash=wallet_addr_hash_bytes,
                         performance_history_hash=on_chain_history_hash_bytes,  # Lưu lại hash on-chain
                     )
                     logger.debug(
-                        f"  Loaded Validator Peer: UID={uid_hex}, Status={datum_dict.get('status', 'N/A')}, Endpoint='{datum_dict.get('api_endpoint', 'N/A')}'"
+                        f"  Loaded Validator Peer: UID={uid_hex}, Status={validator_data.get('status', 'N/A')}, Endpoint='{validator_data.get('api_endpoint', 'N/A')}'"
                     )
-                    self.current_utxo_map[uid_hex] = utxo_object
                 except Exception as e:
                     logger.warning(
-                        f"Failed to parse Validator data dict for UID {datum_dict.get('uid', 'N/A')}: {e}",
+                        f"Failed to parse Validator data dict for UID {validator_data.get('uid', 'N/A')}: {e}",
                         exc_info=False,
                     )
-                    logger.debug(f"Problematic validator data dict: {datum_dict}")
+                    logger.debug(f"Problematic validator data dict: {validator_data}")
 
             # --- Cập nhật trạng thái node ---
             self.miners_info = temp_miners_info
@@ -718,15 +634,13 @@ class ValidatorNode:
             logger.info(
                 f"Processed info for {len(self.miners_info)} miners and {len(self.validators_info)} validators in {load_duration:.2f}s."
             )
-            logger.info(
-                f"UTXO map populated with {len(self.current_utxo_map)} entries."
-            )
+            # Remove UTxO reference since we're using Aptos
 
         except Exception as e:
             logger.exception(
                 f"Critical error during metagraph data loading/processing: {e}. Cannot proceed this cycle."
             )
-            self.current_utxo_map = {}
+            # Initialize empty objects on error
             self.miners_info = {}
             self.validators_info = {}
             raise RuntimeError(f"Failed to load and process metagraph data: {e}") from e
@@ -1274,58 +1188,74 @@ class ValidatorNode:
         raise NotImplementedError("Subclasses must implement _score_individual_result")
         # return 0.0 # Unreachable after raise
 
+    # --- Tương tác với Aptos chain ---
     async def _get_current_slot(self) -> Optional[int]:
-        """Gets the current blockchain slot number from the Cardano context."""
-        retries = 3
-        for attempt in range(retries):
-            try:
-                # Revert to using last_block_slot property
-                current_slot = await asyncio.to_thread(
-                    lambda: self.context.last_block_slot
-                )
-                if current_slot is None:
-                    logger.warning(
-                        f"Attempt {attempt + 1}: self.context.last_block_slot returned None."
-                    )
-                else:
-                    return current_slot  # Return successfully fetched slot
-            except Exception as e:
-                logger.warning(
-                    f"Attempt {attempt + 1}: Error fetching latest slot via last_block_slot: {e}"
-                )
-            if attempt < retries - 1:
-                await asyncio.sleep(2)  # Chờ 2 giây trước khi thử lại
-        logger.error("Failed to get current slot after multiple retries.")
-        return None
+        """
+        Lấy giá trị slot hiện tại dựa trên timestamp của block Aptos mới nhất.
+        
+        Trong Aptos, không có khái niệm "slot" như trong Cardano, do đó chúng ta 
+        sử dụng timestamp của block để tính toán giá trị tương đương.
+        
+        Returns:
+            Optional[int]: Giá trị slot tương đương, None nếu có lỗi.
+        """
+        try:
+            timestamp = await self._get_current_block_timestamp()
+            if timestamp is None:
+                return None
+                
+            # Tính slot giả lập dựa trên timestamp (1 slot = 1 giây)
+            # Có thể điều chỉnh tỷ lệ này dựa theo nhu cầu của ứng dụng
+            slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH or 1  # seconds per slot
+            estimated_slot = timestamp // slot_length
+            
+            return estimated_slot
+        except Exception as e:
+            logger.error(f"Lỗi khi tính toán giá trị slot hiện tại: {e}")
+            return None
 
     async def wait_until_slot(self, target_slot: int):
-        """Waits until the current blockchain slot reaches or exceeds the target slot."""
+        """
+        Đợi cho đến khi slot hiện tại (tính từ timestamp) đạt đến hoặc vượt qua target_slot.
+        
+        Args:
+            target_slot (int): Giá trị slot đích cần đợi.
+        """
         if target_slot <= 0:
             logger.warning(
-                f"wait_until_slot called with invalid target_slot: {target_slot}"
+                f"wait_until_slot được gọi với giá trị target_slot không hợp lệ: {target_slot}"
             )
             return
 
-        logger.debug(f"Waiting until slot {target_slot}...")
+        logger.debug(f"Đợi cho đến slot {target_slot}...")
+        
+        slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH or 1  # seconds per slot
+        target_timestamp = target_slot * slot_length
+        
+        current_time = int(time.time())
+        if current_time >= target_timestamp:
+            logger.info(f"Đã đạt hoặc vượt qua timestamp đích. Tiếp tục.")
+            return
+            
+        # Đợi cho đến khi đạt được timestamp/slot đích
         while True:
             current_slot = await self._get_current_slot()
             if current_slot is None:
                 logger.warning(
-                    "Failed to get current slot during wait, retrying in 5s..."
+                    "Không lấy được giá trị slot hiện tại, thử lại sau 5 giây..."
                 )
                 await asyncio.sleep(5)
                 continue
 
             if current_slot >= target_slot:
                 logger.info(
-                    f"Reached target slot {target_slot} (Current: {current_slot}). Proceeding."
+                    f"Đã đạt slot đích {target_slot} (Hiện tại: {current_slot}). Tiếp tục."
                 )
                 break
 
             wait_interval = self.settings.CONSENSUS_SLOT_QUERY_INTERVAL_SECONDS
-            logger.log(
-                logging.DEBUG - 1,
-                f"Current slot: {current_slot}, Target: {target_slot}. Waiting {wait_interval:.1f}s...",
+            logger.debug(
+                f"Slot hiện tại: {current_slot}, Đích: {target_slot}. Đợi {wait_interval:.1f}s..."
             )
             await asyncio.sleep(wait_interval)
 
@@ -1876,743 +1806,116 @@ class ValidatorNode:
                         all_relevant_tasks_sufficient = False
                         # Vẫn tiếp tục kiểm tra các task khác trong lần lặp này
 
-            if all_relevant_tasks_sufficient and not (
-                tasks_to_check - processed_task_ids
-            ):
-                # Điều kiện này có thể không bao giờ đạt được nếu all_relevant_tasks_sufficient=False ở trên
-                # Đã kiểm tra ở đầu vòng lặp rồi.
-                pass
-
-            await asyncio.sleep(2)  # Chờ 2 giây rồi kiểm tra lại
-
-        # Nếu vòng lặp kết thúc do timeout
-        remaining_tasks = tasks_to_check - processed_task_ids
-        if remaining_tasks:
-            logger.warning(
-                f"Consensus score waiting timed out ({wait_timeout_seconds:.1f}s). Tasks still missing sufficient scores: {list(remaining_tasks)}"
-            )
-        else:
-            logger.info(
-                f"Consensus score waiting finished within timeout ({time.time() - start_wait:.1f}s). All relevant tasks have sufficient scores."
-            )
-
-        # Trả về True nếu không còn task nào thiếu điểm, False nếu còn
-        return not bool(remaining_tasks)
-
-    # --- Kiểm tra và Phạt Validator (Chu kỳ trước) ---
-    async def verify_and_penalize_validators(self) -> None:
-        """Kiểm tra ValidatorDatum chu kỳ trước và áp dụng phạt."""
-        # Gọi hàm logic từ state.py
-        # Hàm này sẽ cập nhật self.validators_info trực tiếp nếu có phạt trust
-        penalized_updates = await verify_and_penalize_logic(
-            current_cycle=self.current_cycle,
-            previous_calculated_states=self.previous_cycle_results.get(
-                "calculated_validator_states", {}
-            ),
-            validators_info=self.validators_info,  # Truyền trạng thái hiện tại
-            context=self.context,
-            settings=self.settings,
-            script_hash=self.script_hash,
-            network=self.network,
-            # signing_key=self.signing_key # Có thể cần nếu commit phạt ngay
-        )
-        # TODO: Xử lý penalized_updates nếu cần commit ngay hoặc lưu lại
-        if penalized_updates:
-            logger.warning(
-                f"Validators penalized in verification step: {list(penalized_updates.keys())}"
-            )
-            # Hiện tại chỉ cập nhật trust trong self.validators_info, chưa commit
-
-        return
-
-    # --- Chạy Đồng thuận và Cập nhật Trạng thái ---
-    def run_consensus_and_penalties(
-        self, self_validator_uid: str, consensus_possible: bool
-    ) -> Tuple[Dict[str, float], Dict[str, Any]]:
-        """Runs consensus calculations and determines new validator states."""
-        # Gọi hàm logic từ state.py
-        return run_consensus_logic(
-            current_cycle=self.current_cycle,
-            tasks_sent=self.tasks_sent,
-            received_scores=self.received_validator_scores.get(self.current_cycle, {}),
-            validators_info=self.validators_info,
-            settings=self.settings,
-            consensus_possible=consensus_possible,
-            self_validator_uid=self_validator_uid,
-        )
-
-    async def update_miner_state(
-        self, final_scores: Dict[str, float]
-    ) -> Dict[str, MinerDatum]:
-        """Prepares MinerDatum updates based on consensus scores."""
-        # Gọi hàm logic từ state.py
-        return await prepare_miner_updates_logic(
-            current_cycle=self.current_cycle,
-            miners_info=self.miners_info,
-            final_scores=final_scores,
-            settings=self.settings,
-            current_utxo_map=self.current_utxo_map,
-        )
-
-    async def prepare_validator_updates(
-        self, calculated_states: Dict[str, Any]
-    ) -> Dict[str, ValidatorDatum]:
-        """Prepares the ValidatorDatum update for this node itself."""
-        # Gọi hàm logic từ state.py
-        return await prepare_validator_updates_logic(
-            current_cycle=self.current_cycle,
-            self_validator_info=self.info,
-            calculated_states=calculated_states,
-            settings=self.settings,
-            context=self.context,
-        )
-
-    async def commit_updates_to_blockchain(
-        self,
-        validator_updates: Dict[str, ValidatorDatum],
-    ):
-        """Submits the transaction to update this node's Datum on the blockchain."""
-        # Gọi hàm logic từ state.py
-        await commit_updates_logic(
-            validator_updates=validator_updates,
-            current_utxo_map=self.current_utxo_map,
-            script_hash=self.script_hash,
-            script_bytes=self.script_bytes,
-            network=self.network,
-            context=self.context,
-            signing_key=self.signing_key,
-            stake_signing_key=self.stake_signing_key,
-            settings=self.settings,
-        )
-
-    async def run_cycle(self):
+    async def _get_current_block_timestamp(self) -> Optional[int]:
         """
-        Executes one complete consensus cycle, synchronized by blockchain slot numbers.
-
-        Orchestrates the following phases:
-        A. Cycle Initialization & Slot Calculation: Determines cycle boundaries.
-        B. State Reset: Clears state variables for the new cycle.
-        C. Verification/Penalization: Checks previous cycle's validator updates.
-        D. Metagraph Loading: Fetches current miner and validator data.
-        E. Tasking Phase (Mini-Batches): Selects miners, sends tasks, waits for results,
-           scores results within batches, limited by the tasking end slot.
-        F. Broadcast Scores: Waits until the broadcast slot and sends local scores to peers.
-        G. Wait for P2P Scores: Waits until the consensus end slot for scores from peers.
-        H. Run Consensus: Calculates final miner scores and new validator states.
-        I. Publish Results: Caches/publishes consensus results for miners.
-        J. Prepare Self-Update: Creates the datum update for this validator.
-        K. Commit Self-Update: Waits until the commit slot and submits the update transaction.
-        L. Wait for Cycle End: Waits until the designated end slot of the cycle.
-        M. Finalize: Saves state, logs duration, and waits briefly before the next cycle.
-
-        Handles exceptions during the cycle and attempts to recover for the next cycle.
+        Lấy timestamp của block mới nhất từ blockchain Aptos.
+        
+        Returns:
+            Optional[int]: Timestamp Unix của block mới nhất, None nếu có lỗi.
         """
-        # === A. Khởi đầu Chu kỳ & Tính toán Slot ===
-        logger.info(
-            f"[bold green]:arrow_forward: Cycle:{self.current_cycle}[/bold green] >>> Starting Consensus Cycle {self.current_cycle} <<<"
-        )
-        cycle_start_time = time.time()
-
-        # --- Lấy slot hiện tại và tính toán các mốc ---
-        current_slot_start = await self._get_current_slot()
-        if current_slot_start is None:
-            logger.error(
-                f"Failed to get current slot at cycle start. Skipping cycle {self.current_cycle}."
-            )
-            await asyncio.sleep(60)  # Chờ 1 phút trước khi thử lại chu kỳ sau
-            return
-
-        slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH
-        # Đồng bộ hóa current_cycle nếu cần
-        current_cycle_num_from_slot = current_slot_start // slot_length
-        if current_cycle_num_from_slot >= self.current_cycle:
-            logger.warning(
-                f"Current slot {current_slot_start} suggests cycle {current_cycle_num_from_slot} or later, but node is processing cycle {self.current_cycle}. Adjusting current_cycle."
-            )
-            self.current_cycle = current_cycle_num_from_slot + 1
-            # QUAN TRỌNG: Cần reset state chu kỳ lại nếu số cycle bị nhảy
-            # (Gọi lại phần reset bên dưới hoặc reset ngay đây)
-
-        target_end_slot = self.current_cycle * slot_length - 1
-        logger.info(
-            f"Cycle {self.current_cycle}: Current Slot ~{current_slot_start}, Target End Slot: {target_end_slot}"
-        )
-
-        # Tính các mốc slot quan trọng
-        try:
-            tasking_end_target_slot = (
-                target_end_slot - self.settings.CONSENSUS_TASKING_END_SLOTS_OFFSET
-            )
-            broadcast_target_slot = (
-                target_end_slot - self.settings.CONSENSUS_BROADCAST_SLOTS_OFFSET
-            )
-            consensus_wait_end_slot = (
-                target_end_slot - self.settings.CONSENSUS_TIMEOUT_SLOTS_OFFSET
-            )
-            commit_target_slot = (
-                target_end_slot - self.settings.CONSENSUS_COMMIT_SLOTS_OFFSET
-            )
-
-            # Kiểm tra thứ tự logic
-            if not (
-                current_slot_start
-                < tasking_end_target_slot
-                < broadcast_target_slot
-                < consensus_wait_end_slot
-                < commit_target_slot
-                < target_end_slot
-            ):
-                logger.error(
-                    f"Slot timing configuration illogical. Check offsets. Current: {current_slot_start}, TaskEnd: {tasking_end_target_slot}, Broadcast: {broadcast_target_slot}, ConsensusEnd: {consensus_wait_end_slot}, Commit: {commit_target_slot}, CycleEnd: {target_end_slot}"
+        retries = 3
+        for attempt in range(retries):
+            try:
+                # Lấy thông tin block mới nhất từ Aptos
+                ledger_info = await self.client.get_ledger_information()
+                if ledger_info and "timestamp" in ledger_info:
+                    return int(ledger_info["timestamp"]) // 1000  # Chuyển từ microseconds sang seconds
+                else:
+                    logger.warning(
+                        f"Attempt {attempt + 1}: Không thể lấy thông tin timestamp từ ledger_info."
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Attempt {attempt + 1}: Error fetching latest block info: {e}"
                 )
-                # Quyết định dừng hoặc chạy với lỗi? Tạm thời dừng.
-                return
-            logger.info(
-                f" - Target Slots: TaskingEnd <= [yellow]{tasking_end_target_slot}[/yellow], Broadcast >= [yellow]{broadcast_target_slot}[/yellow], ConsensusWaitEnd >= [yellow]{consensus_wait_end_slot}[/yellow], Commit >= [yellow]{commit_target_slot}[/yellow]"
-            )
-
-        except AttributeError as e:
-            logger.error(
-                f":stop_sign: [bold red]Missing slot offset configuration:[/bold red] {e}"
-            )
-            return
-        except Exception as e:
-            logger.exception(
-                f":stop_sign: [bold red]Slot timing calculation error:[/bold red] {e}"
-            )
-            return
-
-        # === B. Reset State ===
-        logger.debug(f":recycle: Cycle {self.current_cycle}: Resetting cycle state...")
-        self.cycle_scores = defaultdict(list)
-        self.miner_is_busy = set()
-        async with self.received_scores_lock:
-            if self.current_cycle in self.received_validator_scores:
-                del self.received_validator_scores[self.current_cycle]
-            self.received_validator_scores[self.current_cycle] = defaultdict(dict)
-        async with self.results_buffer_lock:
-            self.results_buffer.clear()
-        self.tasks_sent.clear()
-        self.miners_selected_for_cycle = set()  # Reset danh sách miner đã chọn
-        logger.debug(f":recycle: Cycle {self.current_cycle}: State reset complete.")
-
-        # Khởi tạo biến kết quả
-        final_miner_scores: Dict[str, float] = {}
-        calculated_validator_states: Dict[str, Any] = {}
-        validator_self_update: Dict[str, ValidatorDatum] = {}
-
-        try:
-            # === C. Verify/Penalize Chu kỳ Trước ===
-            logger.info(":mag: Step 1: Verifying previous cycle validator updates...")
-            await self.verify_and_penalize_validators()
-            logger.info(
-                ":mag_right: Step 1: Verification/Penalization check completed."
-            )
-
-            # === D. Load Metagraph ===
-            logger.info(":cloud: Step 2: Loading Metagraph data...")
-            await self.load_metagraph_data()
-            logger.info(
-                f":cloud: Step 2: Metagraph loaded. Miners: [cyan]{len(self.miners_info)}[/cyan], Validators: [cyan]{len(self.validators_info)}[/cyan]"
-            )
-
-            # === E. Giai đoạn Giao Task (Mini-Batch, giới hạn bởi Slot) ===
-            if not self.miners_info:
-                logger.warning(":warning: Step 3 (Tasking): No miners found. Skipping.")
-            else:
-                logger.info(
-                    f":fast_forward: Step 3: Entering Mini-Batch Tasking Phase (until slot ~[yellow]{tasking_end_target_slot}[/yellow])..."
-                )
-                batch_num = 0
-                tasks_sent_this_cycle = 0
-                while True:
-                    # <<< LOGGING ADDED >>>
-                    logger.debug(
-                        f"Tasking loop: Iteration start. Target end slot: {tasking_end_target_slot}"
-                    )
-                    current_slot_in_tasking = await self._get_current_slot()
-                    # <<< LOGGING ADDED >>>
-                    logger.debug(
-                        f"Tasking loop: _get_current_slot returned: {current_slot_in_tasking}"
-                    )
-
-                    if current_slot_in_tasking is None:
-                        logger.warning(
-                            "Tasking phase: Failed to get current slot, pausing briefly."
-                        )
-                        await asyncio.sleep(
-                            self.settings.CONSENSUS_MINI_BATCH_INTERVAL_SECONDS
-                        )
-                        continue  # Thử lại ở lần lặp sau
-
-                    # Điều kiện dừng chính của giai đoạn tasking
-                    # <<< LOGGING ADDED >>>
-                    exit_condition_met = (
-                        current_slot_in_tasking >= tasking_end_target_slot
-                    )
-                    logger.debug(
-                        f"Tasking loop: Checking exit condition: current={current_slot_in_tasking}, target={tasking_end_target_slot}, condition_met={exit_condition_met}"
-                    )
-                    if exit_condition_met:
-                        logger.info(
-                            f"Reached tasking end slot ({tasking_end_target_slot} vs current {current_slot_in_tasking}). Ending tasking phase."
-                        )
-                        break  # Thoát vòng lặp
-
-                    # --- Logic mini-batch ---
-                    batch_num += 1
-                    logger.debug(
-                        f"--- Starting Mini-Batch {batch_num} at slot {current_slot_in_tasking} ---"
-                    )
-
-                    # Chọn miners (logic cũ)
-                    selected_miners = self._select_available_miners_for_batch(
-                        self.settings.CONSENSUS_MINI_BATCH_SIZE
-                    )
-                    if not selected_miners:
-                        logger.debug(
-                            f"Batch {batch_num}: No available miners. Waiting..."
-                        )
-                        # Chờ ngắn trước khi kiểm tra lại slot ở vòng lặp sau
-                        await asyncio.sleep(
-                            self.settings.CONSENSUS_MINI_BATCH_INTERVAL_SECONDS
-                        )
-                        continue  # Bỏ qua batch này, kiểm tra lại slot
-
-                    # Gửi task (logic cũ)
-                    batch_assignments = await self._send_task_batch(
-                        selected_miners, batch_num
-                    )
-                    if not batch_assignments:
-                        logger.warning(f"Batch {batch_num}: Failed to send any tasks.")
-                        # Gỡ busy cho miner nếu send fail toàn bộ (logic này đã có trong _send_task_batch)
-                    else:
-                        tasks_sent_this_cycle += len(batch_assignments)
-                        # Thêm miner đã chọn vào set của cycle
-                        for assign in batch_assignments.values():
-                            self.miners_selected_for_cycle.add(assign.miner_uid)
-
-                    # Chờ kết quả batch (fixed seconds)
-                    batch_wait_seconds = self.settings.CONSENSUS_MINI_BATCH_WAIT_SECONDS
-                    logger.debug(
-                        f"Batch {batch_num}: Waiting {batch_wait_seconds:.1f}s for results..."
-                    )
-                    await asyncio.sleep(batch_wait_seconds)
-                    logger.debug(f"Batch {batch_num}: Finished waiting period.")
-
-                    # Chấm điểm batch (logic cũ)
-                    await self._score_current_batch(batch_assignments)
-
-                    # Không cần sleep interval cố định ở đây nữa vì vòng lặp sẽ kiểm tra slot
-
-                logger.info(
-                    f":checkered_flag: Step 3: Mini-Batch Tasking Phase Finished. Total tasks sent: [cyan]{tasks_sent_this_cycle}[/cyan]"
-                )
-
-            # === F. Broadcast Điểm (Chờ đến Slot) ===
-            logger.info(
-                f":satellite_antenna: Step 4: Waiting until slot [yellow]{broadcast_target_slot}[/yellow] to broadcast local scores..."
-            )
-            await self.wait_until_slot(broadcast_target_slot)
-            accumulated_scores_count = sum(len(v) for v in self.cycle_scores.values())
-            logger.info(
-                f":satellite_antenna: Step 4: Broadcasting [cyan]{accumulated_scores_count}[/cyan] accumulated local scores..."
-            )
-            # Đảm bảo broadcast_scores sử dụng self.cycle_scores hiện tại
-            await self.broadcast_scores(self.cycle_scores)  # Truyền điểm đã tích lũy
-
-            # === G. Chờ Điểm P2P (Chờ đến Slot) ===
-            logger.info(
-                f":hourglass_flowing_sand: Step 5: Waiting until slot [yellow]{consensus_wait_end_slot}[/yellow] for P2P scores..."
-            )
-            await self.wait_until_slot(consensus_wait_end_slot)
-            logger.info(
-                f":hourglass_done: Step 5: Consensus score waiting period ended (Reached slot {consensus_wait_end_slot})."
-            )
-            # Kiểm tra đủ điểm
-            async with self.received_scores_lock:
-                active_validators = await self._get_active_validators()
-                total_active = len(active_validators)
-                min_validators_needed = (
-                    self.settings.CONSENSUS_MIN_VALIDATORS_FOR_CONSENSUS
-                )
-                unique_senders = set()
-                if self.current_cycle in self.received_validator_scores:
-                    for task_scores in self.received_validator_scores[
-                        self.current_cycle
-                    ].values():
-                        unique_senders.update(task_scores.keys())
-                if self.cycle_scores:
-                    unique_senders.add(self.info.uid)
-                scores_received_count = len(unique_senders)
-            consensus_possible = scores_received_count >= min_validators_needed
-            logger.info(
-                f":ballot_box_with_check: Step 5: Consensus possible based on received P2P scores: {'[bold green]Yes[/bold green]' if consensus_possible else '[bold red]No[/bold red]'} ([cyan]{scores_received_count}[/cyan]/[cyan]{min_validators_needed}[/cyan] active validators needed)"
-            )
-
-            # === H. Chạy Đồng thuận & Tính toán ===
-            logger.info(":brain: Step 6: Running final consensus calculations...")
-            final_miner_scores, calculated_validator_states = (
-                self.run_consensus_and_penalties(
-                    consensus_possible=consensus_possible,
-                    self_validator_uid=self.info.uid,
-                )
-            )
-            # Lưu kết quả dự kiến cho chu kỳ sau (logic cũ)
-            self.previous_cycle_results["calculated_validator_states"] = (
-                calculated_validator_states.copy()
-            )
-            self.previous_cycle_results["final_miner_scores"] = (
-                final_miner_scores.copy()
-            )
-            logger.info(f":brain: Step 6: Consensus calculation finished.")
-
-            # === I. Publish Kết quả cho Miner ===
-            logger.info(
-                ":receipt: Step 7: Calculating Miner incentives and Publishing/Caching consensus results..."
-            )
-            # Tính rewards (logic như cũ)
-            calculated_miner_rewards: Dict[str, float] = {}
-            if final_miner_scores:
-                # ... logic tính incentive dựa trên final_miner_scores và miners_info ...
-                total_weighted_perf = sum(
-                    getattr(minfo, "weight", 0.0) * final_miner_scores.get(uid, 0.0)
-                    for uid, minfo in self.miners_info.items()
-                    if getattr(minfo, "status", STATUS_ACTIVE) == STATUS_ACTIVE
-                )
-                min_total_value = 1.0
-                total_system_value = max(min_total_value, total_weighted_perf)
-                logger.debug(
-                    f"Calculated total_system_value for miner incentive: {total_system_value:.6f}"
-                )
-                for miner_uid_hex, p_adj in final_miner_scores.items():
-                    miner_info = self.miners_info.get(miner_uid_hex)
-                    if (
-                        miner_info
-                        and getattr(miner_info, "status", STATUS_ACTIVE)
-                        == STATUS_ACTIVE
-                    ):
-                        try:
-                            trust_for_incentive = getattr(
-                                miner_info, "trust_score", 0.0
-                            )
-                            weight_for_incentive = getattr(miner_info, "weight", 0.0)
-                            incentive = calculate_miner_incentive(
-                                trust_score=trust_for_incentive,
-                                miner_weight=weight_for_incentive,
-                                miner_performance_scores=[p_adj],
-                                total_system_value=total_system_value,
-                                incentive_sigmoid_L=self.settings.CONSENSUS_PARAM_INCENTIVE_SIG_L,
-                                incentive_sigmoid_k=self.settings.CONSENSUS_PARAM_INCENTIVE_SIG_K,
-                                incentive_sigmoid_x0=self.settings.CONSENSUS_PARAM_INCENTIVE_SIG_X0,
-                            )
-                            calculated_miner_rewards[miner_uid_hex] = incentive
-                            logger.debug(
-                                f"Calculated incentive for Miner {miner_uid_hex}: {incentive:.8f}"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Error calculating incentive for Miner {miner_uid_hex}: {e}"
-                            )
-                            calculated_miner_rewards[miner_uid_hex] = 0.0
-                    else:
-                        calculated_miner_rewards[miner_uid_hex] = 0.0
-
-            await self._publish_consensus_results(
-                cycle=self.current_cycle,
-                final_miner_scores=final_miner_scores,
-                calculated_rewards=calculated_miner_rewards,
-            )
-            logger.info(":receipt: Step 7: Consensus results cached/published.")
-
-            # === J. Chuẩn bị Self-Update Datum ===
-            logger.info(":pencil2: Step 8: Preparing self validator datum update...")
-            validator_self_update = await self.prepare_validator_updates(
-                calculated_validator_states
-            )
-            logger.info(
-                f":pencil2: Step 8: Prepared [cyan]{len(validator_self_update)}[/cyan] self validator datums."
-            )
-
-            # === K. Chờ Commit (Chờ đến Slot) ===
-            logger.info(
-                f":timer_clock: Step 9: Waiting until slot [yellow]{commit_target_slot}[/yellow] to commit self-update..."
-            )
-            await self.wait_until_slot(commit_target_slot)
-
-            # === L. Commit Self-Update ===
-            logger.info(
-                ":link: Step 10: Committing SELF validator update to blockchain..."
-            )
-            await self.commit_updates_to_blockchain(
-                validator_updates=validator_self_update,  # Chỉ commit self-update
-            )
-            logger.info(":link: Step 10: Commit process for self-validator initiated.")
-
-        except Exception as e:
-            logger.exception(
-                f":rotating_light: [bold red]Error during consensus cycle {self.current_cycle}:[/bold red] {e}"
-            )
-
-        finally:
-            # === M. Chờ Kết thúc Chu kỳ (Chờ đến Slot) & Dọn dẹp ===
-            cycle_end_time_actual = time.time()
-            cycle_duration = cycle_end_time_actual - cycle_start_time
-            logger.info(
-                f":stopwatch: Cycle {self.current_cycle} duration so far: {cycle_duration:.2f}s"
-            )
-
-            next_cycle_start_slot = target_end_slot + 1
-            logger.info(
-                f":hourglass: Waiting until slot [yellow]{next_cycle_start_slot}[/yellow] to finalize cycle {self.current_cycle}..."
-            )
-            await self.wait_until_slot(next_cycle_start_slot)
-
-            # --- Cập nhật và Lưu trạng thái ---
-            completed_cycle = self.current_cycle  # Lưu lại số chu kỳ vừa hoàn thành
-            self._save_current_cycle(completed_cycle)  # Lưu chu kỳ đã hoàn thành
-            self.current_cycle += 1  # Tăng lên cho chu kỳ tiếp theo
-
-            # Dọn dẹp P2P scores cũ
-            cleanup_cycle = completed_cycle - 2  # Giữ lại dữ liệu 2 chu kỳ trước
-            async with self.received_scores_lock:
-                if cleanup_cycle in self.received_validator_scores:
-                    try:
-                        del self.received_validator_scores[cleanup_cycle]
-                        logger.debug(
-                            f":wastebasket: Cleaned up P2P scores for cycle {cleanup_cycle}"
-                        )
-                    except KeyError:
-                        pass
-            logger.info(f"--- End of Cycle {completed_cycle} ---")
-
-        cycle_duration_final = time.time() - cycle_start_time
-        logger.info(
-            f":checkered_flag: [bold green]>>> Completed Consensus Cycle {completed_cycle} in {cycle_duration_final:.2f}s <<<[/bold green]"
-        )
-
-    async def run(self):
-        """
-        Main execution loop for the Validator Node.
-        Continuously runs consensus cycles using `run_cycle`.
-        Includes basic error handling and graceful shutdown on KeyboardInterrupt.
-        """
-        logger.info(
-            f"[NodeStart:{self.info.uid}] :satellite_antenna: Starting Validator Node main loop..."
-        )
-        try:
-            # Chờ một chút để các dịch vụ khác (như FastAPI) có thể khởi động nếu cần
-            await asyncio.sleep(5)
-            while True:
-                # cycle_start_time = time.time()
-                await self.run_cycle()
-                # cycle_duration = time.time() - cycle_start_time
-                # cycle_interval_seconds = (
-                #     settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
-                # )
-                # min_wait = settings.CONSENSUS_CYCLE_MIN_WAIT_SECONDS
-                # wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
-                # logger.info(
-                #     f"Cycle duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle..."
-                # )
-                # await asyncio.sleep(wait_time)
-        except asyncio.CancelledError:
-            logger.info("Main node loop cancelled.")
-        except Exception as e:
-            logger.exception(f"Exception in main node loop: {e}")
-        finally:
-            # Dọn dẹp tài nguyên khi vòng lặp kết thúc (ví dụ: đóng http client)
-            if hasattr(self, "http_client") and self.http_client:
-                await self.http_client.aclose()
-            logger.info("Main node loop finished and resources cleaned up.")
-
-    async def shutdown(self):
-        """
-        Cleanly shuts down the validator node.
-        Closes the async HTTP client connection.
-        """
-        logger.info(
-            f"[NodeStop:{self.info.uid}] :door: Shutting down Validator Node..."
-        )
-        if hasattr(self, "http_client") and self.http_client:
-            await self.http_client.aclose()
-
+            if attempt < retries - 1:
+                await asyncio.sleep(2)  # Chờ 2 giây trước khi thử lại
+        logger.error("Không lấy được thông tin block sau nhiều lần thử.")
+        return None
 
 async def run_validator_node():
     """
-    Sets up the necessary components and runs the Validator Node main loop.
+    Sets up the necessary components and runs the Validator Node main loop with Aptos.
 
     Performs the following setup steps:
-    1. Loads application settings.
-    2. Decodes the validator's hotkey (payment and stake keys).
-    3. Initializes the Cardano chain context (e.g., BlockFrost).
-    4. Constructs the ValidatorInfo object using settings and derived address.
-    5. Initializes the ValidatorNode instance.
-    6. Starts the node's main execution loop (`node.run()`).
+    1. Loads application settings
+    2. Initializes the Aptos client and account
+    3. Constructs the ValidatorInfo object
+    4. Initializes the ValidatorNode instance
+    5. Starts the node's main execution loop
 
     Includes error handling for setup failures and the main run loop.
-
-    Raises:
-        SystemExit: If critical setup errors occur (e.g., missing keys, invalid settings).
     """
-    node: Optional[ValidatorNode] = None  # <<< Initialize node to None
+    node = None
     try:
         # --- Setup ---
-        logger.info("Setting up Validator Node...")
+        logger.info("Setting up Validator Node with Aptos...")
         if not settings:
             logger.error("Settings not loaded. Exiting.")
             return
 
-        # --- Khởi tạo context Cardano ---
-        cardano_ctx: Optional[BlockFrostChainContext] = None
+        # --- Initialize Aptos context ---
+        from sdk.aptos_core.context import get_aptos_context
+        
         try:
-            # Lấy context từ hàm get_chain_context (sử dụng cấu hình trong settings)
-            cardano_ctx = get_chain_context(method="blockfrost")
-            if not cardano_ctx:
-                raise ValueError("Failed to get Cardano chain context.")
-            logger.info(
-                f"Cardano context initialized successfully for network: {settings.CARDANO_NETWORK}"
+            # Get Aptos context (client, account)
+            contract_client, aptos_client, account = await get_aptos_context(
+                node_url=settings.APTOS_NODE_URL,
+                private_key=settings.APTOS_PRIVATE_KEY,
+                contract_address=settings.APTOS_CONTRACT_ADDRESS
             )
+            
+            logger.info(f"Connected to Aptos network with address: {account.address()}")
+            
+            # --- Get validator info ---
+            from sdk.aptos_core.validator_helper import get_validator_info
+            
+            # Using account address as validator address
+            validator_address = account.address().hex()
+            if not validator_address.startswith("0x"):
+                validator_address = f"0x{validator_address}"
+            
+            validator_data = await get_validator_info(
+                aptos_client, 
+                settings.APTOS_CONTRACT_ADDRESS, 
+                validator_address
+            )
+            
+            if not validator_data:
+                logger.error(f"Could not retrieve validator data for {validator_address}. Exiting.")
+                return
+                
+            # Construct ValidatorInfo object
+            from sdk.core.datatypes import ValidatorInfo
+            
+            validator_info = ValidatorInfo(
+                uid=validator_data.get("uid", ""),
+                address=validator_address,
+                api_endpoint=settings.VALIDATOR_API_ENDPOINT
+            )
+            
+            logger.info(f"Validator info loaded: {validator_info.uid}")
+            
+            # --- Initialize validator node ---
+            node = ValidatorNode(
+                validator_info=validator_info,
+                aptos_client=aptos_client,
+                account=account,
+                contract_address=settings.APTOS_CONTRACT_ADDRESS
+            )
+            
+            # --- Run main loop ---
+            logger.info("Starting validator node main loop...")
+            await node.run()
+            
         except Exception as e:
-            logger.exception(f"Failed to initialize Cardano context: {e}")
-            return  # Thoát nếu không có context
-
-        # --- Load thông tin validator từ settings ---
-        validator_uid = settings.VALIDATOR_UID
-        validator_address = settings.VALIDATOR_ADDRESS
-        api_endpoint = settings.VALIDATOR_API_ENDPOINT
-        if not validator_uid or not validator_address or not api_endpoint:
-            logger.error(
-                "Validator UID, Address, or API Endpoint not configured in settings. Exiting."
-            )
+            logger.error(f"Error during Aptos context setup: {e}")
             return
-
-        if not ValidatorInfo or not ValidatorNode:
-            logger.error(
-                "Node classes (ValidatorInfo/ValidatorNode) not available. Exiting."
-            )
-            return
-
-        # --- Load signing key thực tế ---
-        signing_key: Optional[ExtendedSigningKey] = None
-        stake_signing_key: Optional[ExtendedSigningKey] = None
-        try:
-            logger.info("Attempting to load signing keys using decode_hotkey_skey...")
-            base_dir = settings.HOTKEY_BASE_DIR
-            coldkey_name = settings.COLDKEY_NAME
-            hotkey_name = settings.HOTKEY_NAME
-            password = settings.HOTKEY_PASSWORD  # Lưu ý bảo mật khi lấy password
-
-            # Gọi hàm decode để lấy ExtendedSigningKeys
-            payment_esk, stake_esk = decode_hotkey_skey(
-                base_dir=base_dir,
-                coldkey_name=coldkey_name,
-                hotkey_name=hotkey_name,
-                password=password,
-            )
-            signing_key = payment_esk  # type: ignore
-            stake_signing_key = stake_esk  # type: ignore
-
-            if not signing_key:
-                raise ValueError("Failed to load required payment signing key.")
-
-            logger.info(
-                f"Successfully loaded keys for hotkey '{hotkey_name}' under coldkey '{coldkey_name}'."
-            )
-
-        except FileNotFoundError as fnf_err:
-            logger.exception(
-                f"Failed to load signing keys: Hotkey file or directory not found. Details: {fnf_err}"
-            )
-            logger.error(
-                f"Please check settings: HOTKEY_BASE_DIR='{settings.HOTKEY_BASE_DIR}', COLDKEY_NAME='{settings.COLDKEY_NAME}', HOTKEY_NAME='{settings.HOTKEY_NAME}'. Exiting."
-            )
-            return
-        except Exception as key_err:
-            logger.exception(f"Failed to load/decode signing keys: {key_err}")
-            logger.error(
-                f"Could not load/decode keys. Check password or key files. Exiting."
-            )
-            return
-        # ---------------------------------
-
-        # Tạo ValidatorInfo từ settings
-        # Đảm bảo các giá trị mặc định hợp lý nếu cần
-        my_validator_info = ValidatorInfo(
-            uid=validator_uid,
-            address=validator_address,
-            api_endpoint=api_endpoint,
-            # Các trường khác như trust, weight, stake sẽ được cập nhật từ metagraph
-        )
-
-        # Tạo node validator với context và khóa thực tế
-        try:
-            validator_node = ValidatorNode(
-                validator_info=my_validator_info,
-                cardano_context=cardano_ctx,  # <<< Truyền context thực tế
-                signing_key=signing_key,  # <<< Truyền ExtendedSigningKey
-                stake_signing_key=stake_signing_key,  # <<< Truyền ExtendedSigningKey (hoặc None)
-            )
-        except Exception as node_init_err:
-            logger.exception(f"Failed to initialize ValidatorNode: {node_init_err}")
-            return
-
-        # --- Inject instance vào dependency của FastAPI ---
-        # Phần này quan trọng nếu bạn chạy vòng lặp này cùng với FastAPI server
-        try:
-            # Giả sử hàm này nằm trong module dependencies của app FastAPI
-            from sdk.network.app.dependencies import set_validator_node_instance
-
-            set_validator_node_instance(validator_node)
-            logger.info("Validator node instance injected into API dependency.")
-        except ImportError:
-            logger.warning(
-                "Could not import set_validator_node_instance. API dependencies might not work."
-            )
-        except Exception as e:
-            logger.error(f"Could not inject validator node into API dependency: {e}")
-
-        # --- Chạy vòng lặp chính ---
-        try:
-            # Chờ một chút để các dịch vụ khác (như FastAPI) có thể khởi động nếu cần
-            await asyncio.sleep(5)
-            while True:
-                # cycle_start_time = time.time()
-                await validator_node.run_cycle()
-                # cycle_duration = time.time() - cycle_start_time
-                # cycle_interval_seconds = (
-                #     settings.CONSENSUS_METAGRAPH_UPDATE_INTERVAL_MINUTES * 60
-                # )
-                # min_wait = settings.CONSENSUS_CYCLE_MIN_WAIT_SECONDS
-                # wait_time = max(min_wait, cycle_interval_seconds - cycle_duration)
-                # logger.info(
-                #     f"Cycle duration: {cycle_duration:.1f}s. Waiting {wait_time:.1f}s for next cycle..."
-                # )
-                # await asyncio.sleep(wait_time)
-        except asyncio.CancelledError:
-            logger.info("Main node loop cancelled.")
-        except Exception as e:
-            logger.exception(f"Exception in main node loop: {e}")
-        finally:
-            # Dọn dẹp tài nguyên khi vòng lặp kết thúc (ví dụ: đóng http client)
-            if hasattr(validator_node, "http_client") and validator_node.http_client:
-                await validator_node.http_client.aclose()
-            logger.info("Main node loop finished and resources cleaned up.")
-
-        if "node" in locals() and node:
-            await node.shutdown()
-
+            
     except Exception as e:
-        logger.exception(f"Critical setup error: {e}")
-        sys.exit(1)
-
-
-# Phần if __name__ == "__main__": giữ nguyên để có thể chạy file này trực tiếp
-if __name__ == "__main__":
-    try:
-        if settings:
-            asyncio.run(run_validator_node())
-        else:
-            print("Could not load settings. Aborting.")
-    except KeyboardInterrupt:
-        print("\nInterrupted by user.")
+        logger.error(f"Error setting up validator node: {e}")
+    finally:
+        # Clean up resources if necessary
+        if node and hasattr(node, "http_client"):
+            await node.http_client.aclose()
+        logger.info("Validator node shutdown complete.")

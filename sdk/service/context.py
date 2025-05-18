@@ -1,48 +1,44 @@
 # sdk/service/context.py
 
-from pycardano import BlockFrostChainContext, Network
+from aptos_sdk.async_client import RestClient
 from sdk.config.settings import settings, logger
 
 
-def get_chain_context(method="blockfrost"):
+async def get_aptos_context(network_type="testnet"):
     """
-    Returns a chain context object for interacting with the Cardano blockchain.
+    Returns a REST client for interacting with the Aptos blockchain.
 
-    Currently, only the "blockfrost" method is supported, which uses the
-    BlockFrostChainContext class from pycardano. The function is designed
-    to be extensible, so additional methods could be implemented in the future.
+    This function creates and configures an Aptos REST client to
+    connect to either testnet, devnet, or mainnet.
 
     Args:
-        method (str): The name of the method to use for chain context creation.
-                      Default is "blockfrost".
-        project_id (str): The Blockfrost project ID (API key).
-                          Required if method is "blockfrost".
-        network (Network): The Cardano network to connect to
-                           (MAINNET or TESTNET). Default is TESTNET.
+        network_type (str): The network to connect to: "testnet", "devnet",
+                        or "mainnet". Default is "testnet".
 
     Raises:
-        ValueError: If an unsupported method is specified.
+        ValueError: If an unsupported network type is specified.
 
     Returns:
-        BlockFrostChainContext: If method is "blockfrost", returns a context configured
-                                for the specified network.
+        RestClient: An Aptos REST client configured for the specified network.
     """
-    # For now, we only support using Blockfrost
-    if method == "blockfrost":
-        project_id = settings.BLOCKFROST_PROJECT_ID
-        network = "TESTNET"  # This is a pycardano.Network enum
-
-        # Determine the base URL depending on the network
-        if network == "MAINET":
-            base_url = "https://cardano-mainnet.blockfrost.io/api/"
-        else:
-            base_url = "https://cardano-preprod.blockfrost.io/api/"
-
-        logger.info(
-            f"Initializing BlockFrostChainContext with network={network}, project_id={project_id}"
-        )
-        return BlockFrostChainContext(
-            project_id=project_id, network=Network.TESTNET, base_url=base_url
-        )
+    # Determine the base URL depending on the network type
+    if network_type.lower() == "mainnet":
+        base_url = "https://fullnode.mainnet.aptoslabs.com/v1"
+    elif network_type.lower() == "testnet":
+        base_url = "https://fullnode.testnet.aptoslabs.com/v1"
+    elif network_type.lower() == "devnet":
+        base_url = "https://fullnode.devnet.aptoslabs.com/v1"
     else:
-        raise ValueError(f"Unsupported chain context method: {method}")
+        raise ValueError(f"Unsupported Aptos network type: {network_type}")
+
+    # Initialize the REST client with the appropriate base URL
+    client = RestClient(base_url)
+    
+    try:
+        # Test the connection by fetching the chain ID
+        chain_id = await client.chain_id()
+        logger.info(f"Connected to Aptos {network_type} (Chain ID: {chain_id})")
+        return client
+    except Exception as e:
+        logger.error(f"Failed to connect to Aptos {network_type}: {e}")
+        raise

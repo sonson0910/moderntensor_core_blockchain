@@ -10,15 +10,16 @@ import os  # Import os nếu dùng getenv
 # Import các thành phần cần thiết
 from .api.v1.routes import api_router
 from .dependencies import set_validator_node_instance
-from sdk.keymanager.decryption_utils import decode_hotkey_skey
+from sdk.keymanager.decryption_utils import decode_hotkey_account
 from sdk.consensus.node import ValidatorNode
 from sdk.core.datatypes import ValidatorInfo
 
 # Import settings (sẽ kích hoạt cấu hình logging trong settings.py)
 from sdk.config.settings import settings
-from sdk.service.context import get_chain_context
+from sdk.aptos_core.context import get_aptos_context
 
-from pycardano import ExtendedSigningKey
+# Replace pycardano import with Aptos SDK
+from aptos_sdk.account import Account
 from typing import Optional
 
 # Lấy logger đã được cấu hình trong settings.py
@@ -45,67 +46,60 @@ async def startup_event():
         try:
             # Lấy thông tin validator từ settings
             validator_uid = settings.VALIDATOR_UID or "V_DEFAULT_API"
-            validator_address = settings.VALIDATOR_ADDRESS or "addr_default_api..."
+            validator_address = settings.VALIDATOR_ADDRESS or "0x_default_api..."
             host = os.getenv("HOST", "127.0.0.1")
             port = settings.API_PORT
             api_endpoint = settings.VALIDATOR_API_ENDPOINT or f"http://{host}:{port}"
 
-            # --- KHỞI TẠO CONTEXT CARDANO ---
-            cardano_ctx = get_chain_context(
-                "blockfrost"
-            )  # Giả sử hàm này hoạt động đúng
-            if not cardano_ctx:
+            # --- KHỞI TẠO CONTEXT APTOS ---
+            aptos_ctx = get_aptos_context()  # Get Aptos context
+            if not aptos_ctx:
                 raise RuntimeError(
-                    "Node initialization failed: Could not initialize Cardano context."
+                    "Node initialization failed: Could not initialize Aptos context."
                 )
 
-            # --- LOAD SIGNING KEYS (SỬ DỤNG decode_hotkey_skey) ---
-            signing_key: Optional[ExtendedSigningKey] = None
-            stake_signing_key: Optional[ExtendedSigningKey] = None
+            # --- LOAD ACCOUNT (SỬ DỤNG decode_hotkey_account) ---
+            account: Optional[Account] = None
             try:
                 logger.info(
-                    "Attempting to load signing keys using decode_hotkey_skey..."
+                    "Attempting to load Aptos account using decode_hotkey_account..."
                 )
                 base_dir = settings.HOTKEY_BASE_DIR
                 coldkey_name = settings.COLDKEY_NAME
                 hotkey_name = settings.HOTKEY_NAME
                 password = settings.HOTKEY_PASSWORD  # Lưu ý bảo mật khi lấy password
 
-                # Gọi hàm decode để lấy ExtendedSigningKeys
-                payment_esk, stake_esk = decode_hotkey_skey(
+                # Gọi hàm decode để lấy Aptos Account
+                account = decode_hotkey_account(
                     base_dir=base_dir,
                     coldkey_name=coldkey_name,
                     hotkey_name=hotkey_name,
                     password=password,
                 )
 
-                # Gán trực tiếp kết quả vì ValidatorNode.__init__ đã nhận ExtendedSigningKey
-                signing_key = payment_esk  # type: ignore
-                stake_signing_key = stake_esk  # type: ignore
-
-                if not signing_key:
-                    # decode_hotkey_skey nên raise lỗi nếu thất bại, nhưng kiểm tra lại cho chắc
+                if not account:
+                    # decode_hotkey_account nên raise lỗi nếu thất bại, nhưng kiểm tra lại cho chắc
                     raise ValueError(
-                        "Failed to load required payment signing key (decode_hotkey_skey returned None)."
+                        "Failed to load required Aptos account (decode_hotkey_account returned None)."
                     )
 
                 logger.info(
-                    f"Successfully loaded keys for hotkey '{hotkey_name}' under coldkey '{coldkey_name}'."
+                    f"Successfully loaded account for hotkey '{hotkey_name}' under coldkey '{coldkey_name}'."
                 )
 
             except FileNotFoundError as fnf_err:
                 logger.exception(
-                    f"Failed to load signing keys: Hotkey file or directory not found. Details: {fnf_err}"
+                    f"Failed to load account: Hotkey file or directory not found. Details: {fnf_err}"
                 )
                 raise RuntimeError(
                     f"Node initialization failed: Hotkey file not found ({fnf_err}). Check HOTKEY_BASE_DIR, COLDKEY_NAME, HOTKEY_NAME settings."
                 ) from fnf_err
             except Exception as key_err:
-                logger.exception(f"Failed to load/decode signing keys: {key_err}")
+                logger.exception(f"Failed to load/decode account: {key_err}")
                 raise RuntimeError(
-                    f"Node initialization failed: Could not load/decode keys ({key_err}). Check password or key files."
+                    f"Node initialization failed: Could not load/decode account ({key_err}). Check password or key files."
                 ) from key_err
-            # --- KẾT THÚC LOAD KEYS ---
+            # --- KẾT THÚC LOAD ACCOUNT ---
 
             # Tạo ValidatorInfo
             my_validator_info = ValidatorInfo(
@@ -115,12 +109,11 @@ async def startup_event():
                 # Thêm các trường khác nếu cần
             )
 
-            # Khởi tạo ValidatorNode với ExtendedSigningKeys
+            # Khởi tạo ValidatorNode với Aptos Account
             main_validator_node_instance = ValidatorNode(
                 validator_info=my_validator_info,
-                cardano_context=cardano_ctx,
-                signing_key=signing_key,  # Truyền ExtendedSigningKey
-                stake_signing_key=stake_signing_key,  # Truyền ExtendedSigningKey (hoặc None)
+                aptos_context=aptos_ctx,
+                account=account,  # Pass Aptos Account
             )
 
             # Inject và chạy loop (giữ nguyên)

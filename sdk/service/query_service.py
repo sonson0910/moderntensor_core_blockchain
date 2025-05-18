@@ -1,67 +1,95 @@
 # sdk/node/cardano_service/query_service.py
 
-from typing import Dict
-from pycardano import Address, Value
+from typing import Dict, Any, Optional
+from aptos_sdk.async_client import RestClient
 
 from sdk.config.settings import logger
 
 
-def get_address_info(address_str: str, chain_context) -> Dict:
+async def get_account_info(address: str, client: RestClient) -> Dict[str, Any]:
     """
-    Retrieve information about a Cardano address, including:
-      - The total amount of lovelace (ADA) held at the address.
-      - The balances of any additional native tokens.
-      - The total number of UTxOs (unspent transaction outputs).
+    Retrieve information about an Aptos account, including:
+      - Account balance in APT
+      - Resources (on-chain data)
+      - Modules (Move modules published by the account)
 
     Args:
-        address_str (str): A bech32 or base58-encoded Cardano address.
-        chain_context: A chain context, such as a BlockFrostChainContext or OgmiOSChainContext,
-                       which provides methods to query UTxOs.
+        address (str): An Aptos account address (with or without 0x prefix)
+        client (RestClient): An initialized Aptos REST client
 
     Returns:
-        Dict: A dictionary containing:
+        Dict: A dictionary containing account information:
               {
-                "address": <the original address_str>,
-                "lovelace": <total ADA in lovelace>,
-                "tokens": {
-                    (policy_id, asset_name): amount,
-                    ...
-                },
-                "utxo_count": <number_of_utxos>
+                "address": <formatted address>,
+                "balance_apt": <balance in APT>,
+                "sequences_number": <sequence number>,
+                "resource_count": <number of resources>,
+                "module_count": <number of modules>
               }
     """
-    # Convert the address string into a pycardano Address object
-    address = Address.from_primitive(address_str)
+    # Ensure address has 0x prefix
+    if not address.startswith("0x"):
+        address = f"0x{address}"
 
-    # Query the UTxOs for the address using the provided chain_context
-    utxos = chain_context.utxos(address)
+    # Get account resources
+    try:
+        resources = await client.account_resources(address)
+    except Exception as e:
+        logger.error(f"Error fetching resources for account {address}: {e}")
+        resources = []
 
-    # Initialize counters for total lovelace and token balances
-    total_lovelace = 0
-    token_balances = {}
+    # Get account modules
+    try:
+        modules = await client.account_modules(address)
+    except Exception as e:
+        logger.error(f"Error fetching modules for account {address}: {e}")
+        modules = []
 
-    # Loop through each UTxO to aggregate lovelace and multi-asset tokens
-    for utxo in utxos:
-        val: Value = utxo.output.amount  # Represents coin + multi-asset
-        # Sum up the lovelace (ADA) amount
-        total_lovelace += val.coin
+    # Get APT coin balance
+    balance_apt = 0
+    for resource in resources:
+        if resource["type"] == "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>":
+            balance_apt = int(resource["data"]["coin"]["value"]) / 100_000_000  # Convert from octas to APT
+            break
 
-        # If this UTxO has multi-asset tokens, aggregate them into token_balances
-        if val.multi_asset:
-            for policy, asset_map in val.multi_asset.items():
-                for asset_name, amt in asset_map.items():
-                    key = (policy, asset_name)
-                    token_balances[key] = token_balances.get(key, 0) + amt
+    # Get sequence number
+    sequence_number = 0
+    account_data = await client.account(address)
+    if account_data:
+        sequence_number = int(account_data.get("sequence_number", 0))
 
-    # Prepare a dictionary with the summarized information
+    # Create result dictionary
     result = {
-        "address": address_str,
-        "lovelace": total_lovelace,
-        "tokens": token_balances,
-        "utxo_count": len(utxos),
+        "address": address,
+        "balance_apt": balance_apt,
+        "sequence_number": sequence_number,
+        "resource_count": len(resources),
+        "module_count": len(modules),
     }
 
-    # Log the result for debugging or informational purposes
-    logger.info(f"[get_address_info] {result}")
-
+    logger.info(f"[get_account_info] {result}")
     return result
+
+
+async def get_resource(address: str, resource_type: str, client: RestClient) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve a specific resource from an Aptos account
+
+    Args:
+        address (str): An Aptos account address
+        resource_type (str): The Move resource type to retrieve
+        client (RestClient): An initialized Aptos REST client
+
+    Returns:
+        Optional[Dict]: The resource data if found, None otherwise
+    """
+    # Ensure address has 0x prefix
+    if not address.startswith("0x"):
+        address = f"0x{address}"
+
+    try:
+        resource = await client.account_resource(address, resource_type)
+        return resource["data"] if resource else None
+    except Exception as e:
+        logger.warning(f"Resource {resource_type} not found for {address}: {e}")
+        return None

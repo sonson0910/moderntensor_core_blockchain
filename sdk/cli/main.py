@@ -12,6 +12,7 @@ from .wallet_cli import wallet_cli
 from .tx_cli import tx_cli
 from .query_cli import query_cli
 from .stake_cli import stake_cli
+from .metagraph_cli import metagraph_cli
 
 # from .metagraph_cli import metagraph_cli  # If you have
 
@@ -30,7 +31,7 @@ ASCII_ART = r"""
 """
 
 # Colorful scheme v2
-PROJECT_DESCRIPTION = """[bright_yellow]⭐ Moderntensor is a decentralized model training project built on the Cardano blockchain platform.
+PROJECT_DESCRIPTION = """[bright_yellow]⭐ Moderntensor is a decentralized model training project built on the Aptos blockchain platform.
 The project is developed by Vietnamese 🇻🇳  engineers from the Moderntensor Foundation.[/bright_yellow]"""
 REPO_URL = "https://github.com/sonson0910/moderntensor.git"  # Replace
 DOCS_URL = "https://github.com/sonson0910/moderntensor/blob/development_consensus/docs/WhitePaper.pdf"  # Replace
@@ -41,7 +42,7 @@ CONTRIBUTE_URL = f"https://github.com/sonson0910/moderntensor/blob/main/docs/REA
 @click.group(invoke_without_command=True)
 @click.pass_context  # Need context to check for subcommands
 def cli(ctx):
-    """ModernTensor CLI - Manage wallets, transactions, and subnets."""
+    """ModernTensor CLI - Manage wallets, transactions, and subnets on Aptos."""
 
     # Display splash screen only if no subcommand is invoked
     if ctx.invoked_subcommand is None:
@@ -92,7 +93,7 @@ cli.add_command(wallet_cli, name="w")
 cli.add_command(tx_cli, name="tx")
 cli.add_command(query_cli, name="query")
 cli.add_command(stake_cli, name="stake")
-# cli.add_command(metagraph_cli, name="metagraph")
+cli.add_command(metagraph_cli, name="metagraph")
 
 # If you want, you can place the original command here:
 # Remove the old version command if displaying version in splash screen

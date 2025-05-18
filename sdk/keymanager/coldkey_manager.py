@@ -7,15 +7,9 @@ from bip_utils import (
     Bip39Languages,
 )
 from cryptography.fernet import InvalidToken
-from pycardano import (
-    HDWallet,
-    Address,
-    Network,
-    ExtendedSigningKey,
-    ExtendedVerificationKey,
-)
+from aptos_sdk.account import Account
 from rich.console import Console
-from typing import cast
+from typing import cast, Optional
 
 from sdk.keymanager.encryption_utils import get_cipher_suite
 from sdk.config.settings import settings, logger
@@ -24,7 +18,7 @@ from sdk.config.settings import settings, logger
 class ColdKeyManager:
     """
     Manages the creation and loading of ColdKeys. A ColdKey typically stores a
-    mnemonic (encrypted on disk), and is used to derive an HDWallet.
+    mnemonic (encrypted on disk), and is used to derive an Aptos Account.
     """
 
     def __init__(self, base_dir: str = None):  # type: ignore
@@ -58,7 +52,7 @@ class ColdKeyManager:
         # Dictionary to store coldkeys that are loaded or newly created:
         # {
         #   "coldkey_name": {
-        #       "wallet": HDWallet_object,
+        #       "account": Account_object,
         #       "cipher_suite": Fernet_object,
         #       "hotkeys": {...}
         #   },
@@ -74,7 +68,7 @@ class ColdKeyManager:
           1. Checks whether the coldkey name already exists (in memory or on disk).
           2. Creates an encryption key (Fernet) derived from `password`.
           3. Generates a mnemonic, encrypts, and saves it to 'mnemonic.enc'.
-          4. Initializes a corresponding HDWallet.
+          4. Initializes a corresponding Aptos Account.
           5. Creates a 'hotkeys.json' file to store any future hotkeys.
           6. Stores the resulting data in self.coldkeys.
 
@@ -133,8 +127,8 @@ class ColdKeyManager:
         with open(enc_path, "wb") as f:
             f.write(cipher_suite.encrypt(mnemonic.encode("utf-8")))
 
-        # 4) Initialize an HDWallet from the generated mnemonic
-        hdwallet = HDWallet.from_mnemonic(mnemonic)
+        # 4) Initialize an Aptos Account from the generated mnemonic
+        account = Account.generate_from_mnemonic(mnemonic)
 
         # 5) Create an empty "hotkeys.json" file if it doesn't already exist
         hotkeys_path = os.path.join(coldkey_dir, "hotkeys.json")
@@ -144,7 +138,7 @@ class ColdKeyManager:
 
         # 6) Store the newly created coldkey data in memory
         self.coldkeys[name] = {
-            "wallet": hdwallet,
+            "account": account,
             "cipher_suite": cipher_suite,
             "hotkeys": {},
         }
@@ -156,31 +150,25 @@ class ColdKeyManager:
 
     def load_coldkey(self, name: str, password: str):
         """
-        Load an existing coldkey, derive its keys, and return key information.
-        Uses Extended Keys based on HotKeyManager pattern.
+        Load an existing coldkey, and return Aptos account information.
 
         Steps:
           1. Reads 'mnemonic.enc', 'salt.bin'.
           2. Decrypts the mnemonic using the provided password.
-          3. Initializes an HDWallet from the mnemonic.
-          4. Derives standard payment and stake *extended* key pairs (account 0, index 0).
-          5. Derives the standard base address using the *extended* verification key hashes.
-          6. Returns a dictionary containing essential extended keys and address.
+          3. Initializes an Aptos Account from the mnemonic.
+          4. Returns a dictionary containing essential account info.
 
         Args:
             name (str): The coldkey name (folder) to load.
             password (str): Password used to decrypt the mnemonic.
 
         Returns:
-            dict: A dictionary containing 'mnemonic', 'payment_xsk', 'stake_xsk',
-                  'payment_address', 'cipher_suite'.
+            dict: A dictionary containing 'mnemonic', 'account', 'address', 'cipher_suite'.
                   Returns None if loading or decryption fails.
         """
         console = Console()
         coldkey_dir = os.path.join(self.base_dir, name)
         mnemonic_path = os.path.join(coldkey_dir, "mnemonic.enc")
-        # hotkey_path seems unused in this revised logic, only for internal state update?
-        # hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
 
         if not os.path.exists(mnemonic_path):
             console.print(
@@ -194,39 +182,12 @@ class ColdKeyManager:
                 encrypted_mnemonic = f.read()
             mnemonic = cipher_suite.decrypt(encrypted_mnemonic).decode("utf-8")
 
-            hdwallet = HDWallet.from_mnemonic(mnemonic)
-
-            # --- Derive standard extended keys (Account 0, Address 0) ---
-            payment_path = "m/1852'/1815'/0'/0/0"
-            payment_child_wallet = hdwallet.derive_from_path(payment_path)
-            payment_xsk = ExtendedSigningKey.from_hdwallet(payment_child_wallet)
-            payment_xvk = payment_xsk.to_verification_key()
-
-            stake_path = "m/1852'/1815'/0'/2/0"
-            stake_child_wallet = hdwallet.derive_from_path(stake_path)
-            stake_xsk = ExtendedSigningKey.from_hdwallet(stake_child_wallet)
-            stake_xvk = stake_xsk.to_verification_key()
-
-            # --- Derive the base address using extended verification key hashes ---
-            network_obj = settings.CARDANO_NETWORK
-            if not isinstance(network_obj, Network):
-                if isinstance(network_obj, str) and network_obj.lower() == "testnet":
-                    network_obj = Network.TESTNET
-                elif isinstance(network_obj, str) and network_obj.lower() == "mainnet":
-                    network_obj = Network.MAINNET
-                else:
-                    logger.warning(
-                        f"Invalid network type in settings: {network_obj}. Defaulting to TESTNET."
-                    )
-                    network_obj = Network.TESTNET
-
-            payment_address = Address(
-                payment_part=payment_xvk.hash(),  # Use .hash() on XVK
-                staking_part=stake_xvk.hash(),  # Use .hash() on XVK
-                network=network_obj,
-            )
-            # --- End Derivation ---
-
+            # Create Aptos account from mnemonic
+            account = Account.generate_from_mnemonic(mnemonic)
+            address = account.address().hex()
+            if not address.startswith("0x"):
+                address = f"0x{address}"
+            
             # Update internal state (Optional - Load hotkeys if needed for other methods)
             hotkeys_data = {}
             hotkey_path = os.path.join(coldkey_dir, "hotkeys.json")
@@ -245,158 +206,123 @@ class ColdKeyManager:
                 hotkeys_data["hotkeys"] = {}
 
             self.coldkeys[name] = {
-                "wallet": hdwallet,
+                "account": account,
                 "cipher_suite": cipher_suite,
                 "hotkeys": hotkeys_data.get("hotkeys", {}),
             }
 
-            logger.info(
-                f":key: [bold blue]Cold Key '{name}' loaded and keys derived successfully.[/bold blue]"
-            )
-
-            # --- Return the derived extended keys and address ---
+            # Return loaded coldkey info
             return {
                 "mnemonic": mnemonic,
-                "payment_xsk": payment_xsk,
-                "stake_xsk": stake_xsk,
-                "payment_address": payment_address,
+                "account": account,
+                "address": address,
                 "cipher_suite": cipher_suite,
             }
-            # --- End Return ---
 
         except InvalidToken:
             console.print(
-                ":cross_mark: [bold red]Error:[/bold red] Invalid password: failed to decrypt mnemonic."
+                f":cross_mark: [bold red]Error:[/bold red] Invalid password for Cold Key '{name}'."
             )
+            logger.error(f"Invalid password used for Cold Key '{name}'.")
             return None
         except Exception as e:
-            logger.error(
-                f":cross_mark: [bold red]Error loading coldkey '{name}': {e}[/bold red]"
+            console.print(
+                f":cross_mark: [bold red]Error:[/bold red] Failed to load Cold Key '{name}': {e}"
             )
-            console.print_exception(show_locals=False)
+            logger.error(f"Error loading Cold Key '{name}': {e}")
             return None
 
     def restore_coldkey_from_mnemonic(
         self, name: str, mnemonic: str, new_password: str, force: bool = False
     ):
         """
-        Restores a coldkey from a mnemonic, creating the necessary files.
-
-        Steps:
-          1. Validate the provided mnemonic phrase.
-          2. Check if the coldkey directory already exists (handle `force` flag).
-          3. Create the directory if needed.
-          4. Get/Create a new salt.
-          5. Generate a cipher suite using the *new_password* and salt.
-          6. Encrypt the *mnemonic* and save to 'mnemonic.enc'.
-          7. Initialize HDWallet from the mnemonic.
-          8. Create an empty 'hotkeys.json'.
-          9. Store the restored coldkey data (wallet, cipher_suite, empty hotkeys) in memory.
+        Restores a coldkey from a provided mnemonic phrase.
 
         Args:
-            name (str): Name for the coldkey.
-            mnemonic (str): The mnemonic phrase.
-            new_password (str): The new password to encrypt the mnemonic.
-            force (bool): Overwrite if the coldkey directory exists.
+            name (str): Name to give the restored coldkey.
+            mnemonic (str): The mnemonic phrase to restore from.
+            new_password (str): Password to encrypt the coldkey.
+            force (bool): If True, overwrites an existing coldkey with the same name.
 
-        Raises:
-            Bip39InvalidMnemonicException: If the provided mnemonic is invalid.
-            FileExistsError: If the coldkey directory exists and force is False.
-            Exception: For other file operation errors.
+        Returns:
+            bool: True if restoration was successful, False otherwise.
         """
         console = Console()
 
-        # 1) Normalize and Validate mnemonic using HDWallet.from_mnemonic
-        try:
-            # Normalize: remove leading/trailing spaces, replace multiple spaces with single space
-            normalized_mnemonic = " ".join(mnemonic.strip().split())
-            print(
-                f"[DEBUG NORMALIZED MNEMONIC]: {normalized_mnemonic!r}"
-            )  # Debug normalized
-
-            # Initialize HDWallet - this implicitly validates the mnemonic
-            hdwallet = HDWallet.from_mnemonic(normalized_mnemonic)
-            logger.debug(
-                f"Mnemonic phrase for '{name}' passed validation via HDWallet initialization."
-            )
-
-        except (
-            ValueError
-        ) as e:  # HDWallet.from_mnemonic raises ValueError on invalid mnemonic
+        # Validate the mnemonic (basic check)
+        # This could be improved with actual mnemonic validation
+        if not mnemonic or len(mnemonic.split()) < 12:
             console.print(
-                f":cross_mark: [bold red]Error:[/bold red] The provided mnemonic phrase is invalid: {e}"
+                f":cross_mark: [bold red]Error:[/bold red] Invalid mnemonic phrase (too short or empty)."
             )
-            raise  # Re-raise the ValueError
+            return False
 
-        # --- Mnemonic is valid if we reach here ---
-
-        # 2) Check if directory exists
+        # Check if the coldkey already exists and handle accordingly
         coldkey_dir = os.path.join(self.base_dir, name)
-        if os.path.exists(coldkey_dir):
-            if force:
+        if os.path.exists(coldkey_dir) and not force:
+            console.print(
+                f":warning: [bold yellow]Warning:[/bold yellow] Coldkey '{name}' already exists."
+            )
+            user_input = input("Overwrite? (yes/no): ").strip().lower()
+            if user_input not in ["yes", "y"]:
                 console.print(
-                    f":warning: [yellow]Coldkey directory '{coldkey_dir}' already exists. Overwriting due to --force flag.[/yellow]"
+                    f":information_source: [bold blue]Info:[/bold blue] Restoration cancelled."
                 )
-                # We might need to remove existing files first, especially salt?
-                # Or let get_cipher_suite handle salt potentially
-            else:
-                raise FileExistsError(
-                    f"Coldkey directory '{coldkey_dir}' already exists. Use --force to overwrite."
-                )
-        else:
-            os.makedirs(coldkey_dir, exist_ok=True)
+                return False
 
-        # 3 & 4) Get/Create salt and cipher suite with NEW password
-        # If dir existed and force=True, this will reuse salt unless we delete it first.
-        # Let's explicitly remove old salt if overwriting.
-        salt_path = os.path.join(coldkey_dir, "salt.bin")
-        if force and os.path.exists(salt_path):
-            try:
-                os.remove(salt_path)
-                logger.debug(
-                    f":wastebasket: Removed existing salt file at {salt_path} during forced restore."
-                )
-            except OSError as e:
-                logger.error(
-                    f":cross_mark: [red]Failed to remove existing salt file {salt_path}: {e}. Proceeding might use old salt.[/red]"
-                )
-        # Now get_cipher_suite will generate a new salt if needed
+        # Create the coldkey directory if needed
+        os.makedirs(coldkey_dir, exist_ok=True)
+
+        # Create cipher suite
         cipher_suite = get_cipher_suite(new_password, coldkey_dir)
 
-        # 5) Encrypt and save the provided mnemonic
+        # Encrypt and save the mnemonic
         enc_path = os.path.join(coldkey_dir, "mnemonic.enc")
-        try:
-            with open(enc_path, "wb") as f:
-                f.write(cipher_suite.encrypt(normalized_mnemonic.encode("utf-8")))
-            logger.debug(f":lock: Encrypted and saved mnemonic to {enc_path}")
-        except OSError as e:
-            console.print(
-                f":cross_mark: [bold red]Error:[/bold red] Failed to write encrypted mnemonic to {enc_path}: {e}"
-            )
-            raise
+        with open(enc_path, "wb") as f:
+            f.write(cipher_suite.encrypt(mnemonic.encode("utf-8")))
 
-        # 7) Create/Overwrite 'hotkeys.json'
+        # Create Aptos account from mnemonic
+        try:
+            account = Account.generate_from_mnemonic(mnemonic)
+        except Exception as e:
+            console.print(
+                f":cross_mark: [bold red]Error:[/bold red] Failed to create Aptos account from mnemonic: {e}"
+            )
+            return False
+
+        # Create/reset hotkeys.json
         hotkeys_path = os.path.join(coldkey_dir, "hotkeys.json")
-        try:
-            with open(hotkeys_path, "w") as f:
-                json.dump({"hotkeys": {}}, f)  # Start with empty hotkeys
-            logger.debug(
-                f":page_facing_up: Created/overwrote empty hotkeys file at {hotkeys_path}"
-            )
-        except OSError as e:
-            console.print(
-                f":cross_mark: [bold red]Error:[/bold red] Failed to write hotkeys file to {hotkeys_path}: {e}"
-            )
-            # Continue? Or raise? Let's continue but log error.
-            logger.error(f"Could not create/overwrite hotkeys.json at {hotkeys_path}")
+        with open(hotkeys_path, "w") as f:
+            json.dump({"hotkeys": {}}, f)
 
-        # 8) Store the restored coldkey data in memory
+        # Update in-memory state
         self.coldkeys[name] = {
-            "wallet": hdwallet,
+            "account": account,
             "cipher_suite": cipher_suite,
             "hotkeys": {},
         }
 
         console.print(
-            f":heavy_check_mark: [bold green]Cold Key '{name}' restored successfully from mnemonic.[/bold green]"
+            f":heavy_check_mark: [bold green]Success:[/bold green] Coldkey '{name}' restored successfully."
         )
+        return True
+
+    def get_coldkey_address(self, name: str) -> Optional[str]:
+        """
+        Get the Aptos address for a coldkey.
+
+        Args:
+            name (str): Name of the coldkey.
+
+        Returns:
+            Optional[str]: The Aptos address, or None if the coldkey doesn't exist.
+        """
+        if name not in self.coldkeys:
+            return None
+
+        account = self.coldkeys[name]["account"]
+        address = account.address().hex()
+        if not address.startswith("0x"):
+            address = f"0x{address}"
+            
+        return address

@@ -2,9 +2,7 @@
 """
 Định nghĩa các cấu trúc dữ liệu cốt lõi dùng chung trong SDK Moderntensor.
 """
-from pycardano import (
-    PaymentVerificationKey,
-)  # Import ở đây để tránh circular dependency
+# Remove pycardano imports
 from typing import List, Dict, Any, Tuple, Optional
 from sdk.metagraph.metagraph_datum import STATUS_ACTIVE
 from dataclasses import dataclass, field
@@ -12,11 +10,8 @@ import time  # Thêm import time
 
 from pydantic import BaseModel, Field
 
-# --- Import PyCardano ---
-from pycardano import (
-    VerificationKeyHash,
-    PaymentVerificationKey,
-)  # Thêm PaymentVerificationKey nếu property dùng
+# --- Import Aptos SDK as needed ---
+# from aptos_sdk.account import Account  # Import if needed
 
 
 @dataclass
@@ -47,7 +42,7 @@ class ValidatorInfo:
     """Lưu trữ thông tin trạng thái của một Validator."""
 
     uid: str
-    address: str  # Địa chỉ ví Cardano
+    address: str  # Địa chỉ ví Aptos
     api_endpoint: Optional[str] = None
     trust_score: float = 0.0
     weight: float = 0.0  # W_v
@@ -60,15 +55,7 @@ class ValidatorInfo:
     performance_history: List[float] = field(default_factory=list)
     performance_history_hash: Optional[bytes] = None
 
-    # --- Có thể thêm property để dễ lấy vkey ---
-    @property
-    def payment_verification_key(self) -> Optional["PaymentVerificationKey"]:
-        """Trả về đối tượng PaymentVerificationKey nếu CBOR hex tồn tại."""
-        if self.payment_vkey_cbor_hex:  # type: ignore
-            import binascii
-
-            return PaymentVerificationKey.from_cbor(binascii.unhexlify(self.payment_vkey_cbor_hex))  # type: ignore
-        return None
+    # Remove pycardano property
 
 
 @dataclass
@@ -107,7 +94,7 @@ class ValidatorScore:
 
 # === Dán định nghĩa ScoreSubmissionPayload vào đây ===
 class ScoreSubmissionPayload(BaseModel):
-    """Dữ liệu điểm số gửi qua API, bao gồm VKey và chữ ký."""
+    """Dữ liệu điểm số gửi qua API, bao gồm thông tin xác thực."""
 
     # Sử dụng ValidatorScore từ định nghĩa ở trên
     scores: List[ValidatorScore] = Field(
@@ -117,9 +104,8 @@ class ScoreSubmissionPayload(BaseModel):
         ..., description="UID (dạng hex) của validator gửi điểm"
     )
     cycle: int = Field(..., description="Chu kỳ đồng thuận mà điểm số này thuộc về")
-    submitter_vkey_cbor_hex: Optional[str] = Field(
-        None, description="Payment Verification Key của người gửi (CBOR hex)"
-    )
+    # Remove Cardano-specific verification key
+    # Replace with Aptos public key if needed for verification
     signature: Optional[str] = Field(
         None,
         description="Chữ ký (dạng hex) của hash(canonical_json(scores)) để xác thực người gửi",

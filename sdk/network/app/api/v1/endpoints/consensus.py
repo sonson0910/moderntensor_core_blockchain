@@ -19,15 +19,11 @@ from sdk.network.app.dependencies import get_validator_node
 # from sdk.consensus.p2p import canonical_json_serialize
 from sdk.consensus.scoring import canonical_json_serialize
 
+# Replace PyCardano imports with Aptos SDK
+from aptos_sdk.account import Account
+from aptos_sdk.ed25519 import PublicKey
 
-# Import các kiểu PyCardano và PyNaCl
-from pycardano import (
-    Address,
-    VerificationKey,
-    PaymentVerificationKey,
-    VerificationKeyHash,
-    Network,
-)  # <<<--- Thêm Network
+# Keep or adapt the nacl imports for verification as needed
 import nacl.signing
 import nacl.exceptions
 
@@ -36,20 +32,20 @@ router = APIRouter(prefix="/consensus", tags=["Consensus P2P"])
 logger = logging.getLogger(__name__)
 
 
-# --- Hàm xác thực chữ ký (Đã sửa đổi và thêm logging) ---
+# --- Hàm xác thực chữ ký (Đã sửa đổi cho Aptos) ---
 async def verify_payload_signature(
     receiver_node: "ValidatorNode",  # Node đang nhận request
     payload: ScoreSubmissionPayload,  # Dữ liệu nhận được
 ) -> bool:
-    """Xác minh chữ ký và VKey trong payload nhận được từ một peer."""
+    """Xác minh chữ ký và Public Key trong payload nhận được từ một peer."""
     signature_hex = payload.signature
-    submitter_vkey_cbor_hex = payload.submitter_vkey_cbor_hex
+    submitter_public_key_hex = payload.submitter_public_key_hex
     scores_list_dict = payload.scores  # Đây là list các dict
     submitter_uid = payload.submitter_validator_uid  # UID của người gửi
 
-    if not signature_hex or not submitter_vkey_cbor_hex:
+    if not signature_hex or not submitter_public_key_hex:
         logger.warning(
-            f"SigVerifyFail (Receiver: {receiver_node.info.uid}, Sender: {submitter_uid}): Missing signature or VKey in payload."
+            f"SigVerifyFail (Receiver: {receiver_node.info.uid}, Sender: {submitter_uid}): Missing signature or public key in payload."
         )
         return False
 
@@ -61,138 +57,103 @@ async def verify_payload_signature(
         logger.warning(
             f"SigVerifyFail (Receiver: {receiver_node.info.uid}): Submitter validator {submitter_uid} not found in local state."
         )
-        # Có thể trả về False hoặc raise lỗi tùy thiết kế bảo mật
-        # Nếu không biết người gửi, không thể lấy địa chỉ để so sánh hash VKey
         return False  # Từ chối nếu không biết người gửi
 
     try:
-        # 1. Lấy Payment Key Hash dự kiến từ địa chỉ của người gửi đã biết
-        try:
-            submitter_address = Address.from_primitive(submitter_info.address)
-            payment_part = submitter_address.payment_part
-            if isinstance(payment_part, VerificationKeyHash):
-                expected_payment_hash: Optional[VerificationKeyHash] = payment_part
-                expected_hash_hex = expected_payment_hash.to_primitive().hex()
-                logger.debug(
-                    f"Expected payment hash from known address: {expected_hash_hex}"
-                )
-            else:
-                logger.warning(
-                    f"SigVerifyFail (Sender: {submitter_uid}): Known address '{submitter_info.address}' is not a base address (payment part is {type(payment_part).__name__})."
-                )
-                return False  # Cannot verify VKey against non-base address
-        except Exception as addr_e:
+        # 1. Lấy address dự kiến từ thông tin người gửi đã biết
+        submitter_address = submitter_info.address
+        if not submitter_address.startswith("0x"):
             logger.warning(
-                f"SigVerifyFail (Sender: {submitter_uid}): Error parsing known address '{submitter_info.address}': {addr_e}"
+                f"SigVerifyFail (Sender: {submitter_uid}): Expected Aptos address format starting with 0x, got {submitter_address}"
             )
             return False
 
-        # 2. Load Payment Verification Key gửi kèm trong payload
+        # 2. Load Public Key từ payload
         try:
-            vkey_cbor_bytes = binascii.unhexlify(submitter_vkey_cbor_hex)
-            received_payment_vkey = PaymentVerificationKey.from_cbor(vkey_cbor_bytes)
-            received_vk_bytes = received_payment_vkey.to_primitive()
-            if not isinstance(received_vk_bytes, bytes) or len(received_vk_bytes) != 32:
-                logger.warning(
-                    f"SigVerifyFail (Sender: {submitter_uid}): Decoded VKey primitive is not bytes or has unexpected length ({len(received_vk_bytes) if isinstance(received_vk_bytes, bytes) else type(received_vk_bytes).__name__})."
-                )
-                return False
+            public_key_bytes = binascii.unhexlify(submitter_public_key_hex)
+            # Create an Aptos SDK PublicKey object
+            received_public_key = PublicKey(public_key_bytes)
         except (binascii.Error, ValueError, TypeError) as key_load_e:
             logger.error(
-                f"SigVerifyFail (Sender: {submitter_uid}): Failed to load/decode VKey from CBOR hex '{submitter_vkey_cbor_hex[:10]}...': {key_load_e}"
+                f"SigVerifyFail (Sender: {submitter_uid}): Failed to load/decode public key from hex '{submitter_public_key_hex[:10]}...': {key_load_e}"
             )
             return False
         except Exception as e:
             logger.error(
-                f"SigVerifyFail (Sender: {submitter_uid}): Unexpected error processing received VKey: {e}"
+                f"SigVerifyFail (Sender: {submitter_uid}): Unexpected error processing received public key: {e}"
             )
             return False
 
-        # 3. Xác minh VKey: Hash của VKey nhận được phải khớp với hash từ địa chỉ đã biết
+        # 3. Xác minh Public Key: Tạo địa chỉ từ public key và so sánh với địa chỉ đã biết
         try:
-            received_vkey_hash: VerificationKeyHash = VerificationKeyHash(
-                received_vk_bytes
+            # Create an Account with the received public key to get its address
+            temp_account = Account(None, received_public_key)
+            received_address = "0x" + temp_account.address().hex()
+            
+            # Compare the address derived from the received public key with the known address
+            if received_address != submitter_address:
+                logger.warning(
+                    f"SigVerifyFail (Sender: {submitter_uid}): Address MISMATCH!"
+                )
+                logger.warning(
+                    f" -> Receiver expected address {submitter_address} (from metagraph)"
+                )
+                logger.warning(f" -> Derived address from public key is {received_address}")
+                return False
+                
+            logger.debug(
+                f"Submitter public key matches expected address from known validator info."
             )
-            received_hash_hex = received_vkey_hash.to_primitive().hex()
-            logger.debug(f"Received VKey hash: {received_hash_hex}")
-        except Exception as hash_e:
+        except Exception as addr_e:
             logger.error(
-                f"SigVerifyFail (Sender: {submitter_uid}): Failed to hash received VKey: {hash_e}"
+                f"SigVerifyFail (Sender: {submitter_uid}): Error verifying address from public key: {addr_e}"
             )
             return False
-
-        if received_vkey_hash != expected_payment_hash:
-            logger.warning(
-                f"SigVerifyFail (Sender: {submitter_uid}): VKey hash MISMATCH!"
-            )
-            logger.warning(
-                f" -> Receiver expected hash {expected_hash_hex} (derived from known address '{submitter_info.address}')"
-            )
-            logger.warning(f" -> Payload VKey hash is {received_hash_hex}")
-            logger.warning(
-                f" -> Ensure the address for {submitter_uid} is correct in the receiver's on-chain metagraph data."
-            )
-            return False
-        logger.debug(
-            f"Submitter VKey hash matches expected hash derived from known address."
-        )
 
         # 4. Xác minh Chữ ký
         try:
-            # >>> Use payload.scores directly, which is already List[ValidatorScore] <<<
+            # Serialize data to bytes for verification
             scores_objects_from_payload = payload.scores
-
+            
             # Check if the list of scores is empty after Pydantic parsing
             if not scores_objects_from_payload:
                 logger.warning(
                     f"SigVerifyFail (Sender: {submitter_uid}): Payload contained no valid score objects after Pydantic parsing."
                 )
-                # Depending on policy, maybe allow empty lists?
-                # If empty lists are disallowed for signing, return False.
-                # return False
-
-            # Serialize lại list đối tượng scores để có dữ liệu gốc đã ký
-            # canonical_json_serialize handles dataclasses directly
-            data_str_from_payload = canonical_json_serialize(
-                scores_objects_from_payload  # Pass the list of objects
-            )
+            
+            # Serialize the score objects to JSON string
+            data_str_from_payload = canonical_json_serialize(scores_objects_from_payload)
             data_to_verify_bytes = data_str_from_payload.encode("utf-8")
             signature_bytes = binascii.unhexlify(signature_hex)
+            
+            # Verify using Aptos SDK PublicKey's verify method
+            is_valid = received_public_key.verify(data_to_verify_bytes, signature_bytes)
+            
+            if is_valid:
+                logger.info(
+                    f"Signature verification SUCCESSFUL for payload from {submitter_uid}"
+                )
+            else:
+                logger.warning(
+                    f"SigVerifyFail (Sender: {submitter_uid}): Invalid signature. Data or signature mismatch."
+                )
+                logger.debug(
+                    f" - Data used for verification: {data_str_from_payload[:200]}..."
+                )
+                logger.debug(f" - Signature hex received: {signature_hex}")
 
-            # Tạo đối tượng VerifyKey của PyNaCl từ raw bytes của PaymentVerificationKey
-            nacl_verify_key = nacl.signing.VerifyKey(received_vk_bytes)  # type: ignore
+            return is_valid
 
-            # Thực hiện xác minh
-            nacl_verify_key.verify(
-                data_to_verify_bytes, signature_bytes
-            )  # Ném BadSignatureError nếu sai
-
-            is_valid = True
-            logger.info(
-                f"Signature verification SUCCESSFUL for payload from {submitter_uid}"
-            )
-
-        except nacl.exceptions.BadSignatureError:
-            is_valid = False
-            logger.warning(
-                f"SigVerifyFail (Sender: {submitter_uid}): Invalid signature (PyNaCl BadSignatureError). Data or signature mismatch."
-            )
-            logger.debug(
-                f" - Data used for verification: {data_str_from_payload[:200]}..."
-            )  # Log một phần dữ liệu
-            logger.debug(f" - Signature hex received: {signature_hex}")
         except binascii.Error:
             logger.error(
                 f"SigVerifyFail (Sender: {submitter_uid}): Invalid signature hex format."
             )
-            is_valid = False
+            return False
         except Exception as verify_e:
             logger.exception(
                 f"SigVerifyFail (Sender: {submitter_uid}): Error during signature verification step: {verify_e}"
             )
-            is_valid = False
-
-        return is_valid
+            return False
 
     except Exception as outer_e:
         logger.exception(
@@ -238,48 +199,30 @@ async def receive_scores(
             detail=f"Invalid cycle: {payload_cycle}. Current: {current_cycle}.",
         )
 
-    # --- Xác minh chữ ký và VKey ---
-    # Hàm verify_payload_signature đã lấy submitter_info từ state của node nhận (node)
+    # --- Xác minh chữ ký và Public Key ---
     if not await verify_payload_signature(node, payload):
         logger.warning(
-            f"API: Rejected scores from {submitter_uid} for cycle {payload_cycle} due to invalid signature/VKey."
+            f"API: Rejected scores from {submitter_uid} for cycle {payload_cycle} due to invalid signature/public key."
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid signature or verification key.",
+            detail="Invalid signature or public key.",
         )
-    logger.debug(
-        f"API: Signature verified for scores from {submitter_uid} for cycle {payload_cycle}"
-    )
 
-    # --- Thêm điểm số đã xác minh vào state của node ---
+    # --- Forward to broadcast (will be handled fully by node.handle_scores_submission) ---
     try:
-        # >>> Use payload.scores directly, which is already List[ValidatorScore] <<<
-        scores_objects = payload.scores
-
-        # Check if any scores were successfully parsed by Pydantic
-        if not scores_objects:
-            logger.info(
-                f"API: No valid score entries parsed from payload from {submitter_uid} to add."
-            )
-            # Return success but indicate nothing was added
-            return {
-                "message": f"Accepted payload from {submitter_uid} (no scores found/parsed)."
-            }
-
-        # Gọi phương thức của Node để thêm điểm (scores_objects is already List[ValidatorScore])
-        await node.add_received_score(submitter_uid, payload_cycle, scores_objects)
-        logger.info(
-            f"API: Successfully processed and stored {len(scores_objects)} scores from {submitter_uid} for cycle {payload_cycle}"
+        await node.handle_scores_submission(
+            submitter_uid, scores=payload.scores, cycle=payload_cycle
         )
-        return {
-            "message": f"Accepted {len(scores_objects)} scores from {submitter_uid} for cycle {payload_cycle}."
-        }
-    except Exception as e:  # Bắt lỗi chung khi thêm điểm
+        logger.info(
+            f"API: Successfully processed scores from {submitter_uid} for cycle {payload_cycle}"
+        )
+        return {"message": f"Accepted scores for cycle {payload_cycle}."}
+    except Exception as e:
         logger.exception(
-            f"API Error processing scores from {submitter_uid} after verification: {e}"
+            f"API: Error processing scores from {submitter_uid} for cycle {payload_cycle}: {e}"
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error processing scores: {e}",
+            detail=f"Server error processing scores submission: {str(e)}",
         )

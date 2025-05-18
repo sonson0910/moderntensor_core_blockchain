@@ -2,12 +2,20 @@
 import click
 from rich.console import Console
 from rich.panel import Panel
-from pycardano import Network, Address
-from blockfrost import ApiError
-from typing import Any
+from typing import Any, Optional
+import json
+import os
 
 from sdk.config.settings import settings, logger
-from sdk.service.stake_service import Wallet, StakingService
+from sdk.aptos import (
+    stake_tokens,
+    unstake_tokens,
+    claim_rewards,
+    get_staking_info
+)
+from aptos_sdk.account import Account, AccountAddress
+from aptos_sdk.async_client import RestClient
+import asyncio
 
 
 # ------------------------------------------------------------------------------
@@ -16,351 +24,325 @@ from sdk.service.stake_service import Wallet, StakingService
 @click.group()
 def stake_cli():
     """
-    🛡️ Commands for Cardano staking operations (delegation, withdrawal). 🛡️
+    🛡️ Commands for Aptos staking operations (stake, unstake, claim rewards). 🛡️
     """
     pass
 
 
-# Helper function to instantiate Wallet and StakingService
-def _get_stake_services(coldkey, hotkey, password, network_str, base_dir):
+# Helper function to load account from disk
+def _load_account(account_name: str, password: str, base_dir: str) -> Optional[Account]:
     console = Console()
     try:
-        # Network resolution is handled inside Wallet __init__ now
-        wallet = Wallet(coldkey_name=coldkey, hotkey_name=hotkey, password=password)
-        staking_service = StakingService(wallet)
-        console.print(
-            f"✅ Wallet loaded for [magenta]{coldkey}[/magenta]/[cyan]{hotkey}[/cyan]. Address: [blue]{wallet.main_address}[/blue]"
-        )
-        return wallet, staking_service
-    except FileNotFoundError as e:
-        console.print(
-            f":cross_mark: [bold red]Error:[/bold red] Coldkey '{coldkey}' not found at '{base_dir}'. Details: {e}"
-        )
-        return None, None
-    except ValueError as e:
-        # Catch errors from Wallet init (e.g., key decode fail)
-        console.print(
-            f":cross_mark: [bold red]Error initializing wallet:[/bold red] {e}"
-        )
-        return None, None
+        account_path = os.path.join(base_dir, f"{account_name}.json")
+        if not os.path.exists(account_path):
+            console.print(f"[bold red]Error:[/bold red] Account file {account_path} not found")
+            return None
+            
+        # In a real implementation, you would decrypt the account file with the password
+        # For now, we'll just load the account from disk
+        with open(account_path, "r") as f:
+            account_data = json.load(f)
+            # This is simplified - in a real implementation, you'd need to decrypt private keys
+            private_key_bytes = bytes.fromhex(account_data["private_key"])
+            account = Account.load(private_key_bytes)
+            console.print(f"✅ Account loaded: [blue]{account.address().hex()}[/blue]")
+            return account
     except Exception as e:
-        console.print(
-            f":cross_mark: [bold red]Unexpected error initializing wallet/service:[/bold red] {e}"
-        )
-        logger.exception("Wallet/StakingService initialization failed")
-        return None, None
+        console.print(f"[bold red]Error loading account:[/bold red] {e}")
+        logger.exception(f"Error loading account {account_name}")
+        return None
+
+
+# Helper function to get RestClient
+def _get_client(network: str) -> RestClient:
+    if network == "mainnet":
+        return RestClient("https://fullnode.mainnet.aptoslabs.com/v1")
+    elif network == "testnet":
+        return RestClient("https://fullnode.testnet.aptoslabs.com/v1")
+    elif network == "devnet":
+        return RestClient("https://fullnode.devnet.aptoslabs.com/v1")
+    else:
+        # Default to local node
+        return RestClient("http://localhost:8080/v1")
 
 
 # ------------------------------------------------------------------------------
-# DELEGATE STAKE COMMAND
+# STAKE TOKENS COMMAND
 # ------------------------------------------------------------------------------
-@stake_cli.command("delegate")
-@click.option("--coldkey", required=True, help="Coldkey name controlling the stake.")
-@click.option("--hotkey", required=True, help="Hotkey whose stake key will be used.")
-@click.option("--password", prompt=True, hide_input=True, help="Coldkey password.")
-@click.option("--pool-id", required=True, help="Bech32 or Hex Pool ID to delegate to.")
+@stake_cli.command("stake")
+@click.option("--account", required=True, help="Account name to use for staking.")
+@click.option("--password", prompt=True, hide_input=True, help="Account password.")
+@click.option("--amount", required=True, type=int, help="Amount to stake in octas (1 APT = 10^8 octas).")
+@click.option("--subnet-uid", type=int, help="Subnet ID to stake in (optional).")
+@click.option(
+    "--contract-address",
+    default=lambda: settings.APTOS_CONTRACT_ADDRESS,
+    help="ModernTensor contract address.",
+)
 @click.option(
     "--network",
-    default=lambda: (
-        "mainnet" if str(settings.CARDANO_NETWORK).lower() == "mainnet" else "testnet"
-    ),
-    type=click.Choice(["testnet", "mainnet"]),
-    help="Select Cardano network.",
+    default=lambda: settings.APTOS_NETWORK,
+    type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
+    help="Select Aptos network.",
 )
 @click.option(
     "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
-    help="Base directory where wallets reside.",
+    default=lambda: settings.ACCOUNT_BASE_DIR,
+    help="Base directory where account files reside.",
 )
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-def delegate_cmd(coldkey, hotkey, password, pool_id, network, base_dir, yes):
+def stake_cmd(account, password, amount, subnet_uid, contract_address, network, base_dir, yes):
     """
-    📜 Register stake key (if needed) and delegate to a stake pool.
+    📜 Stake tokens in the ModernTensor contract.
     """
     console = Console()
-    wallet, staking_service = _get_stake_services(
-        coldkey, hotkey, password, network, base_dir
-    )
-    if not wallet or not staking_service:
+    account_obj = _load_account(account, password, base_dir)
+    if not account_obj:
         return
 
-    if not wallet.stake_key_hash or not wallet.stake_sk:
-        console.print(
-            f":cross_mark: [bold red]Error:[/bold red] Hotkey '{hotkey}' does not seem to have an associated stake key."
-        )
-        return
-
-    console.print(
-        f"❓ Attempting to delegate stake from [cyan]{hotkey}[/cyan] (Stake Address: [blue]{wallet.stake_address}[/blue]) to Pool ID: [yellow]{pool_id}[/yellow]"
-    )
-
+    client = _get_client(network)
+    
+    # Display information about the stake
+    console.print(f"❓ Attempting to stake [yellow]{amount}[/yellow] octas from account [blue]{account_obj.address().hex()}[/blue]")
+    if subnet_uid is not None:
+        console.print(f"  Subnet: [cyan]{subnet_uid}[/cyan]")
+    
     if not yes:
         click.confirm("This will submit a transaction. Proceed?", abort=True)
-
-    console.print("⏳ Submitting delegation transaction...")
+    
+    console.print("⏳ Submitting staking transaction...")
     try:
-        tx_id = staking_service.delegate_stake(pool_id)
-        if tx_id:
-            console.print(
-                f":heavy_check_mark: [bold green]Delegation transaction submitted![/bold green]"
-            )
-            console.print(f"  Transaction ID: [bold blue]{tx_id}[/bold blue]")
+        # Call the stake_tokens function
+        tx_hash = asyncio.run(stake_tokens(
+            client=client,
+            account=account_obj,
+            contract_address=contract_address,
+            amount=amount,
+            subnet_uid=subnet_uid
+        ))
+        
+        if tx_hash:
+            console.print(f":heavy_check_mark: [bold green]Staking transaction submitted![/bold green]")
+            console.print(f"  Transaction hash: [bold blue]{tx_hash}[/bold blue]")
         else:
-            console.print(
-                ":cross_mark: [bold red]Delegation failed. Check logs for details.[/bold red]"
-            )
+            console.print(":cross_mark: [bold red]Staking failed. Check logs for details.[/bold red]")
     except Exception as e:
-        console.print(f":cross_mark: [bold red]Error during delegation:[/bold red] {e}")
-        logger.exception("Delegation command failed")
+        console.print(f":cross_mark: [bold red]Error during staking:[/bold red] {e}")
+        logger.exception("Staking command failed")
 
 
 # ------------------------------------------------------------------------------
-# RE-DELEGATE STAKE COMMAND
+# UNSTAKE TOKENS COMMAND
 # ------------------------------------------------------------------------------
-@stake_cli.command("redelegate")
-@click.option("--coldkey", required=True, help="Coldkey name controlling the stake.")
-@click.option("--hotkey", required=True, help="Hotkey whose stake key will be used.")
-@click.option("--password", prompt=True, hide_input=True, help="Coldkey password.")
-@click.option("--pool-id", required=True, help="Bech32 or Hex Pool ID of the NEW pool.")
+@stake_cli.command("unstake")
+@click.option("--account", required=True, help="Account name.")
+@click.option("--password", prompt=True, hide_input=True, help="Account password.")
+@click.option("--amount", required=True, type=int, help="Amount to unstake in octas (1 APT = 10^8 octas).")
+@click.option("--subnet-uid", type=int, help="Subnet ID to unstake from (optional).")
+@click.option(
+    "--contract-address",
+    default=lambda: settings.APTOS_CONTRACT_ADDRESS,
+    help="ModernTensor contract address.",
+)
 @click.option(
     "--network",
-    default=lambda: (
-        "mainnet" if str(settings.CARDANO_NETWORK).lower() == "mainnet" else "testnet"
-    ),
-    type=click.Choice(["testnet", "mainnet"]),
-    help="Select Cardano network.",
+    default=lambda: settings.APTOS_NETWORK,
+    type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
+    help="Select Aptos network.",
 )
 @click.option(
     "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
-    help="Base directory where wallets reside.",
+    default=lambda: settings.ACCOUNT_BASE_DIR,
+    help="Base directory where account files reside.",
 )
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-def redelegate_cmd(coldkey, hotkey, password, pool_id, network, base_dir, yes):
+def unstake_cmd(account, password, amount, subnet_uid, contract_address, network, base_dir, yes):
     """
-    🔁 Change delegation to a different stake pool.
+    🔙 Unstake tokens from the ModernTensor contract.
     """
     console = Console()
-    wallet, staking_service = _get_stake_services(
-        coldkey, hotkey, password, network, base_dir
-    )
-    if not wallet or not staking_service:
+    account_obj = _load_account(account, password, base_dir)
+    if not account_obj:
         return
 
-    if not wallet.stake_key_hash or not wallet.stake_sk:
-        console.print(
-            f":cross_mark: [bold red]Error:[/bold red] Hotkey '{hotkey}' does not seem to have an associated stake key."
-        )
-        return
-
-    console.print(
-        f"❓ Attempting to re-delegate stake from [cyan]{hotkey}[/cyan] to NEW Pool ID: [yellow]{pool_id}[/yellow]"
-    )
-
+    client = _get_client(network)
+    
+    # Display information about the unstake
+    console.print(f"❓ Attempting to unstake [yellow]{amount}[/yellow] octas from account [blue]{account_obj.address().hex()}[/blue]")
+    if subnet_uid is not None:
+        console.print(f"  Subnet: [cyan]{subnet_uid}[/cyan]")
+    
     if not yes:
         click.confirm("This will submit a transaction. Proceed?", abort=True)
-
-    console.print("⏳ Submitting re-delegation transaction...")
+    
+    console.print("⏳ Submitting unstaking transaction...")
     try:
-        tx_id = staking_service.re_delegate_stake(pool_id)
-        if tx_id:
-            console.print(
-                f":heavy_check_mark: [bold green]Re-delegation transaction submitted![/bold green]"
-            )
-            console.print(f"  Transaction ID: [bold blue]{tx_id}[/bold blue]")
+        # Call the unstake_tokens function
+        tx_hash = asyncio.run(unstake_tokens(
+            client=client,
+            account=account_obj,
+            contract_address=contract_address,
+            amount=amount,
+            subnet_uid=subnet_uid
+        ))
+        
+        if tx_hash:
+            console.print(f":heavy_check_mark: [bold green]Unstaking transaction submitted![/bold green]")
+            console.print(f"  Transaction hash: [bold blue]{tx_hash}[/bold blue]")
         else:
-            console.print(
-                ":cross_mark: [bold red]Re-delegation failed. Check logs for details.[/bold red]"
-            )
+            console.print(":cross_mark: [bold red]Unstaking failed. Check logs for details.[/bold red]")
     except Exception as e:
-        console.print(
-            f":cross_mark: [bold red]Error during re-delegation:[/bold red] {e}"
-        )
-        logger.exception("Re-delegation command failed")
+        console.print(f":cross_mark: [bold red]Error during unstaking:[/bold red] {e}")
+        logger.exception("Unstaking command failed")
 
 
 # ------------------------------------------------------------------------------
-# WITHDRAW REWARDS COMMAND
+# CLAIM REWARDS COMMAND
 # ------------------------------------------------------------------------------
-@stake_cli.command("withdraw")
-@click.option("--coldkey", required=True, help="Coldkey name controlling the stake.")
+@stake_cli.command("claim")
+@click.option("--account", required=True, help="Account name.")
+@click.option("--password", prompt=True, hide_input=True, help="Account password.")
+@click.option("--subnet-uid", type=int, help="Subnet ID to claim rewards from (optional).")
 @click.option(
-    "--hotkey", required=True, help="Hotkey whose stake address rewards to withdraw."
+    "--contract-address",
+    default=lambda: settings.APTOS_CONTRACT_ADDRESS,
+    help="ModernTensor contract address.",
 )
-@click.option("--password", prompt=True, hide_input=True, help="Coldkey password.")
 @click.option(
     "--network",
-    default=lambda: (
-        "mainnet" if str(settings.CARDANO_NETWORK).lower() == "mainnet" else "testnet"
-    ),
-    type=click.Choice(["testnet", "mainnet"]),
-    help="Select Cardano network.",
+    default=lambda: settings.APTOS_NETWORK,
+    type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
+    help="Select Aptos network.",
 )
 @click.option(
     "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
-    help="Base directory where wallets reside.",
+    default=lambda: settings.ACCOUNT_BASE_DIR,
+    help="Base directory where account files reside.",
 )
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-def withdraw_cmd(coldkey, hotkey, password, network, base_dir, yes):
+def claim_cmd(account, password, subnet_uid, contract_address, network, base_dir, yes):
     """
-    💸 Withdraw available staking rewards to the main wallet address.
+    💰 Claim staking rewards from the ModernTensor contract.
     """
     console = Console()
-    wallet, staking_service = _get_stake_services(
-        coldkey, hotkey, password, network, base_dir
-    )
-    if not wallet or not staking_service:
+    account_obj = _load_account(account, password, base_dir)
+    if not account_obj:
         return
 
-    if not wallet.stake_address:
-        console.print(
-            f":cross_mark: [bold red]Error:[/bold red] Hotkey '{hotkey}' does not seem to have an associated stake address."
-        )
-        return
-
-    console.print(
-        f"❓ Attempting to withdraw staking rewards for stake address: [blue]{wallet.stake_address}[/blue]"
-    )
-    try:
-        account_info_any: Any = wallet.api.accounts(str(wallet.stake_address))
-        reward_amount = int(getattr(account_info_any, "withdrawable_amount", 0))
-        console.print(
-            f"  Available Rewards: [yellow]{reward_amount / 1_000_000:.6f} ADA[/yellow] ({reward_amount:,} Lovelace)"
-        )
-        if reward_amount == 0:
-            console.print(":information_source: No rewards available to withdraw.")
-            return
-    except ApiError as e:
-        if e.status_code == 404:
-            console.print(
-                f":information_source: Stake address {wallet.stake_address} not found on the blockchain or no reward history."
-            )
-            return
-        else:
-            console.print(
-                f":cross_mark: [bold red]API Error checking rewards:[/bold red] Status {e.status_code} - {e.message}"
-            )
-            return
-    except Exception as e:
-        console.print(f":cross_mark: [bold red]Error checking rewards:[/bold red] {e}")
-        logger.exception("Reward check failed before withdrawal")
-        return
-
+    client = _get_client(network)
+    
+    # Display information about the claim
+    console.print(f"❓ Attempting to claim rewards for account [blue]{account_obj.address().hex()}[/blue]")
+    if subnet_uid is not None:
+        console.print(f"  Subnet: [cyan]{subnet_uid}[/cyan]")
+    
     if not yes:
-        click.confirm(
-            f"Withdraw {reward_amount / 1_000_000:.6f} ADA rewards? This will submit a transaction.",
-            abort=True,
-        )
-
-    console.print("⏳ Submitting withdrawal transaction...")
+        click.confirm("This will submit a transaction. Proceed?", abort=True)
+    
+    console.print("⏳ Submitting claim transaction...")
     try:
-        tx_id = staking_service.withdrawal_reward()
-        if tx_id:
-            console.print(
-                f":heavy_check_mark: [bold green]Withdrawal transaction submitted![/bold green]"
-            )
-            console.print(f"  Transaction ID: [bold blue]{tx_id}[/bold blue]")
+        # Call the claim_rewards function
+        tx_hash = asyncio.run(claim_rewards(
+            client=client,
+            account=account_obj,
+            contract_address=contract_address,
+            subnet_uid=subnet_uid
+        ))
+        
+        if tx_hash:
+            console.print(f":heavy_check_mark: [bold green]Claim transaction submitted![/bold green]")
+            console.print(f"  Transaction hash: [bold blue]{tx_hash}[/bold blue]")
         else:
-            console.print(
-                ":cross_mark: [bold red]Withdrawal failed unexpectedly. Check logs.[/bold red]"
-            )
+            console.print(":cross_mark: [bold red]Claim failed. Check logs for details.[/bold red]")
     except Exception as e:
-        console.print(f":cross_mark: [bold red]Error during withdrawal:[/bold red] {e}")
-        logger.exception("Withdrawal command failed")
+        console.print(f":cross_mark: [bold red]Error during claim:[/bold red] {e}")
+        logger.exception("Claim command failed")
 
 
 # ------------------------------------------------------------------------------
-# STAKE INFO COMMAND
+# STAKING INFO COMMAND
 # ------------------------------------------------------------------------------
 @stake_cli.command("info")
-@click.option("--coldkey", required=True, help="Coldkey name.")
-@click.option("--hotkey", required=True, help="Hotkey whose staking info to show.")
-@click.option("--password", prompt=True, hide_input=True, help="Coldkey password.")
+@click.option("--account", required=True, help="Account name.")
+@click.option("--address", help="Alternative address to check (instead of account).")
+@click.option("--subnet-uid", type=int, help="Subnet ID to get info from (optional).")
+@click.option(
+    "--contract-address",
+    default=lambda: settings.APTOS_CONTRACT_ADDRESS,
+    help="ModernTensor contract address.",
+)
 @click.option(
     "--network",
-    default=lambda: (
-        "mainnet" if str(settings.CARDANO_NETWORK).lower() == "mainnet" else "testnet"
-    ),
-    type=click.Choice(["testnet", "mainnet"]),
-    help="Select Cardano network.",
+    default=lambda: settings.APTOS_NETWORK,
+    type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
+    help="Select Aptos network.",
 )
 @click.option(
     "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
-    help="Base directory where wallets reside.",
+    default=lambda: settings.ACCOUNT_BASE_DIR,
+    help="Base directory where account files reside.",
 )
-def info_cmd(coldkey, hotkey, password, network, base_dir):
+def info_cmd(account, address, subnet_uid, contract_address, network, base_dir):
     """
-    ℹ️  Show current staking status (delegation, rewards) for a hotkey.
+    ℹ️ Display staking information for an account.
     """
     console = Console()
-    wallet, _ = _get_stake_services(coldkey, hotkey, password, network, base_dir)
-    if not wallet:
-        return
-
-    if not wallet.stake_address:
-        console.print(
-            f":cross_mark: [bold red]Error:[/bold red] Hotkey '{hotkey}' does not seem to have an associated stake address."
-        )
-        return
-
-    console.print(
-        f"🔍 Querying staking info for stake address: [blue]{wallet.stake_address}[/blue]"
-    )
-
+    client = _get_client(network)
+    
+    # Determine the address to check
+    query_address = None
+    if address:
+        query_address = address
+    else:
+        # Load account only to get the address
+        account_path = os.path.join(base_dir, f"{account}.json")
+        if not os.path.exists(account_path):
+            console.print(f"[bold red]Error:[/bold red] Account file {account_path} not found")
+            return
+            
+        try:
+            with open(account_path, "r") as f:
+                account_data = json.load(f)
+                query_address = account_data.get("address")
+                if not query_address:
+                    console.print(f"[bold red]Error:[/bold red] Could not determine address from account file")
+                    return
+        except Exception as e:
+            console.print(f"[bold red]Error loading account:[/bold red] {e}")
+            return
+    
+    console.print(f"⏳ Fetching staking info for address [blue]{query_address}[/blue]...")
+    if subnet_uid is not None:
+        console.print(f"  Subnet: [cyan]{subnet_uid}[/cyan]")
+    
     try:
-        account_info_any: Any = wallet.api.accounts(str(wallet.stake_address))
-
-        pool_id = getattr(account_info_any, "pool_id", None)
-        rewards = int(getattr(account_info_any, "withdrawable_amount", 0))
-        active = getattr(account_info_any, "active", False)
-
-        content = f"[bold]Stake Address:[/bold] [blue]{wallet.stake_address}[/blue]\n"
-        content += f"[bold]Active:[/bold] {'[bold green]Yes[/bold green]' if active else '[dim]No[/dim]'}\n"
-        content += f"[bold]Available Rewards:[/bold] [yellow]{rewards / 1_000_000:.6f} ADA[/yellow] ({rewards:,} Lovelace)\n"
-
-        if pool_id:
-            content += f"[bold]Delegated Pool ID:[/bold] [yellow]{pool_id}[/yellow]\n"
-            try:
-                pool_info = wallet.api.pools(pool_id) # type: ignore
-                ticker = getattr(pool_info, "ticker", "N/A")
-                name = getattr(pool_info, "name", "N/A")
-                content += f"  Pool Ticker: [cyan]{ticker}[/cyan]\n"
-                content += f"  Pool Name:   [cyan]{name}[/cyan]\n"
-            except ApiError as pool_err:
-                if pool_err.status_code != 404:
-                    logger.warning(
-                        f"Could not fetch details for pool {pool_id}: {pool_err.message}"
-                    )
-                content += "  (Could not fetch pool details)\n"
-            except Exception as pool_err_gen:
-                logger.warning(
-                    f"Error fetching details for pool {pool_id}: {pool_err_gen}"
-                )
-                content += "  (Error fetching pool details)\n"
+        # Call the get_staking_info function
+        info = asyncio.run(get_staking_info(
+            client=client,
+            account_address=query_address,
+            contract_address=contract_address,
+            subnet_uid=subnet_uid
+        ))
+        
+        if info:
+            # Create a nice panel with the info
+            info_text = [
+                f"[bold]Staked Amount:[/bold] [yellow]{info['staked_amount'] / 100_000_000:.8f}[/yellow] APT",
+                f"[bold]Pending Rewards:[/bold] [green]{info['pending_rewards'] / 100_000_000:.8f}[/green] APT",
+                f"[bold]Staking Period:[/bold] {info['staking_period']} seconds",
+                f"[bold]Last Claim:[/bold] {info['last_claim_time']} seconds ago"
+            ]
+            
+            if subnet_uid is not None:
+                info_text.append(f"[bold]Subnet:[/bold] [cyan]{subnet_uid}[/cyan]")
+            
+            console.print(Panel(
+                "\n".join(info_text),
+                title=f"[bold]Staking Info for {query_address}[/bold]",
+                border_style="blue"
+            ))
         else:
-            content += "[bold]Delegated Pool ID:[/bold] [dim]Not Delegated[/dim]\n"
-
-        console.print(
-            Panel(
-                content,
-                title=f"Staking Info for {coldkey}/{hotkey}",
-                border_style="blue",
-            )
-        )
-
-    except ApiError as e:
-        if e.status_code == 404:
-            console.print(
-                f":information_source: Stake address {wallet.stake_address} not found on the blockchain or no history."
-            )
-        else:
-            console.print(
-                f":cross_mark: [bold red]API Error querying staking info:[/bold red] Status {e.status_code} - {e.message}"
-            )
+            console.print("[bold yellow]No staking information found for this address[/bold yellow]")
     except Exception as e:
-        console.print(
-            f":cross_mark: [bold red]Error querying staking info:[/bold red] {e}"
-        )
-        logger.exception("Staking info query failed")
+        console.print(f"[bold red]Error retrieving staking info:[/bold red] {e}")
+        logger.exception("Info command failed")
