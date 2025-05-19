@@ -257,16 +257,67 @@ async def test_view_function_call(aptos_client, test_account):
         print(f"\nKiểm tra tài khoản test:")
         try:
             resources = await aptos_client.account_resources(test_account.address())
+            
+            # Kiểm tra CoinStore (hệ thống cũ)
             coin_found = False
             for resource in resources:
                 if resource["type"] == "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>":
                     balance = int(resource["data"]["coin"]["value"])
-                    print(f"Số dư tài khoản test: {balance/100_000_000} APT")
+                    print(f"Số dư tài khoản test (CoinStore): {balance/100_000_000} APT")
                     coin_found = True
                     break
             
             if not coin_found:
-                print("Tài khoản test chưa có coin resource")
+                print("Tài khoản test không có CoinStore resource, kiểm tra FungibleStore...")
+                
+                # Kiểm tra FungibleStore (hệ thống mới)
+                try:
+                    # Sử dụng FungibleStore đã biết
+                    store_address = "0x441e7a4984f621e9ece9747ac2ffe530e135a9ac6f60886ddb452dae5632ee27"
+                    store_resources = await aptos_client.account_resources(AccountAddress.from_str(store_address))
+                    
+                    for resource in store_resources:
+                        if "0x1::fungible_asset::FungibleStore" in resource["type"]:
+                            fungible_balance = int(resource["data"]["balance"])
+                            print(f"Số dư tài khoản test (FungibleStore): {fungible_balance/100_000_000} APT")
+                            
+                            # Kiểm tra metadata
+                            if "metadata" in resource["data"]:
+                                print(f"Metadata: {resource['data']['metadata']}")
+                            coin_found = True
+                            break
+                    
+                    # Xác minh quyền sở hữu
+                    if coin_found:
+                        for resource in store_resources:
+                            if "0x1::object::ObjectCore" in resource["type"]:
+                                owner = resource["data"]["owner"]
+                                if str(test_account.address()) == owner:
+                                    print(f"Xác nhận quyền sở hữu: {test_account.address()} sở hữu FungibleStore")
+                                else:
+                                    print(f"CẢNH BÁO: Không phải chủ sở hữu FungibleStore")
+                except Exception as store_error:
+                    print(f"Lỗi khi kiểm tra FungibleStore: {store_error}")
+            
+            # Thử dùng view function để kiểm tra số dư
+            try:
+                print("\nKiểm tra bằng view function:")
+                
+                # Thử với fungible_asset::balance
+                fungible_payload = {
+                    "function": "0x1::fungible_asset::balance",
+                    "type_arguments": [],
+                    "arguments": [store_address]
+                }
+                
+                response = await aptos_client.client.post(f"{aptos_client.base_url}/view", json=fungible_payload)
+                if response.status_code == 200:
+                    balance_result = response.json()
+                    print(f"Số dư từ view function: {int(balance_result)/100_000_000} APT")
+                else:
+                    print(f"Không thể kiểm tra số dư bằng view function: {response.text}")
+            except Exception as view_error:
+                print(f"Lỗi khi sử dụng view function: {view_error}")
             
             # Đọc thông tin account resource
             try:
@@ -274,7 +325,8 @@ async def test_view_function_call(aptos_client, test_account):
                     test_account.address(),
                     "0x1::account::Account"
                 )
-                print(f"Authentication key: {account_resource['data']['authentication_key']}")
+                print(f"\nAuthentication key: {account_resource['data']['authentication_key']}")
+                print(f"Sequence number: {account_resource['data']['sequence_number']}")
             except Exception as e:
                 print(f"Không thể lấy account resource: {str(e)}")
             
@@ -283,12 +335,24 @@ async def test_view_function_call(aptos_client, test_account):
         
         # Lấy các transactions gần nhất
         try:
-            transactions = await aptos_client.client.get(f"{aptos_client.base_url}/transactions")
+            transactions = await aptos_client.client.get(f"{aptos_client.base_url}/transactions?limit=5")
             if transactions.status_code == 200:
                 txns = transactions.json()
                 print(f"\nSố lượng transactions gần nhất: {len(txns)}")
                 if txns:
                     print(f"Transaction gần nhất: Hash={txns[0].get('hash', 'N/A')}, Type={txns[0].get('type', 'N/A')}")
+                    
+                    # Kiểm tra giao dịch gần đây của tài khoản
+                    account_txns = await aptos_client.client.get(
+                        f"{aptos_client.base_url}/accounts/{test_account.address()}/transactions?limit=3"
+                    )
+                    if account_txns.status_code == 200:
+                        account_txns_data = account_txns.json()
+                        if account_txns_data:
+                            print(f"\nGiao dịch gần đây của tài khoản:")
+                            for i, txn in enumerate(account_txns_data[:3]):
+                                print(f"  {i+1}. Hash: {txn.get('hash', 'N/A')}")
+                                print(f"     Thời gian: {txn.get('timestamp', 'N/A')}")
         except Exception as e:
             print(f"\nKhông thể lấy transactions: {str(e)}")
 
