@@ -1,5 +1,7 @@
 # sdk/cli/main.py
 
+#!/usr/bin/env python3
+
 import click
 import logging
 import importlib.metadata
@@ -8,11 +10,11 @@ from rich.panel import Panel
 from rich.text import Text
 from rich import box
 
-from .wallet_cli import wallet_cli
-from .tx_cli import tx_cli
-from .query_cli import query_cli
-from .stake_cli import stake_cli
-from .metagraph_cli import metagraph_cli
+from sdk.cli.wallet_cli import aptosctl as wallet_cli
+from sdk.cli.query_cli import query_cli
+from sdk.cli.tx_cli import tx_cli
+from sdk.cli.metagraph_cli import metagraph_cli
+from sdk.cli.stake_cli import stake_cli
 
 # from .metagraph_cli import metagraph_cli  # If you have
 
@@ -38,62 +40,42 @@ DOCS_URL = "https://github.com/sonson0910/moderntensor/blob/development_consensu
 CHAT_URL = "https://t.me/+pDRlNXTi1wY2NTY1"  # Replace
 CONTRIBUTE_URL = f"https://github.com/sonson0910/moderntensor/blob/main/docs/README.md"  # Adjust if needed
 
+# Create the main CLI group
+@click.group()
+def aptosctl():
+    """
+    🗳️ Aptos Control Tool - A command line interface for managing Aptos accounts and operations. 🗳️
+    """
+    pass
 
-@click.group(invoke_without_command=True)
-@click.pass_context  # Need context to check for subcommands
-def cli(ctx):
-    """ModernTensor CLI - Manage wallets, transactions, and subnets on Aptos."""
+# Add all subcommands
+aptosctl.add_command(wallet_cli)
+aptosctl.add_command(query_cli)
+aptosctl.add_command(tx_cli)
+aptosctl.add_command(metagraph_cli)
+aptosctl.add_command(stake_cli)
 
-    # Display splash screen only if no subcommand is invoked
-    if ctx.invoked_subcommand is None:
-        console = Console()
+@aptosctl.command()
+def version():
+    """Show version information."""
+    console = Console()
+    console.print(Panel.fit(
+        "[bold cyan]Aptos Control Tool[/bold cyan]\n"
+        "Version: 0.1.0\n"
+        "A command line interface for managing Aptos accounts and operations",
+        title="About",
+        border_style="cyan"
+    ))
 
-        try:
-            version = importlib.metadata.version(
-                "moderntensor"
-            )  # Replace 'moderntensor' if package name is different
-        except importlib.metadata.PackageNotFoundError:
-            version = "[yellow]unknown[/yellow]"
-
-        info_text = Text.assemble(
-            ("🐙 repo:       ", "bold blue"),
-            (REPO_URL, "link " + REPO_URL),
-            "\n",
-            ("📚 docs:       ", "bold green"),
-            (DOCS_URL, "link " + DOCS_URL),
-            "\n",
-            ("💬 chat:       ", "bold magenta"),
-            (CHAT_URL, "link " + CHAT_URL),
-            "\n",
-            ("✨ contribute: ", "bold yellow"),
-            (CONTRIBUTE_URL, "link " + CONTRIBUTE_URL),
-            "\n",
-            ("📦 version:    ", "bold cyan"),
-            (version, "yellow"),
-        )
-
-        console.print(f"[bold bright_white]{ASCII_ART}[/bold bright_white]", justify="center")
-        console.print(PROJECT_DESCRIPTION, justify="center")
-        console.print(" ")  # Spacer
-        console.print(
-            Panel(
-                info_text,
-                title="[bold bright_yellow on bright_red] Project Links [/]",
-                border_style="bright_yellow",
-                box=box.HEAVY,
-                padding=(1, 2),
-            )
-        )
-        console.print(" ")  # Spacer
-        ctx.exit()  # Exit after showing splash screen
-
+if __name__ == '__main__':
+    aptosctl()
 
 # Thêm group con:
-cli.add_command(wallet_cli, name="w")
-cli.add_command(tx_cli, name="tx")
-cli.add_command(query_cli, name="query")
-cli.add_command(stake_cli, name="stake")
-cli.add_command(metagraph_cli, name="metagraph")
+# cli.add_command(wallet_cli, name="w")
+# cli.add_command(tx_cli, name="tx")
+# cli.add_command(query_cli, name="query")
+# cli.add_command(stake_cli, name="stake")
+# cli.add_command(metagraph_cli, name="metagraph")
 
 # If you want, you can place the original command here:
 # Remove the old version command if displaying version in splash screen

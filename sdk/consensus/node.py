@@ -18,6 +18,11 @@ from typing import List, Dict, Any, Tuple, Optional, Set
 from collections import defaultdict, OrderedDict
 import logging
 import string
+import psutil
+import uvicorn
+from ..monitoring.health import app as health_app
+from ..monitoring.circuit_breaker import CircuitBreaker
+from ..monitoring.rate_limiter import RateLimiter
 
 # --- Import Settings ---
 from sdk.config.settings import settings
@@ -81,6 +86,9 @@ from .state import (
 # --- Logging ---
 logger = logging.getLogger(__name__)
 
+# --- Import metrics ---
+from ..monitoring.metrics import metrics
+
 
 class ValidatorNode:
     """
@@ -114,6 +122,8 @@ class ValidatorNode:
         http_client (httpx.AsyncClient): Async HTTP client for P2P communication.
         script_hash (ScriptHash): Script hash of the validator contract.
         script_bytes (bytes): Script bytes of the validator contract.
+        metrics (Metrics): Metrics object for monitoring node performance.
+        health_server (uvicorn.Server): Health check server instance.
     """
 
     def __init__(
@@ -156,6 +166,8 @@ class ValidatorNode:
         self.contract_address = contract_address
         self.settings = settings
         self.state_file = state_file
+        self.metrics = metrics
+        self.metrics.update_memory_usage(psutil.Process().memory_info().rss)
         # Use DEBUG for file path setting
         logger.debug(f"{init_prefix} State file set to: {self.state_file}")
         self.miners_selected_for_cycle = set()
@@ -198,6 +210,18 @@ class ValidatorNode:
         logger.info(f"{init_prefix} Validator node initialized with UID: {self.info.uid}")
         logger.info(f"{init_prefix} Connected to Aptos network with contract: {self.contract_address}")
         logger.info(f"{init_prefix} Starting at cycle: {self.current_cycle}")
+
+        self.health_server = None
+
+        # Initialize circuit breaker and rate limiter
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=self.settings.CIRCUIT_BREAKER_FAILURE_THRESHOLD or 5,
+            reset_timeout=self.settings.CIRCUIT_BREAKER_RESET_TIMEOUT or 60
+        )
+        self.rate_limiter = RateLimiter(
+            max_requests=self.settings.RATE_LIMITER_MAX_REQUESTS or 100,
+            time_window=self.settings.RATE_LIMITER_TIME_WINDOW or 60
+        )
 
     def _load_last_cycle(self) -> int:
         """Loads the last completed cycle number from the state file."""
@@ -362,7 +386,7 @@ class ValidatorNode:
             f"[V:{self.info.uid}] Đang tải dữ liệu từ Aptos blockchain cho chu kỳ {self.current_cycle}..."
         )
         start_time = time.time()
-        
+
         # Lưu trữ trạng thái miners và validators trước đó để so sánh
         previous_miners_info = self.miners_info.copy()
         previous_validators_info = self.validators_info.copy()
@@ -1193,9 +1217,6 @@ class ValidatorNode:
         """
         Lấy giá trị slot hiện tại dựa trên timestamp của block Aptos mới nhất.
         
-        Trong Aptos, không có khái niệm "slot" như trong Cardano, do đó chúng ta 
-        sử dụng timestamp của block để tính toán giá trị tương đương.
-        
         Returns:
             Optional[int]: Giá trị slot tương đương, None nếu có lỗi.
         """
@@ -1205,7 +1226,6 @@ class ValidatorNode:
                 return None
                 
             # Tính slot giả lập dựa trên timestamp (1 slot = 1 giây)
-            # Có thể điều chỉnh tỷ lệ này dựa theo nhu cầu của ứng dụng
             slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH or 1  # seconds per slot
             estimated_slot = timestamp // slot_length
             
@@ -1259,77 +1279,58 @@ class ValidatorNode:
             )
             await asyncio.sleep(wait_interval)
 
-    async def _send_task_via_network_async(
-        self, miner_endpoint: str, task: TaskModel
-    ) -> bool:
-        """
-        Sends a task asynchronously via network POST request to the miner's endpoint.
+    async def _send_task_via_network_async(self, miner_endpoint: str, task: TaskModel) -> bool:
+        """Send task via network asynchronously with circuit breaker and rate limiting"""
+        start_time = time.time()
+        
+        # Check rate limit
+        if not await self.rate_limiter.acquire():
+            logger.warning(f"Rate limit exceeded for sending task to {miner_endpoint}")
+            return False
+            
+        try:
+            # Use circuit breaker for network call
+            result = await self.circuit_breaker.execute(
+                self._send_task_implementation,
+                miner_endpoint,
+                task
+            )
+            
+            self.metrics.record_task_send(True)
+            self.metrics.record_network_latency('task_send', time.time() - start_time)
+            return result
+            
+        except Exception as e:
+            self.metrics.record_task_send(False)
+            self.metrics.record_error('network')
+            raise
 
-        Args:
-            miner_endpoint (str): The miner's API endpoint URL (including http/https).
-            task (TaskModel): The TaskModel object containing task details.
-
-        Returns:
-            bool: True if the task was sent successfully (HTTP 2xx status), False otherwise.
-        """
+    async def _send_task_implementation(self, miner_endpoint: str, task: TaskModel) -> bool:
+        """Actual implementation of task sending"""
         if not miner_endpoint or not miner_endpoint.startswith(("http://", "https://")):
             logger.warning(
                 f"Invalid or missing API endpoint for miner: {miner_endpoint} in task {getattr(task, 'task_id', 'N/A')}"
             )
             return False
 
-        # TODO: Xác định đường dẫn endpoint chính xác trên miner node để nhận task
-        # Endpoint này cần được thống nhất giữa validator và miner.
-        target_url = f"{miner_endpoint}/receive-task"  # <<<--- GIẢ ĐỊNH ENDPOINT
+        target_url = f"{miner_endpoint}/receive-task"
+        timeout = self.settings.HTTP_CLIENT_TIMEOUT or 30.0
 
-        try:
-            # Serialize task data thành JSON
-            # Sử dụng model_dump nếu TaskModel là Pydantic v2, ngược lại dùng dict()
-            task_payload = (
-                task.model_dump(mode="json")
-                if hasattr(task, "model_dump")
-                else task.dict()
-            )
+        task_payload = (
+            task.model_dump(mode="json")
+            if hasattr(task, "model_dump")
+            else task.dict()
+        )
 
-            logger.debug(f"Sending task {task.task_id} to {target_url}")
-            # --- Gửi request POST bằng httpx ---
-            response = await self.http_client.post(target_url, json=task_payload)
+        logger.debug(f"Sending task {task.task_id} to {target_url} with timeout {timeout}s")
+        response = await self.http_client.post(
+            target_url, 
+            json=task_payload,
+            timeout=timeout
+        )
 
-            # Kiểm tra HTTP status code
-            response.raise_for_status()  # Ném exception nếu là 4xx hoặc 5xx
-
-            try:
-                response_data = response.json()
-                logger.info(
-                    f"Successfully sent task {task.task_id} to {miner_endpoint}. Miner Response: {response_data}"
-                )
-            except json.JSONDecodeError:
-                logger.info(
-                    f"Successfully sent task {task.task_id} to {miner_endpoint}. Status: {response.status_code} (Non-JSON response)"
-                )
-
-            # TODO: Có thể cần xử lý nội dung response nếu miner trả về thông tin xác nhận
-            # Ví dụ: data = response.json()
-            return True
-
-        except httpx.RequestError as e:
-            # Lỗi kết nối mạng, DNS, timeout,...
-            logger.error(
-                f"Network error sending task {getattr(task, 'task_id', 'N/A')} to {target_url}: {e}"
-            )
-            return False
-        except httpx.HTTPStatusError as e:
-            # Lỗi từ phía server miner (4xx, 5xx)
-            logger.error(
-                f"HTTP error sending task {getattr(task, 'task_id', 'N/A')} to {target_url}: Status {e.response.status_code} - Response: {e.response.text[:200]}"
-            )
-            return False
-        except Exception as e:
-            # Các lỗi khác (ví dụ: serialization,...)
-            logger.exception(
-                f"Unexpected error sending task {getattr(task, 'task_id', 'N/A')} to {target_url}: {e}"
-            )
-            return False
+        response.raise_for_status()
+        return True
 
     async def send_task_and_track(self, miners: List[MinerInfo]):
         """
@@ -1807,51 +1808,238 @@ class ValidatorNode:
                         # Vẫn tiếp tục kiểm tra các task khác trong lần lặp này
 
     async def _get_current_block_timestamp(self) -> Optional[int]:
-        """
-        Lấy timestamp của block mới nhất từ blockchain Aptos.
-        
-        Returns:
-            Optional[int]: Timestamp Unix của block mới nhất, None nếu có lỗi.
-        """
-        retries = 3
-        for attempt in range(retries):
+        """Get current block timestamp with circuit breaker protection"""
+        try:
+            return await self.circuit_breaker.execute(
+                self._get_block_timestamp_implementation
+            )
+        except Exception as e:
+            logger.error(f"Failed to get block timestamp: {e}")
+            return None
+
+    async def _get_block_timestamp_implementation(self) -> Optional[int]:
+        """Actual implementation of getting block timestamp"""
+        max_retries = self.settings.CONSENSUS_MAX_RETRIES or 3
+        retry_delay = self.settings.CONSENSUS_RETRY_DELAY_SECONDS or 2
+
+        for attempt in range(max_retries):
             try:
-                # Lấy thông tin block mới nhất từ Aptos
+                logger.debug(f"Attempt {attempt + 1}/{max_retries} to fetch latest block timestamp")
                 ledger_info = await self.client.get_ledger_information()
+                
                 if ledger_info and "timestamp" in ledger_info:
-                    return int(ledger_info["timestamp"]) // 1000  # Chuyển từ microseconds sang seconds
-                else:
-                    logger.warning(
-                        f"Attempt {attempt + 1}: Không thể lấy thông tin timestamp từ ledger_info."
-                    )
+                    timestamp = int(ledger_info["timestamp"]) // 1000
+                    logger.debug(f"Successfully fetched block timestamp: {timestamp}")
+                    return timestamp
+                    
+                logger.warning(f"Attempt {attempt + 1}: Invalid ledger info format: {ledger_info}")
+                
             except Exception as e:
-                logger.warning(
-                    f"Attempt {attempt + 1}: Error fetching latest block info: {e}"
-                )
-            if attempt < retries - 1:
-                await asyncio.sleep(2)  # Chờ 2 giây trước khi thử lại
-        logger.error("Không lấy được thông tin block sau nhiều lần thử.")
+                logger.warning(f"Attempt {attempt + 1}: Error fetching latest block info: {e}")
+                
+            if attempt < max_retries - 1:
+                wait_time = retry_delay * (attempt + 1)
+                logger.info(f"Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+                
+        logger.error(f"Failed to fetch block timestamp after {max_retries} attempts")
         return None
 
+    async def _process_task(self, task):
+        """Process received task with improved error handling and metrics"""
+        start_time = time.time()
+        try:
+            # Validate task
+            if not self._validate_task(task):
+                raise ValueError("Invalid task format")
+                
+            # Process task with timeout
+            async with asyncio.timeout(self.settings.TASK_PROCESSING_TIMEOUT):
+                result = await self._process_task_logic(task)
+                
+            # Record metrics
+            processing_time = time.time() - start_time
+            self.metrics.record_task_processing('validation', processing_time)
+            
+            return result
+            
+        except asyncio.TimeoutError:
+            self.metrics.record_error('timeout')
+            raise
+        except Exception as e:
+            self.metrics.record_error('validation')
+            raise
+
+    def _validate_task(self, task) -> bool:
+        """Validate task format and content"""
+        try:
+            if not hasattr(task, 'task_id') or not task.task_id:
+                return False
+                
+            if not hasattr(task, 'task_data') or not task.task_data:
+                return False
+                
+            # Add more validation as needed
+            return True
+            
+        except Exception:
+            return False
+
+    async def _receive_task_via_network_async(self):
+        """Receive task via network asynchronously"""
+        start_time = time.time()
+        try:
+            # Get task from network
+            task = await self._get_task_from_network()  # Implement this method based on your network protocol
+            self.metrics.record_task_receive('success')
+            self.metrics.record_network_latency('task_receive', time.time() - start_time)
+            return task
+        except TimeoutError:
+            self.metrics.record_task_receive('timeout')
+            self.metrics.record_error('network')
+            raise
+        except Exception as e:
+            self.metrics.record_task_receive('invalid')
+            self.metrics.record_error('network')
+            raise
+
+    async def _update_metagraph(self):
+        """Update metagraph data"""
+        try:
+            # Load latest metagraph data
+            await self.load_metagraph_data()
+            
+            # Update active nodes count
+            active_miners = len([m for m in self.miners_info.values() if m.status == STATUS_ACTIVE])
+            active_validators = len([v for v in self.validators_info.values() if v.status == STATUS_ACTIVE])
+            
+            self.metrics.update_active_nodes(active_miners, active_validators)
+            logger.info(f"Updated metagraph: {active_miners} active miners, {active_validators} active validators")
+        except Exception as e:
+            self.metrics.record_error('consensus')
+            raise
+
+    async def start_health_server(self):
+        """Start the health check server"""
+        config = uvicorn.Config(
+            health_app,
+            host="0.0.0.0",
+            port=8000,
+            log_level="info"
+        )
+        self.health_server = uvicorn.Server(config)
+        await self.health_server.serve()
+
+    async def run(self):
+        """Run the validator node with improved error handling"""
+        # Start health check server
+        await self.start_health_server()
+        
+        while True:
+            self.metrics.start_consensus_cycle()
+            try:
+                # Update last cycle time
+                self.last_cycle_time = time.time()
+                
+                # Update metagraph data with circuit breaker
+                await self.circuit_breaker.execute(self._update_metagraph)
+                
+                # Get current slot with circuit breaker
+                current_slot = await self._get_current_block_timestamp()
+                if current_slot is None:
+                    logger.error("Failed to get current slot, retrying in 5 seconds...")
+                    await asyncio.sleep(5)
+                    continue
+                
+                # Select miners for this cycle
+                selected_miners = self.select_miners()
+                if not selected_miners:
+                    logger.warning("No miners selected for this cycle")
+                    await asyncio.sleep(self.settings.CONSENSUS_CYCLE_SLOT_LENGTH)
+                    continue
+                
+                # Send tasks to selected miners with rate limiting
+                await self.send_task_and_track(selected_miners)
+                
+                # Wait for results
+                await self.receive_results()
+                
+                # Score results
+                self.score_miner_results()
+                
+                # Broadcast scores with rate limiting
+                await self.broadcast_scores(self.validator_scores)
+                
+                # Wait for consensus
+                await self.wait_for_consensus_scores(self.settings.CONSENSUS_SCORE_WAIT_TIMEOUT)
+                
+                # Update memory usage
+                self.metrics.update_memory_usage(psutil.Process().memory_info().rss)
+                
+                # Wait for next cycle
+                await asyncio.sleep(self.settings.CONSENSUS_CYCLE_SLOT_LENGTH)
+                
+            except Exception as e:
+                self.metrics.record_error('consensus')
+                logger.error(f"Error in consensus cycle: {e}")
+                await asyncio.sleep(5)  # Wait before retrying
+            finally:
+                self.metrics.end_consensus_cycle()
+
 async def run_validator_node():
-    """
-    Sets up the necessary components and runs the Validator Node main loop with Aptos.
-
-    Performs the following setup steps:
-    1. Loads application settings
-    2. Initializes the Aptos client and account
-    3. Constructs the ValidatorInfo object
-    4. Initializes the ValidatorNode instance
-    5. Starts the node's main execution loop
-
-    Includes error handling for setup failures and the main run loop.
-    """
     node = None
     try:
-        # --- Setup ---
+        # --- Validate Settings ---
         logger.info("Setting up Validator Node with Aptos...")
         if not settings:
-            logger.error("Settings not loaded. Exiting.")
+            logger.error("Critical error: Settings not loaded. Please check your configuration file.")
+            return
+
+        # Validate required settings
+        required_settings = {
+            'APTOS_NODE_URL': settings.APTOS_NODE_URL,
+            'APTOS_PRIVATE_KEY': settings.APTOS_PRIVATE_KEY,
+            'APTOS_CONTRACT_ADDRESS': settings.APTOS_CONTRACT_ADDRESS,
+            'VALIDATOR_API_ENDPOINT': settings.VALIDATOR_API_ENDPOINT,
+            'HTTP_CLIENT_TIMEOUT': settings.HTTP_CLIENT_TIMEOUT,
+            'HTTP_CLIENT_MAX_CONNECTIONS': settings.HTTP_CLIENT_MAX_CONNECTIONS,
+            'CONSENSUS_CYCLE_SLOT_LENGTH': settings.CONSENSUS_CYCLE_SLOT_LENGTH,
+            'CONSENSUS_MAX_RETRIES': settings.CONSENSUS_MAX_RETRIES,
+            'CONSENSUS_RETRY_DELAY_SECONDS': settings.CONSENSUS_RETRY_DELAY_SECONDS
+        }
+
+        missing_settings = [key for key, value in required_settings.items() if value is None]
+        if missing_settings:
+            logger.error(f"Missing required settings: {', '.join(missing_settings)}")
+            return
+
+        # Validate settings format
+        if not settings.APTOS_NODE_URL.startswith(('http://', 'https://')):
+            logger.error("APTOS_NODE_URL must be a valid HTTP(S) URL")
+            return
+
+        if not settings.APTOS_CONTRACT_ADDRESS.startswith('0x'):
+            logger.error("APTOS_CONTRACT_ADDRESS must start with '0x'")
+            return
+
+        if not settings.VALIDATOR_API_ENDPOINT.startswith(('http://', 'https://')):
+            logger.error("VALIDATOR_API_ENDPOINT must be a valid HTTP(S) URL")
+            return
+
+        # Validate numeric settings
+        try:
+            if settings.HTTP_CLIENT_TIMEOUT <= 0:
+                raise ValueError("HTTP_CLIENT_TIMEOUT must be positive")
+            if settings.HTTP_CLIENT_MAX_CONNECTIONS <= 0:
+                raise ValueError("HTTP_CLIENT_MAX_CONNECTIONS must be positive")
+            if settings.CONSENSUS_CYCLE_SLOT_LENGTH <= 0:
+                raise ValueError("CONSENSUS_CYCLE_SLOT_LENGTH must be positive")
+            if settings.CONSENSUS_MAX_RETRIES <= 0:
+                raise ValueError("CONSENSUS_MAX_RETRIES must be positive")
+            if settings.CONSENSUS_RETRY_DELAY_SECONDS <= 0:
+                raise ValueError("CONSENSUS_RETRY_DELAY_SECONDS must be positive")
+        except ValueError as e:
+            logger.error(f"Invalid numeric setting: {str(e)}")
             return
 
         # --- Initialize Aptos context ---
@@ -1865,7 +2053,11 @@ async def run_validator_node():
                 contract_address=settings.APTOS_CONTRACT_ADDRESS
             )
             
-            logger.info(f"Connected to Aptos network with address: {account.address()}")
+            if not contract_client or not aptos_client or not account:
+                logger.error("Failed to initialize Aptos context: One or more required components are missing")
+                return
+                
+            logger.info(f"Successfully connected to Aptos network with address: {account.address()}")
             
             # --- Get validator info ---
             from sdk.aptos_core.validator_helper import get_validator_info
@@ -1882,7 +2074,10 @@ async def run_validator_node():
             )
             
             if not validator_data:
-                logger.error(f"Could not retrieve validator data for {validator_address}. Exiting.")
+                logger.error(
+                    f"Failed to retrieve validator data for address {validator_address}. "
+                    "Please ensure you are registered as a validator on the network."
+                )
                 return
                 
             # Construct ValidatorInfo object
@@ -1894,7 +2089,11 @@ async def run_validator_node():
                 api_endpoint=settings.VALIDATOR_API_ENDPOINT
             )
             
-            logger.info(f"Validator info loaded: {validator_info.uid}")
+            if not validator_info.uid:
+                logger.error("Invalid validator UID received from network. Please check your registration status.")
+                return
+                
+            logger.info(f"Successfully loaded validator info: UID={validator_info.uid}, Address={validator_address}")
             
             # --- Initialize validator node ---
             node = ValidatorNode(
@@ -1909,13 +2108,22 @@ async def run_validator_node():
             await node.run()
             
         except Exception as e:
-            logger.error(f"Error during Aptos context setup: {e}")
+            logger.error(
+                f"Error during Aptos context setup: {str(e)}\n"
+                "Please check your network connection and configuration settings."
+            )
             return
-            
     except Exception as e:
-        logger.error(f"Error setting up validator node: {e}")
+        logger.error(
+            f"Critical error during validator node setup: {str(e)}\n"
+            "Please check the logs for more details and ensure all required components are properly configured."
+        )
     finally:
         # Clean up resources if necessary
         if node and hasattr(node, "http_client"):
-            await node.http_client.aclose()
+            try:
+                await node.http_client.aclose()
+                logger.info("Successfully closed HTTP client connection")
+            except Exception as e:
+                logger.error(f"Error closing HTTP client: {str(e)}")
         logger.info("Validator node shutdown complete.")

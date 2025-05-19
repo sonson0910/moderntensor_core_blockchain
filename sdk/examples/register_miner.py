@@ -12,10 +12,10 @@ import argparse
 from getpass import getpass
 
 # Add the parent directory to sys.path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from keymanager import AccountKeyManager
-from aptos_core import ModernTensorClient
+from sdk.keymanager import AccountKeyManager
+from sdk.aptos_core import ModernTensorClient
 
 from aptos_sdk.client import RestClient
 

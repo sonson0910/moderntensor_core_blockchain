@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, AsyncMock  # Dùng để mock context/async
 import hashlib  # Thêm hashlib
 from pytest_mock import MockerFixture
 from sdk.smartcontract.validator import read_validator
+from aptos_sdk.account import AccountAddress
 
 # --- Import các thành phần cần test ---
 from sdk.consensus.state import (
@@ -238,9 +239,6 @@ def convert_datum_to_dict(datum: ValidatorDatum) -> dict:
     return d
 
 
-# ---------------------------
-
-
 # --- Đăng ký custom mark 'logic' (Thêm vào conftest.py hoặc đầu file) ---
 def pytest_configure(config):
     config.addinivalue_line("markers", "logic: mark test as logic test")
@@ -256,15 +254,14 @@ def mock_context(mocker: MockerFixture) -> MagicMock:
 
 
 @pytest.fixture
-def cardano_params() -> Tuple[ScriptHash, Network]:
+def aptos_params() -> Tuple[AccountAddress, str]:
     try:
         from sdk.smartcontract.validator import read_validator
-
-        script_hash = read_validator()["script_hash"]
+        contract_address = read_validator()["contract_address"]
     except Exception:
-        script_hash = ScriptHash(os.urandom(28))  # Placeholder
-    network = Network.TESTNET
-    return script_hash, network
+        contract_address = AccountAddress.random()  # Placeholder
+    network = "testnet"
+    return contract_address, network
 
 
 @pytest.mark.logic
@@ -629,10 +626,10 @@ def test_calculate_fraud_severity(
 async def test_verify_penalize_all_correct(
     mocker: MockerFixture,
     mock_context: MagicMock,
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
 ):
     """Kiểm tra trường hợp tất cả validator commit đúng trạng thái."""
-    script_hash, network = cardano_params
+    contract_address, network = aptos_params
     current_cycle = 101
     previous_cycle = 100
     divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
@@ -685,12 +682,12 @@ async def test_verify_penalize_all_correct(
         validators_info=validators_info_input,
         context=mock_context,
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         network=network,
     )
 
     # 5. Assertions
-    mock_get_data.assert_awaited_once_with(mock_context, script_hash, network)
+    mock_get_data.assert_awaited_once_with(mock_context, contract_address, network)
     assert not penalized_datums
     assert validators_info_input == validators_info_before
 
@@ -699,10 +696,10 @@ async def test_verify_penalize_all_correct(
 async def test_verify_penalize_minor_deviation(
     mocker: MockerFixture,
     mock_context: MagicMock,
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
 ):
     """Kiểm tra trường hợp sai lệch nhỏ (chỉ phạt trust)."""
-    script_hash, network = cardano_params
+    contract_address, network = aptos_params
     current_cycle = 102
     previous_cycle = 101
     divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
@@ -748,7 +745,7 @@ async def test_verify_penalize_minor_deviation(
         validators_info=validators_info_input,
         context=mock_context,
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         network=network,
     )
 
@@ -776,10 +773,10 @@ async def test_verify_penalize_minor_deviation(
 async def test_verify_penalize_severe_deviation_jailed(
     mocker: MockerFixture,
     mock_context: MagicMock,
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
 ):
     """Kiểm tra trường hợp sai lệch lớn dẫn đến JAILED."""
-    script_hash, network = cardano_params
+    contract_address, network = aptos_params
     current_cycle = 103
     previous_cycle = 102
     divisor = settings.METAGRAPH_DATUM_INT_DIVISOR
@@ -827,7 +824,7 @@ async def test_verify_penalize_severe_deviation_jailed(
         validators_info=validators_info_input,
         context=mock_context,
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         network=network,
     )
 
@@ -854,10 +851,10 @@ async def test_verify_penalize_severe_deviation_jailed(
 async def test_verify_penalize_did_not_commit(
     mocker: MockerFixture,
     mock_context: MagicMock,
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
 ):
     """Kiểm tra trường hợp validator active không commit."""
-    script_hash, network = cardano_params
+    contract_address, network = aptos_params
     current_cycle = 104
     previous_cycle = 103
     penalty_eta = settings.CONSENSUS_PARAM_PENALTY_ETA
@@ -895,7 +892,7 @@ async def test_verify_penalize_did_not_commit(
         validators_info=validators_info_input,
         context=mock_context,
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         network=network,
     )
 
@@ -934,10 +931,10 @@ async def test_verify_penalize_did_not_commit(
 async def test_verify_penalize_inactive_no_commit(
     mocker: MockerFixture,
     mock_context: MagicMock,
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
 ):
     """Kiểm tra validator inactive không commit -> không bị phạt."""
-    script_hash, network = cardano_params
+    contract_address, network = aptos_params
     current_cycle = 105
     previous_cycle = 104
 
@@ -970,7 +967,7 @@ async def test_verify_penalize_inactive_no_commit(
         validators_info=validators_info_input,
         context=mock_context,
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         network=network,
     )
 
@@ -983,10 +980,10 @@ async def test_verify_penalize_inactive_no_commit(
 async def test_verify_penalize_error_fetching_onchain(
     mocker: MockerFixture,
     mock_context: MagicMock,
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
 ):
     """Kiểm tra trường hợp không thể fetch dữ liệu on-chain."""
-    script_hash, network = cardano_params
+    contract_address, network = aptos_params
     current_cycle = 106
 
     v1_info_start = create_validator_info_state(1, 0.95, 3.0, 5000)
@@ -1008,7 +1005,7 @@ async def test_verify_penalize_error_fetching_onchain(
         validators_info=validators_info_input,
         context=mock_context,
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         network=network,
     )
 
@@ -1024,7 +1021,7 @@ async def test_verify_penalize_error_fetching_onchain(
 async def test_commit_updates_logic_success(
     mocker: MockerFixture,
     mock_context: MagicMock,  # Mock context
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
     hotkey_skey_fixture: Tuple[
         ExtendedSigningKey, Optional[ExtendedSigningKey]
     ],  # Dùng key thật (mocked)
@@ -1037,9 +1034,9 @@ async def test_commit_updates_logic_success(
         validator_details = read_validator()
         script_bytes = validator_details["script_bytes"]  # Dùng script bytes từ đây
         # script_hash = validator_details["script_hash"] # Lấy script hash từ đây nếu muốn
-        # Hoặc vẫn lấy từ cardano_params nếu fixture đó đáng tin cậy hơn
-        script_hash_from_params, network = cardano_params
-        script_hash = script_hash_from_params  # Quyết định dùng hash nào
+        # Hoặc vẫn lấy từ aptos_params nếu fixture đó đáng tin cậy hơn
+        contract_address_from_params, network = aptos_params
+        contract_address = contract_address_from_params  # Quyết định dùng address nào
     except Exception as e:
         pytest.skip(f"Skipping test, could not load validator script: {e}")
     payment_esk, stake_esk = hotkey_skey_fixture
@@ -1126,7 +1123,7 @@ async def test_commit_updates_logic_success(
         signing_key=payment_esk,  # Dùng key từ fixture
         stake_signing_key=stake_esk,  # Dùng key từ fixture
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         script_bytes=script_bytes,
         network=network,
     )
@@ -1184,7 +1181,7 @@ async def test_commit_updates_logic_success(
 async def test_commit_updates_logic_missing_input_utxo(
     mocker: MockerFixture,
     mock_context: MagicMock,
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
     hotkey_skey_fixture: Tuple[ExtendedSigningKey, Optional[ExtendedSigningKey]],
 ):
     """Kiểm tra trường hợp thiếu UTXO đầu vào trong map."""
@@ -1194,9 +1191,9 @@ async def test_commit_updates_logic_missing_input_utxo(
         validator_details = read_validator()
         script_bytes = validator_details["script_bytes"]  # Dùng script bytes từ đây
         # script_hash = validator_details["script_hash"] # Lấy script hash từ đây nếu muốn
-        # Hoặc vẫn lấy từ cardano_params nếu fixture đó đáng tin cậy hơn
-        script_hash_from_params, network = cardano_params
-        script_hash = script_hash_from_params  # Quyết định dùng hash nào
+        # Hoặc vẫn lấy từ aptos_params nếu fixture đó đáng tin cậy hơn
+        contract_address_from_params, network = aptos_params
+        contract_address = contract_address_from_params  # Quyết định dùng address nào
     except Exception as e:
         pytest.skip(f"Skipping test, could not load validator script: {e}")
     payment_esk, stake_esk = hotkey_skey_fixture
@@ -1236,7 +1233,7 @@ async def test_commit_updates_logic_missing_input_utxo(
         signing_key=payment_esk,
         stake_signing_key=stake_esk,
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         script_bytes=script_bytes,
         network=network,
     )
@@ -1254,7 +1251,7 @@ async def test_commit_updates_logic_missing_input_utxo(
 async def test_commit_updates_logic_submit_error(
     mocker: MockerFixture,
     mock_context: MagicMock,
-    cardano_params: Tuple[ScriptHash, Network],
+    aptos_params: Tuple[AccountAddress, str],
     hotkey_skey_fixture: Tuple[ExtendedSigningKey, Optional[ExtendedSigningKey]],
 ):
     """Kiểm tra trường hợp context.submit_tx báo lỗi."""
@@ -1264,9 +1261,9 @@ async def test_commit_updates_logic_submit_error(
         validator_details = read_validator()
         script_bytes = validator_details["script_bytes"]  # Dùng script bytes từ đây
         # script_hash = validator_details["script_hash"] # Lấy script hash từ đây nếu muốn
-        # Hoặc vẫn lấy từ cardano_params nếu fixture đó đáng tin cậy hơn
-        script_hash_from_params, network = cardano_params
-        script_hash = script_hash_from_params  # Quyết định dùng hash nào
+        # Hoặc vẫn lấy từ aptos_params nếu fixture đó đáng tin cậy hơn
+        contract_address_from_params, network = aptos_params
+        contract_address = contract_address_from_params  # Quyết định dùng address nào
     except Exception as e:
         pytest.skip(f"Skipping test, could not load validator script: {e}")
     payment_esk, stake_esk = hotkey_skey_fixture
@@ -1321,7 +1318,7 @@ async def test_commit_updates_logic_submit_error(
         signing_key=payment_esk,  # type: ignore
         stake_signing_key=stake_esk,
         settings=settings,
-        script_hash=script_hash,
+        contract_address=contract_address,
         script_bytes=script_bytes,
         network=network,
     )

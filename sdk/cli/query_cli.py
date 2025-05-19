@@ -73,13 +73,7 @@ def query_account_cmd(address, node_url, network):
             client = RestClient(node_url)
             
             # Get account resources
-            try:
-                resources = await client.account_resources(address)
-            except Exception as e:
-                console.print(f"❌ [bold red]Error:[/bold red] {e}")
-                if "account not found" in str(e).lower():
-                    console.print("[yellow]Account may not exist or has not been initialized.[/yellow]")
-                return
+            resources = await client.account_resources(address)
             
             # Get APT balance from CoinStore resource
             apt_balance = None
@@ -113,11 +107,13 @@ def query_account_cmd(address, node_url, network):
                 
                 if len(resources) > 15:
                     console.print(f"[yellow]Note: Showing only 15 of {len(resources)} resources.[/yellow]")
-                
+
                 console.print(table)
-            
+
         except Exception as e:
             console.print(f"❌ [bold red]Error:[/bold red] {e}")
+            if "account not found" in str(e).lower():
+                console.print("[yellow]Account may not exist or has not been initialized.[/yellow]")
             logger.exception(e)
     
     asyncio.run(query_account())
@@ -231,7 +227,7 @@ def query_transaction_cmd(hash, address, limit, node_url, network):
                     if not transactions:
                         console.print("[yellow]No transactions found for this address.[/yellow]")
                         return
-                    
+
                     # Display transactions in a table
                     table = Table(title=f"Transactions for {address}")
                     table.add_column("Hash", style="blue")
@@ -261,11 +257,11 @@ def query_transaction_cmd(hash, address, limit, node_url, network):
                     
                     console.print(table)
                     console.print(f"[dim]Explorer: https://explorer.aptoslabs.com/account/{address}?network={network}[/dim]")
-                
+
                 except Exception as e:
                     console.print(f"❌ [bold red]Error:[/bold red] {e}")
                     return
-        
+
         except Exception as e:
             console.print(f"❌ [bold red]Error:[/bold red] {e}")
             logger.exception(e)
@@ -313,7 +309,7 @@ def query_subnet_cmd(subnet_id, contract_address, node_url, network):
             if not subnet_info:
                 console.print(f"❌ [bold red]Error:[/bold red] Subnet {subnet_id} not found")
                 return
-            
+
             # Display subnet information
             console.print(Panel(
                 f"[bold]Subnet ID:[/bold] [yellow]{subnet_id}[/yellow]\n"
@@ -371,7 +367,7 @@ def query_subnet_cmd(subnet_id, contract_address, node_url, network):
                     console.print(f"[yellow]Note: Showing only 10 of {len(validators)} validators.[/yellow]")
                 
                 console.print(validator_table)
-        
+
         except Exception as e:
             console.print(f"❌ [bold red]Error:[/bold red] {e}")
             logger.exception(e)
@@ -455,7 +451,7 @@ def query_network_cmd(node_url, network):
             except:
                 # Health endpoint may not be available, so just ignore errors
                 pass
-            
+
         except Exception as e:
             console.print(f"❌ [bold red]Error:[/bold red] {e}")
             logger.exception(e)

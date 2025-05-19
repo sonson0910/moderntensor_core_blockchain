@@ -3,12 +3,17 @@
 import os
 import pytest
 from pycardano import Network
+import logging
+from typing import Tuple
+from aptos_sdk.account import Account, AccountAddress
+from aptos_sdk.client import RestClient
 
 from sdk.config.settings import settings, logger  # Use the global logger & settings
 from sdk.service.context import get_chain_context
 from sdk.service.query_service import get_address_info
 from sdk.service.tx_service import send_ada
 
+logger = logging.getLogger(__name__)
 
 @pytest.fixture(scope="session")
 def chain_context_fixture():
@@ -44,38 +49,27 @@ def test_get_chain_context_blockfrost(chain_context_fixture):
 
 
 @pytest.mark.integration
-def test_get_address_info(chain_context_fixture, hotkey_skey_fixture):
+def test_get_address_info(aptos_client_fixture, account_fixture):
     """
-    Test retrieval of address information (UTxOs, lovelace, token balances)
+    Test retrieval of address information (balance, tokens)
     using get_address_info.
 
     Steps:
-      1) Decode (payment_xsk, stake_xsk) from hotkey_skey_fixture.
-      2) Construct an Address object (TESTNET).
-      3) Call get_address_info(...) with this address and chain_context_fixture.
-      4) Verify the returned dictionary contains 'lovelace', 'tokens', 'address', 'utxo_count'.
+      1) Get account from account_fixture
+      2) Call get_address_info(...) with this account and aptos_client_fixture
+      3) Verify the returned dictionary contains 'balance', 'tokens', 'address'
     """
-    (payment_xsk, stake_xsk) = hotkey_skey_fixture
-    from pycardano import Address
+    account = account_fixture
+    from_address = account.address()
 
-    pay_xvk = payment_xsk.to_verification_key()
-    stake_xvk = stake_xsk.to_verification_key()
-    from_address = Address(
-        payment_part=pay_xvk.hash(),
-        staking_part=stake_xvk.hash(),
-        network=Network.TESTNET,
-    )
-
-    info = get_address_info(str(from_address), chain_context_fixture)
-    assert "lovelace" in info, "Response dict should contain 'lovelace' key."
+    info = get_address_info(str(from_address), aptos_client_fixture)
+    assert "balance" in info, "Response dict should contain 'balance' key."
     assert "tokens" in info, "Response dict should contain 'tokens' key."
     logger.info(f"Address info: {info}")
 
-    # Check address match and non-negative UTxO count
-    assert info["address"] == str(
-        from_address
-    ), "Address in info should match from_address."
-    assert info["utxo_count"] >= 0, "UTXO count should be a non-negative integer."
+    # Check address match and non-negative balance
+    assert info["address"] == str(from_address), "Address in info should match from_address."
+    assert info["balance"] >= 0, "Balance should be a non-negative integer."
 
 
 @pytest.mark.integration

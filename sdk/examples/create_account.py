@@ -9,9 +9,9 @@ import logging
 from getpass import getpass
 
 # Add the parent directory to sys.path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from keymanager import AccountKeyManager
+from sdk.keymanager import AccountKeyManager
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

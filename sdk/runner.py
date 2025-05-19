@@ -9,17 +9,13 @@ from fastapi import FastAPI
 from pathlib import Path
 
 # Import các thành phần cần thiết từ SDK
-# Lưu ý: Các đường dẫn import này là tương đối trong SDK
 from .network.app.api.v1.routes import api_router
 from .network.app.dependencies import set_validator_node_instance
-from .consensus.node import ValidatorNode  # Import lớp base
+from .consensus.node import ValidatorNode
 from .core.datatypes import ValidatorInfo
-from .keymanager.decryption_utils import decode_hotkey_skey
-from .service.context import get_chain_context
-from .config.settings import (
-    settings as sdk_settings,
-)  # Dùng settings SDK cho giá trị mặc định
-from pycardano import ExtendedSigningKey, BlockFrostChainContext, Network
+from .config.settings import settings as sdk_settings
+from aptos_sdk.account import Account
+from aptos_sdk.async_client import RestClient
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +49,11 @@ class ValidatorRunner:
                 - port (int): Cổng cho API server.
                 - log_level (str): Cấp độ log (vd: 'info', 'debug').
                 - validator_uid (str): UID hex của validator on-chain.
-                - validator_address (str): Địa chỉ Cardano của validator.
+                - validator_address (str): Địa chỉ Aptos của validator.
                 - validator_api_endpoint (str): URL công khai của API server.
-                - hotkey_base_dir (str): Đường dẫn thư mục gốc chứa coldkeys.
-                - coldkey_name (str): Tên thư mục của coldkey.
-                - hotkey_name (str): Tên của hotkey cần load.
-                - password (str): Mật khẩu để giải mã hotkey.
-                - blockfrost_project_id (str): ID dự án Blockfrost.
-                - network (Network): Mạng Cardano (MAINNET hoặc TESTNET).
+                - private_key_path (str): Đường dẫn đến file private key.
+                - aptos_node_url (str): URL của Aptos node.
+                - contract_address (str): Địa chỉ của smart contract.
                 - ... (Các cấu hình bổ sung mà validator_class yêu cầu).
         """
         self.config = config
@@ -82,8 +75,8 @@ class ValidatorRunner:
         Thiết lập instance FastAPI (`self.app`).
 
         Bao gồm việc đăng ký các sự kiện startup và shutdown:
-        - Startup: Khởi tạo instance ValidatorNode, load keys, context,
-          inject node instance vào dependencies, và bắt đầu vòng lặp đồng thuận.
+        - Startup: Khởi tạo instance ValidatorNode, load private key,
+          tạo Aptos client, inject node instance vào dependencies, và bắt đầu vòng lặp đồng thuận.
         - Shutdown: Hủy bỏ task vòng lặp đồng thuận và đóng các tài nguyên
           (như HTTP client của node) nếu cần.
 
@@ -98,36 +91,24 @@ class ValidatorRunner:
             try:
                 # --- Load Config & Components ---
                 cfg = self.config
-                base_dir = cfg["hotkey_base_dir"]
-                coldkey_name = cfg["coldkey_name"]
-                hotkey_name = cfg["hotkey_name"]
-                password = cfg["password"]
                 validator_uid = cfg["validator_uid"]
                 validator_address = cfg["validator_address"]
                 api_endpoint = cfg["validator_api_endpoint"]
-                bf_project_id = cfg["blockfrost_project_id"]
-                network = cfg["network"]
+                private_key_path = cfg["private_key_path"]
+                aptos_node_url = cfg["aptos_node_url"]
+                contract_address = cfg["contract_address"]
 
-                # --- Load Keys ---
-                logger.info(f"Runner: Loading keys for hotkey '{hotkey_name}'...")
-                payment_esk, stake_esk = decode_hotkey_skey(
-                    base_dir, coldkey_name, hotkey_name, password
-                )
-                if not payment_esk:
-                    raise ValueError("Failed to decode payment signing key.")
-                logger.info("Runner: Signing keys loaded.")
+                # --- Load Private Key ---
+                logger.info(f"Runner: Loading private key from {private_key_path}...")
+                with open(private_key_path, 'r') as f:
+                    private_key = f.read().strip()
+                account = Account.load_key(private_key)
+                logger.info("Runner: Private key loaded.")
 
-                # --- Get Context ---
-                logger.info(
-                    f"Runner: Initializing Cardano context (Network: {network.name})..."
-                )
-                # Cần đảm bảo get_chain_context sử dụng đúng project_id
-                # Có thể cần sửa get_chain_context hoặc truyền project_id vào đây
-                cardano_context = get_chain_context(method="blockfrost")
-                if not cardano_context:
-                    raise RuntimeError("get_chain_context returned None.")
-                # cardano_context.network = network # Đảm bảo đúng network
-                logger.info("Runner: Cardano context initialized.")
+                # --- Initialize Aptos Client ---
+                logger.info(f"Runner: Initializing Aptos client for {aptos_node_url}...")
+                aptos_client = RestClient(aptos_node_url)
+                logger.info("Runner: Aptos client initialized.")
 
                 # --- Create ValidatorInfo ---
                 validator_info = ValidatorInfo(
@@ -142,11 +123,11 @@ class ValidatorRunner:
                 )
                 self.validator_node_instance = self.validator_class(
                     validator_info=validator_info,
-                    cardano_context=cardano_context,
-                    signing_key=payment_esk,  # type: ignore
-                    stake_signing_key=stake_esk,  # type: ignore
-                    # Truyền thêm config vào validator nếu lớp đó yêu cầu
+                    aptos_client=aptos_client,
+                    account=account,
+                    contract_address=contract_address,
                 )
+                
                 # --- Inject instance for API endpoints ---
                 set_validator_node_instance(self.validator_node_instance)
                 logger.info("Runner: Validator instance initialized and injected.")
@@ -160,8 +141,7 @@ class ValidatorRunner:
 
             except Exception as e:
                 logger.exception(f"Runner: FATAL ERROR during validator startup: {e}")
-                # Cân nhắc dừng hẳn server nếu khởi tạo lỗi
-                # raise SystemExit("Failed to start validator node.") from e
+                raise SystemExit("Failed to start validator node.") from e
 
         @self.app.on_event("shutdown")
         async def shutdown_event():
@@ -191,9 +171,7 @@ class ValidatorRunner:
         # Include API routes từ SDK
         self.app.include_router(api_router)
 
-    async def _run_main_node_loop(
-        self,
-    ):
+    async def _run_main_node_loop(self):
         """
         Chạy vòng lặp đồng thuận chính của ValidatorNode (`self.validator_node_instance`) như một background task.
 
@@ -212,13 +190,10 @@ class ValidatorRunner:
         node_settings = getattr(node, "settings", sdk_settings)
 
         try:
-            await asyncio.sleep(
-                5
-            )  # Giữ lại khoảng chờ ngắn ban đầu nếu cần API sẵn sàng
+            await asyncio.sleep(5)  # Đợi API sẵn sàng
             while True:
                 await node.run_cycle()
-                # Cân nhắc thêm sleep nếu cần:
-                # await asyncio.sleep(node_settings.CYCLE_INTERVAL_SECONDS)
+                await asyncio.sleep(node_settings.CONSENSUS_CYCLE_SLOT_LENGTH)
         except asyncio.CancelledError:
             logger.info("Runner: Main node loop cancelled.")
         except Exception as e:
@@ -236,9 +211,7 @@ class ValidatorRunner:
         """
         host = self.config.get("host", "127.0.0.1")
         port = self.config.get("port", 8001)
-        log_level = self.config.get(
-            "log_level", "info"
-        ).lower()  # Lấy log level từ config
+        log_level = self.config.get("log_level", "info").lower()
 
         logger.info(
             f"Runner: Starting Uvicorn server on {host}:{port} with log level {log_level}"
