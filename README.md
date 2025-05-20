@@ -150,6 +150,16 @@ client.configure_account_resources("0x123", [
 ])
 ```
 
+### CI/CD và Môi trường Testing tự động
+
+Trong môi trường CI/CD, chúng tôi sử dụng `MockRestClient` để đảm bảo các tests luôn chạy ổn định và không bị phụ thuộc vào:
+
+1. **Kết nối mạng** - Không cần kết nối internet để chạy tests
+2. **Rate limits** - Tránh bị lỗi do giới hạn API
+3. **Aptos CLI** - Các tests không yêu cầu phải cài đặt Aptos CLI
+
+Mặc dù workflow CI/CD của chúng tôi cố gắng cài đặt Aptos CLI, nhưng nếu có lỗi (ví dụ như vấn đề thư viện chia sẻ trên một số phiên bản Ubuntu), hệ thống sẽ tự động sử dụng một bản mock của `aptos` command để đảm bảo các tests vẫn chạy được.
+
 Để xem chi tiết về mock client và cách sử dụng, tham khảo tệp [tests/aptos/README.md](tests/aptos/README.md).
 
 ## 🧠 Smart Contracts

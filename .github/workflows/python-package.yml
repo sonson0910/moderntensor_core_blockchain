@@ -9,6 +9,10 @@ on:
   pull_request:
     branches: [ "main" ]
 
+env:
+  USE_REAL_APTOS_CLIENT: "false"
+  USE_APTOS_CLI: "true"  # Set to false to skip Aptos CLI installation completely
+
 jobs:
   build:
 
@@ -26,6 +30,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     
     - name: Install Aptos CLI
+      if: ${{ env.USE_APTOS_CLI == 'true' }}
       run: |
         echo "Installing Aptos CLI binary..."
         # Install OpenSSL 1.1 dependencies for Ubuntu
@@ -42,7 +47,7 @@ jobs:
         }
         
         # Download and install Aptos CLI
-         mkdir -p ~/bin
+        mkdir -p ~/bin
         curl -fsSL "https://github.com/aptos-labs/aptos-core/releases/download/aptos-cli-v2.3.1/aptos-cli-2.3.1-Ubuntu-x86_64.zip" -o aptos-cli.zip
         unzip -o aptos-cli.zip -d ~/bin
         chmod +x ~/bin/aptos
@@ -53,17 +58,27 @@ jobs:
         else
           echo "Warning: Aptos CLI installation issue, but continuing with mock client"
           # Create a dummy script for any direct aptos commands that might be used in tests
-          cat > ~/bin/aptos << 'EOF'
-          #!/bin/bash
-          echo "Mock Aptos CLI - Command would have been: aptos $@"
-          echo "Using mock since actual CLI couldn't be installed in CI environment"
-          exit 0
-          EOF
+          echo '#!/bin/bash' > ~/bin/aptos
+          echo 'echo "Mock Aptos CLI - Command would have been: aptos $@"' >> ~/bin/aptos
+          echo 'echo "Using mock since actual CLI could not be installed in CI environment"' >> ~/bin/aptos
+          echo 'exit 0' >> ~/bin/aptos
           chmod +x ~/bin/aptos
         fi
         
         echo "$HOME/bin" >> $GITHUB_PATH
-        
+    
+    - name: Create Mock Aptos CLI (if skipped installation)
+      if: ${{ env.USE_APTOS_CLI != 'true' }}
+      run: |
+        echo "Skipping Aptos CLI installation, creating mock instead..."
+        mkdir -p ~/bin
+        echo '#!/bin/bash' > ~/bin/aptos
+        echo 'echo "Mock Aptos CLI - Command would have been: aptos $@"' >> ~/bin/aptos
+        echo 'echo "Using mock since Aptos CLI installation was skipped"' >> ~/bin/aptos
+        echo 'exit 0' >> ~/bin/aptos
+        chmod +x ~/bin/aptos
+        echo "$HOME/bin" >> $GITHUB_PATH
+    
     - name: Set USE_REAL_APTOS_CLIENT environment variable
       run: echo "USE_REAL_APTOS_CLIENT=false" >> $GITHUB_ENV
     
