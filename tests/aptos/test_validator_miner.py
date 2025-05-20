@@ -160,11 +160,11 @@ async def test_validator_registration(aptos_client, validator_miner_client, vali
             validator_account,
             "register_validator_candidate",
             args=[
-                TransactionArgument(validator_account.public_key().key.encode().hex(), Serializer.string),  # validator public key
+                TransactionArgument(validator_account.public_key().key.encode().hex(), Serializer.str),  # validator public key
                 TransactionArgument(1000000, Serializer.u64),  # initial stake amount
                 TransactionArgument(0, Serializer.u64),  # commission rate
-                TransactionArgument("Test Validator", Serializer.string),  # validator name
-                TransactionArgument("https://test.validator.com", Serializer.string),  # validator url
+                TransactionArgument("Test Validator", Serializer.str),  # validator name
+                TransactionArgument("https://test.validator.com", Serializer.str),  # validator url
             ]
         )
         
@@ -181,11 +181,11 @@ async def test_validator_registration(aptos_client, validator_miner_client, vali
             validator_account,
             "register_validator_candidate",
             args=[
-                TransactionArgument(validator_account.public_key().key.encode().hex(), Serializer.string),  # validator public key
+                TransactionArgument(validator_account.public_key().key.encode().hex(), Serializer.str),  # validator public key
                 TransactionArgument(1000000, Serializer.u64),  # initial stake amount
                 TransactionArgument(0, Serializer.u64),  # commission rate
-                TransactionArgument("Test Validator", Serializer.string),  # validator name
-                TransactionArgument("https://test.validator.com", Serializer.string),  # validator url
+                TransactionArgument("Test Validator", Serializer.str),  # validator name
+                TransactionArgument("https://test.validator.com", Serializer.str),  # validator url
             ]
         )
         
@@ -219,10 +219,10 @@ async def test_miner_registration(aptos_client, validator_miner_client, miner_ac
             "register_miner",
             module_name="miner",
             args=[
-                TransactionArgument(str(validator_account.address()), Serializer.string),  # validator address
+                TransactionArgument(str(validator_account.address()), Serializer.str),  # validator address
                 TransactionArgument(100000, Serializer.u64),  # initial stake amount
-                TransactionArgument("Test Miner", Serializer.string),  # miner name
-                TransactionArgument("https://test.miner.com", Serializer.string),  # miner url
+                TransactionArgument("Test Miner", Serializer.str),  # miner name
+                TransactionArgument("https://test.miner.com", Serializer.str),  # miner url
             ]
         )
         
@@ -240,10 +240,10 @@ async def test_miner_registration(aptos_client, validator_miner_client, miner_ac
             "register_miner",
             module_name="miner",
             args=[
-                TransactionArgument(str(validator_account.address()), Serializer.string),  # validator address
+                TransactionArgument(str(validator_account.address()), Serializer.str),  # validator address
                 TransactionArgument(100000, Serializer.u64),  # initial stake amount
-                TransactionArgument("Test Miner", Serializer.string),  # miner name
-                TransactionArgument("https://test.miner.com", Serializer.string),  # miner url
+                TransactionArgument("Test Miner", Serializer.str),  # miner name
+                TransactionArgument("https://test.miner.com", Serializer.str),  # miner url
             ]
         )
         

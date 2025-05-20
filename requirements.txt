@@ -1,5 +1,5 @@
 # Aptos SDK và các công cụ
-aptos-sdk>=1.0.0
+aptos-sdk==0.10.0
 aptos-cli>=2.1.0
 
 # Thư viện mạng và web

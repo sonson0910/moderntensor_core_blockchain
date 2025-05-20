@@ -1,11 +1,12 @@
+# pytest.ini
 [pytest]
 testpaths = tests
 python_files = test_*.py
 python_classes = Test*
 python_functions = test_*
+addopts = -v --cov=aptos --cov-report=term-missing
 markers =
     asyncio: mark test as async
-    logic: mark test for logical operations
     slow: mark test as slow
     integration: mark test as integration
 

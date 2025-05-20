@@ -115,19 +115,14 @@ def sample_results_received_dict(
 
 # --- END UPDATED Fixture ---
 
-# Remove mock_scoring_instance fixture
-# @pytest.fixture
-# def mock_scoring_instance(mocker) -> MagicMock: ...
-
 # --- Test Cases ---
 
 
 def test_score_results_logic_basic(
-    mocker: MockerFixture,  # Add mocker
+    mocker: MockerFixture,
     validator_uid: str,
-    sample_results_received_dict: Dict[str, List[MinerResult]],  # Use updated fixture
+    sample_results_received_dict: Dict[str, List[MinerResult]],
     sample_tasks_sent: Dict[str, TaskAssignment],
-    # Remove mock_scoring_instance
 ):
     """Tests basic scoring flow with matching tasks and results."""
     # Setup mock scores for specific tasks using side_effect on the patched function
@@ -203,10 +198,9 @@ def test_score_results_logic_basic(
 
 
 def test_score_results_logic_no_results(
-    mocker: MockerFixture,  # Add mocker
+    mocker: MockerFixture,
     validator_uid: str,
     sample_tasks_sent: Dict[str, TaskAssignment],
-    # Remove mock_scoring_instance
 ):
     """Kiểm tra khi không có kết quả nào được nhận."""
     mock_calculate_score = mocker.patch(
@@ -224,10 +218,9 @@ def test_score_results_logic_no_results(
 
 
 def test_score_results_logic_no_matching_task(
-    mocker: MockerFixture,  # Add mocker
+    mocker: MockerFixture,
     validator_uid: str,
     sample_results_received_dict: Dict[str, List[MinerResult]],
-    # Remove mock_scoring_instance
 ):
     """Kiểm tra khi kết quả nhận được không khớp với task nào đã gửi."""
     mock_calculate_score = mocker.patch(
@@ -257,11 +250,10 @@ def test_score_results_logic_no_matching_task(
 
 
 def test_score_results_logic_duplicate_and_wrong_miner(
-    mocker: MockerFixture,  # Add mocker
+    mocker: MockerFixture,
     validator_uid: str,
-    sample_results_received_dict: Dict[str, List[MinerResult]],  # Use dict fixture
+    sample_results_received_dict: Dict[str, List[MinerResult]],
     sample_tasks_sent: Dict[str, TaskAssignment],
-    # Remove mock_scoring_instance
 ):
     """Kiểm tra chỉ chấm điểm kết quả hợp lệ đầu tiên, bỏ qua duplicate và sai miner."""
     mock_score = 0.8  # Điểm trả về giả lập

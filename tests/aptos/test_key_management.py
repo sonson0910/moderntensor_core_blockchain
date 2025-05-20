@@ -249,7 +249,7 @@ async def test_key_rotation(aptos_client, key_client, test_account):
             test_account,
             "rotate_authentication_key",
             args=[
-                TransactionArgument(bytes(new_account.public_key().key).hex(), Serializer.string)
+                TransactionArgument(bytes(new_account.public_key().key).hex(), Serializer.str)
             ]
         )
         
@@ -263,7 +263,7 @@ async def test_key_rotation(aptos_client, key_client, test_account):
             test_account,
             "rotate_authentication_key",
             args=[
-                TransactionArgument(bytes(new_account.public_key().key).hex(), Serializer.string)
+                TransactionArgument(bytes(new_account.public_key().key).hex(), Serializer.str)
             ]
         )
         

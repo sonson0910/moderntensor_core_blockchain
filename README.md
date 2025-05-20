@@ -81,6 +81,60 @@ async def main():
 asyncio.run(main())
 ```
 
+## 🧪 Testing với Mock Client
+
+Khi chạy tests cho SDK, bạn có thể gặp phải vấn đề về giới hạn tốc độ (rate limit) từ Aptos API:
+
+```
+Per anonymous IP rate limit exceeded. Limit: 50000 compute units per 300 seconds window.
+```
+
+Để giải quyết vấn đề này, SDK cung cấp `MockRestClient` - một client giả lập thay thế cho `RestClient` của Aptos SDK:
+
+### Ưu điểm của Mock Client
+
+1. **Không phụ thuộc vào kết nối mạng** - Tests có thể chạy offline
+2. **Không bị giới hạn tốc độ** - Không bao giờ gặp lỗi rate limit
+3. **Chạy nhanh hơn** - Không có độ trễ mạng
+4. **Kết quả nhất quán** - Kết quả tests luôn ổn định
+
+### Cách sử dụng Mock Client
+
+Bạn có thể chạy tests với mock client bằng cách sử dụng script:
+
+```bash
+cd tests/aptos
+python run_tests_with_mock.py
+```
+
+Hoặc chạy một test cụ thể với biến môi trường:
+
+```bash
+USE_REAL_APTOS_CLIENT=false pytest tests/aptos/test_aptos_basic.py -v
+```
+
+### Tùy chỉnh dữ liệu mock
+
+```python
+from tests.aptos.mock_client import MockRestClient
+
+# Tạo mock client
+client = MockRestClient()
+
+# Cấu hình resources cho một tài khoản cụ thể
+client.configure_account_resources("0x123", [
+    {
+        "type": "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>",
+        "data": {
+            "coin": {"value": "1000000000"},  # 10 APT
+            "frozen": False
+        }
+    }
+])
+```
+
+Để xem chi tiết về mock client và cách sử dụng, tham khảo tệp [tests/aptos/README.md](tests/aptos/README.md).
+
 ## 🧠 Smart Contracts
 
 Smart contracts Move của ModernTensor được thiết kế để quản lý thông tin Miner, Validator và Subnet. Các contracts này có thể được triển khai và tương tác thông qua Aptos CLI hoặc SDK.

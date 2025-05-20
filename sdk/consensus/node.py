@@ -98,16 +98,15 @@ class ValidatorNode:
 
     Attributes:
         info (ValidatorInfo): Information about this validator (UID, Address, API Endpoint).
-        context (BlockFrostChainContext): Context for Cardano blockchain interactions.
-        signing_key (ExtendedSigningKey): The payment signing key for this validator.
-        stake_signing_key (Optional[ExtendedSigningKey]): The stake signing key, if available.
+        client (RestClient): Aptos REST client for blockchain interactions.
+        account (Account): Aptos account for signing transactions.
+        contract_address (str): ModernTensor contract address on Aptos.
+        signing_key (Optional): The signing key for this validator (for Aptos transactions).
         settings (Settings): Centralized application settings.
         state_file (str): Path to the file storing the last completed cycle number.
         current_cycle (int): The current consensus cycle number the node is processing.
-        network (Network): The Cardano network (Testnet or Mainnet) the node operates on.
         miners_info (Dict[str, MinerInfo]): Information about known miners, loaded from the metagraph.
         validators_info (Dict[str, ValidatorInfo]): Information about known validators, loaded from the metagraph.
-        # Remove UTxO related attribute since we're using Aptos account-based model
         tasks_sent (Dict[str, TaskAssignment]): Tracks tasks sent to miners in the current cycle.
         cycle_scores (Dict[str, List[ValidatorScore]]): Accumulates local scores assigned in the current cycle.
         miner_is_busy (Set[str]): UIDs (hex) of miners currently processing a task.
@@ -120,8 +119,7 @@ class ValidatorNode:
         received_scores_lock (asyncio.Lock): Lock for accessing received_validator_scores.
         previous_cycle_results (Dict[str, Any]): Stores calculated states from the previous cycle for verification.
         http_client (httpx.AsyncClient): Async HTTP client for P2P communication.
-        script_hash (ScriptHash): Script hash of the validator contract.
-        script_bytes (bytes): Script bytes of the validator contract.
+        contract_client (AptosContractClient): Client for interacting with the ModernTensor contract on Aptos.
         metrics (Metrics): Metrics object for monitoring node performance.
         health_server (uvicorn.Server): Health check server instance.
     """

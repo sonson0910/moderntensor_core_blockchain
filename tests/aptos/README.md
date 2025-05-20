@@ -1,6 +1,95 @@
-# Bộ kiểm thử Aptos
+# Tests cho ModernTensor Aptos SDK
 
-Thư mục này chứa các bài kiểm thử cho việc tích hợp blockchain Aptos trong ModernTensor SDK.
+Thư mục này chứa các bài kiểm thử (tests) cho ModernTensor Aptos SDK. 
+
+## Vấn đề với Rate Limits
+
+Aptos API có giới hạn số lượng requests từ một IP không xác thực:
+
+```
+Per anonymous IP rate limit exceeded. Limit: 50000 compute units per 300 seconds window.
+```
+
+Điều này có thể gây khó khăn khi chạy các tests tự động, đặc biệt là khi:
+- Chạy nhiều tests cùng lúc
+- Chạy tests liên tục (ví dụ: trong CI/CD pipeline)
+- Không có API key
+
+## Giải pháp: Mock Client
+
+Để giải quyết vấn đề rate limit, chúng tôi đã tạo ra `MockRestClient`, một phiên bản giả lập của `RestClient` từ Aptos SDK. Mock client này:
+
+1. Giả lập tất cả các API calls để không cần kết nối internet
+2. Trả về dữ liệu cố định phù hợp với các tests
+3. Không bao giờ gây ra rate limit
+
+## Cách sử dụng Mock Client
+
+### Chạy Tests với Mock Client
+
+Cách đơn giản nhất để chạy tests với mock client là sử dụng script `run_tests_with_mock.py`:
+
+```bash
+python tests/aptos/run_tests_with_mock.py
+```
+
+Hoặc sử dụng pytest với biến môi trường:
+
+```bash
+USE_REAL_APTOS_CLIENT=false pytest tests/aptos/test_aptos_hd_wallet_contract.py -v
+```
+
+### Chạy Tests với Real Client
+
+Nếu bạn muốn chạy tests với real client (kết nối đến Aptos Testnet thật), bạn có thể:
+
+```bash
+USE_REAL_APTOS_CLIENT=true pytest tests/aptos/test_aptos_hd_wallet_contract.py -v
+```
+
+Lưu ý: Bạn có thể gặp rate limit khi sử dụng real client.
+
+## Cấu trúc của Mock Client
+
+Mock client được định nghĩa trong file `tests/aptos/mock_client.py` và bao gồm:
+
+1. `MockResponse`: Giả lập HTTP response
+2. `MockHttpClient`: Giả lập HTTP client để thay thế `RestClient.client`
+3. `MockRestClient`: Giả lập `RestClient` từ Aptos SDK
+
+## Tùy chỉnh Mock Data
+
+Bạn có thể tùy chỉnh dữ liệu trả về cho các API calls cụ thể:
+
+```python
+from tests.aptos.mock_client import MockRestClient
+
+# Tạo mock client
+client = MockRestClient()
+
+# Cấu hình resources cho một tài khoản cụ thể
+client.configure_account_resources("0x123", [
+    {
+        "type": "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>",
+        "data": {
+            "coin": {"value": "1000000000"},  # 10 APT
+            "frozen": False
+        }
+    }
+])
+```
+
+## Lưu ý quan trọng
+
+1. Tests với mock client không kiểm tra tính tương thích với Aptos Testnet thực
+2. Chỉ nên sử dụng mock client cho unit tests và CI/CD
+3. Vẫn nên chạy tests với real client trước khi release
+4. Sử dụng API key nếu muốn gọi Aptos API thường xuyên
+
+## Tài liệu liên quan
+
+- [Aptos SDK Python Documentation](https://github.com/aptos-labs/aptos-python-sdk)
+- [Aptos Rate Limiting Information](https://build.aptoslabs.com/docs/start)
 
 ## Các file kiểm thử hoạt động
 

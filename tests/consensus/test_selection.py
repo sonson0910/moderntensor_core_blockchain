@@ -5,8 +5,7 @@ from typing import Dict
 
 # --- Import các thành phần cần test ---
 from sdk.consensus.selection import select_miners_logic
-from sdk.core.datatypes import MinerInfo
-from sdk.metagraph.metagraph_datum import STATUS_ACTIVE, STATUS_INACTIVE
+from sdk.aptos.datatypes import MinerInfo, STATUS_ACTIVE, STATUS_INACTIVE
 from sdk.config.settings import settings  # Import settings để lấy tham số
 
 
@@ -27,14 +26,13 @@ def create_miner_info(
         address=f"addr_test_miner_{uid_num}",
         api_endpoint=None,
         trust_score=trust,
-        weight=weight,  # Giờ MinerInfo đã có weight
-        stake=float(stake),  # Giờ MinerInfo đã có stake
+        weight=weight,
+        stake=float(stake),
         last_selected_time=last_selected,
         performance_history=[],
-        status=status,  # Gán vào trường status mới
+        status=status,
         subnet_uid=0,
-        registration_slot=0,
-        wallet_addr_hash=None,
+        registration_timestamp=0,
         performance_history_hash=None,
     )
 
@@ -76,9 +74,9 @@ def test_select_miners_logic_selection():
     selected = select_miners_logic(
         miners_info=miners,
         current_cycle=current_cycle,
-        num_to_select=num_to_select,  # <<<--- Thêm
-        beta=beta,  # <<<--- Thêm
-        max_time_bonus=max_bonus,  # <<<--- Thêm
+        num_to_select=num_to_select,
+        beta=beta,
+        max_time_bonus=max_bonus,
     )
 
     print(
@@ -127,7 +125,7 @@ def test_select_miners_logic_empty():
     # --- Gọi hàm với đủ tham số ---
     selected = select_miners_logic(
         miners, current_cycle, num_to_select, beta, max_bonus
-    )  # <<<--- Sửa lỗi thiếu tham số
+    )
     # ---------------------------
     assert len(selected) == 0
 
