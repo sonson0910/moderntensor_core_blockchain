@@ -30,7 +30,24 @@
    pip install aptos-sdk cryptography
    ```
 
-2.  **Clone repository:**
+2. **Cài đặt Aptos CLI:**
+   > ⚠️ Lưu ý: Aptos CLI không phải là package Python, cần cài đặt riêng.
+   ```bash
+   # Linux/MacOS
+   curl -fsSL "https://github.com/aptos-labs/aptos-core/releases/download/aptos-cli-v2.3.1/aptos-cli-2.3.1-$(uname -s)-$(uname -m).zip" -o aptos-cli.zip
+   unzip -o aptos-cli.zip -d ~/bin
+   chmod +x ~/bin/aptos
+   
+   # Thêm vào PATH
+   export PATH="$HOME/bin:$PATH"
+   
+   # Kiểm tra cài đặt
+   aptos --version
+   ```
+   
+   Xem thêm: [Hướng dẫn cài đặt Aptos CLI](https://aptos.dev/cli-tools/aptos-cli/install-cli/)
+
+3.  **Clone repository:**
     ```bash
     git clone https://github.com/sonson0910/moderntensor_aptos.git
     cd moderntensor_aptos
