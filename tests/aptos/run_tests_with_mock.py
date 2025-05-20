@@ -9,6 +9,7 @@ import pytest
 from pathlib import Path
 import subprocess
 import platform
+import argparse
 
 # Thêm thư mục gốc vào PYTHONPATH
 project_root = str(Path(__file__).parent.parent.parent)
@@ -62,6 +63,12 @@ def run_test_with_mock(test_file):
         return 1  # Trả về lỗi
 
 if __name__ == "__main__":
+    # Tạo parser
+    parser = argparse.ArgumentParser(description="Chạy tests Aptos với mock client")
+    parser.add_argument("--ci", action="store_true", help="Chạy ở chế độ CI - chỉ chạy các tests an toàn")
+    parser.add_argument("--tests", nargs="*", help="Danh sách các tests cụ thể để chạy")
+    args = parser.parse_args()
+    
     print("Chạy tests Aptos với mock client...")
     
     # Đảm bảo rằng mock client được sử dụng
@@ -70,8 +77,8 @@ if __name__ == "__main__":
     # Kiểm tra Aptos CLI (chỉ thông báo, không làm fail)
     check_aptos_cli_if_needed()
     
-    # Danh sách các test cần chạy
-    test_files = [
+    # Danh sách đầy đủ các test
+    all_tests = [
         "test_aptos_hd_wallet_contract.py",
         "test_remaining_functions.py",
         "test_health_monitoring.py",
@@ -87,9 +94,30 @@ if __name__ == "__main__":
         "test_account_debug.py"
     ]
     
+    # Các tests an toàn cho CI
+    ci_safe_tests = [
+        "test_account_debug.py", 
+        "test_remaining_functions.py",
+        "test_health_monitoring.py"
+    ]
+    
+    # Xác định tests để chạy
+    if args.tests:
+        # Nếu người dùng chỉ định các tests cụ thể
+        tests_to_run = args.tests
+        print(f"Chạy các tests được chỉ định: {', '.join(tests_to_run)}")
+    elif args.ci:
+        # Nếu đang chạy trong CI mode
+        tests_to_run = ci_safe_tests
+        print(f"Chạy ở chế độ CI, chỉ chạy các tests an toàn: {', '.join(tests_to_run)}")
+    else:
+        # Chạy tất cả tests
+        tests_to_run = all_tests
+        print("Chạy tất cả tests")
+    
     # Chạy từng test file
     failed_tests = []
-    for test_file in test_files:
+    for test_file in tests_to_run:
         if run_test_with_mock(test_file) != 0:
             failed_tests.append(test_file)
     

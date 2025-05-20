@@ -169,3 +169,77 @@ Tài khoản này tồn tại trên mạng thử nghiệm Aptos nhưng không c�
 - Các bài kiểm thử giao dịch sẽ được bỏ qua nếu tài khoản không có token
 - Các bài kiểm thử sử dụng mạng thử nghiệm Aptos (ID mạng 2)
 - Xử lý lỗi được thiết kế để hoạt động với các xung đột số thứ tự và vấn đề mempool 
+
+# Mock Client cho Aptos Tests
+
+Mock client cho Aptos SDK tests, giúp tránh vấn đề rate limit API và cho phép chạy tests mà không cần kết nối mạng.
+
+## Cách sử dụng
+
+### Chạy tất cả tests
+
+```bash
+# Chạy tất cả tests với mock client
+python run_tests_with_mock.py
+```
+
+### Chạy ở chế độ CI (chỉ các tests an toàn)
+
+```bash
+# Chạy ở chế độ CI - chỉ chạy các tests đã biết là hoạt động trong môi trường CI
+python run_tests_with_mock.py --ci
+```
+
+### Chạy các tests cụ thể
+
+```bash
+# Chỉ chạy một số tests nhất định
+python run_tests_with_mock.py --tests test_account_debug.py test_health_monitoring.py
+```
+
+## Xử lý lỗi "Rate Limit Exceeded"
+
+Khi chạy tests cho SDK, bạn có thể gặp phải vấn đề về giới hạn tốc độ API (rate limit):
+
+```
+Per anonymous IP rate limit exceeded. Limit: 50000 compute units per 300 seconds window.
+```
+
+Mock client giải quyết vấn đề này bằng cách giả lập tất cả các API calls, loại bỏ sự phụ thuộc vào Aptos API.
+
+## Debugging tests thất bại
+
+Một số tests có thể thất bại trong môi trường CI vì:
+
+1. **Cần cài đặt đầy đủ Aptos CLI** - dù được mock trong CI nhưng một số tests có thể cần Aptos CLI thực sự
+2. **Thiếu file hoặc tài nguyên cụ thể** - một số tests hy vọng tài nguyên đã tồn tại trên máy local
+3. **Thiếu bởi biến môi trường** - một số tests cần biến môi trường cụ thể để chạy đúng
+
+### Tests có thể thất bại trong CI
+
+Các tests sau đây có thể thất bại trong môi trường CI nhưng thành công trên máy local với cài đặt đầy đủ:
+
+- `test_aptos_hd_wallet_contract.py` - Cần đặt khóa và file wallet
+- `test_aptos_basic.py` - Có thể cần chi tiết hơn về môi trường Aptos
+- `test_aptos_hd_wallet.py` - Cần cấu hình wallet thích hợp
+
+### Khắc phục lỗi tests
+
+1. **Chạy với cài đặt đầy đủ**: Đảm bảo có Aptos CLI cùng với wallet và keypair cần thiết
+2. **Sử dụng chế độ --ci**: Nếu đang chạy trong môi trường tự động, dùng `--ci` để chạy tests an toàn
+3. **Cấu hình MockRestClient**: Bạn có thể thêm mocks tùy chỉnh cho các endpoint cụ thể nếu cần:
+
+```python
+client = MockRestClient()
+client.configure_account_resources("0x123", [{...}])
+```
+
+## Phát triển thêm tests mới
+
+Khi phát triển tests mới, hãy đảm bảo nó hoạt động ổn định với mock client:
+
+1. **Thêm mocks cho endpoint mới** khi cần thiết
+2. **Xử lý trường hợp vắng mặt Aptos CLI** bằng cách kiểm tra sự hiện diện hoặc bỏ qua tests
+3. **Thêm tests mới vào mảng ci_safe_tests** trong `run_tests_with_mock.py` nếu chúng đủ ổn định
+
+Để biết thêm thông tin về mock client, xem tệp [mock_client.py](./mock_client.py). 
