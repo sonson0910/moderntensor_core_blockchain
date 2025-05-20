@@ -40,7 +40,7 @@ main_loop_task: Optional[asyncio.Task] = None
 @app.on_event("startup")
 async def startup_event():
     """Khởi tạo Validator Node và inject vào dependency."""
-    global main_validator_node_instance, main_loop_task
+    global main_validator_node_instance
     logger.info("FastAPI application starting up...")
     if ValidatorInfo and ValidatorNode and settings:
         try:

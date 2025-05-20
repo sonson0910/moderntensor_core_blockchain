@@ -58,7 +58,8 @@ def query_account_cmd(address, node_url, network):
     
     async def query_account():
         try:
-            # Determine node URL
+            # Determine node URL - initialize first
+            node_url = None
             if not node_url:
                 if network == "mainnet":
                     node_url = "https://fullnode.mainnet.aptoslabs.com/v1"
@@ -157,7 +158,8 @@ def query_transaction_cmd(hash, address, limit, node_url, network):
     
     async def query_transaction():
         try:
-            # Determine node URL
+            # Determine node URL - initialize first
+            node_url = None
             if not node_url:
                 if network == "mainnet":
                     node_url = "https://fullnode.mainnet.aptoslabs.com/v1"
@@ -296,6 +298,18 @@ def query_subnet_cmd(subnet_id, contract_address, node_url, network):
     
     async def query_subnet():
         try:
+            # Determine node URL - initialize first
+            node_url = None
+            if not node_url:
+                if network == "mainnet":
+                    node_url = "https://fullnode.mainnet.aptoslabs.com/v1"
+                elif network == "testnet":
+                    node_url = "https://fullnode.testnet.aptoslabs.com/v1"
+                elif network == "devnet":
+                    node_url = "https://fullnode.devnet.aptoslabs.com/v1"
+                else:  # local
+                    node_url = "http://localhost:8080/v1"
+            
             # Create ModernTensor client
             client = ModernTensorClient(
                 contract_address=contract_address,
@@ -396,7 +410,8 @@ def query_network_cmd(node_url, network):
     
     async def query_network():
         try:
-            # Determine node URL
+            # Determine node URL - initialize first
+            node_url = None
             if not node_url:
                 if network == "mainnet":
                     node_url = "https://fullnode.mainnet.aptoslabs.com/v1"
