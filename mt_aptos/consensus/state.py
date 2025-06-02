@@ -24,7 +24,6 @@ from mt_aptos.formulas import (
     # Import các công thức khác nếu cần
 )
 
-from mt_aptos.metagraph.update_metagraph import update_datum
 from mt_aptos.metagraph.metagraph_data import get_all_validator_data
 from mt_aptos.metagraph.hash.hash_datum import hash_data  # Cần hàm hash
 
@@ -36,8 +35,8 @@ from mt_aptos.type_tag import TypeTag, StructTag
 from mt_aptos.bcs import Serializer
 
 from mt_aptos.metagraph.metagraph_datum import (
-    MinerDatum,
-    ValidatorDatum,
+    MinerData,
+    ValidatorData,
     STATUS_ACTIVE,
     STATUS_JAILED,
     STATUS_INACTIVE,
@@ -654,7 +653,7 @@ async def prepare_miner_updates_logic(
     settings: Any,
     client: RestClient,  # Changed from context/UTxO to RestClient
     contract_address: str,  # Added contract address
-) -> Dict[str, MinerDatum]:
+) -> Dict[str, MinerData]:
     """
     Prepares miner state updates based on consensus scores.
     For each miner, calculates new trust score and creates updated datum.
@@ -669,7 +668,7 @@ async def prepare_miner_updates_logic(
         contract_address (str): ModernTensor contract address.
 
     Returns:
-        Dict[str, MinerDatum]: Dictionary of updated MinerDatum objects for miners.
+        Dict[str, MinerData]: Dictionary of updated MinerData objects for miners.
     """
     logger.info(f"Preparing miner updates for cycle {current_cycle}")
     miner_updates = {}
@@ -728,7 +727,7 @@ async def prepare_miner_updates_logic(
             )
 
             # Create new datum
-            new_datum = MinerDatum(
+            new_datum = MinerData(
                 miner_uid=miner_uid_hex,
                 owner=miner_info.address,
                 api_endpoint=miner_info.api_endpoint,
@@ -773,7 +772,7 @@ async def prepare_miner_updates_logic(
             new_trust_score = old_trust * (1 - delta_trust)
             
             # Create new datum with trust decay
-            new_datum = MinerDatum(
+            new_datum = MinerData(
                 miner_uid=miner_uid_hex,
                 owner=miner_info.address,
                 api_endpoint=miner_info.api_endpoint,
@@ -802,7 +801,7 @@ async def prepare_validator_updates_logic(
     settings: Any,
     client: Optional[RestClient],  # Changed from BlockFrostChainContext to RestClient
     contract_address: str = None,  # Added contract address
-) -> Dict[str, ValidatorDatum]:
+) -> Dict[str, ValidatorData]:
     """
     Prepares validator state updates for the current validator.
     In this implementation, we use Aptos instead of Cardano.
@@ -816,7 +815,7 @@ async def prepare_validator_updates_logic(
         contract_address (str): ModernTensor contract address.
 
     Returns:
-        Dict[str, ValidatorDatum]: Dictionary of updated ValidatorDatum objects.
+        Dict[str, ValidatorData]: Dictionary of updated ValidatorData objects.
     """
     logger.info(f"Preparing validator updates for cycle {current_cycle}")
     validator_updates = {}
@@ -855,7 +854,7 @@ async def prepare_validator_updates_logic(
         performance_history.append(new_performance)
     
     # Create updated datum
-    new_datum = ValidatorDatum(
+    new_datum = ValidatorData(
         validator_uid=self_uid_hex,
         owner=self_validator_info.address,
         api_endpoint=self_validator_info.api_endpoint,
@@ -876,7 +875,7 @@ async def prepare_validator_updates_logic(
 
 
 async def commit_updates_logic(
-    validator_updates: Dict[str, ValidatorDatum],  # Should contain only the self-update
+    validator_updates: Dict[str, ValidatorData],  # Should contain only the self-update
     client: RestClient,  # Changed from BlockFrostChainContext to RestClient
     account: Account,  # Changed from signing_key to account
     settings: Any,  # Full settings object
@@ -887,7 +886,7 @@ async def commit_updates_logic(
     In this implementation, we use Aptos instead of Cardano.
 
     Args:
-        validator_updates (Dict[str, ValidatorDatum]): Dictionary of validator datum to update (usually just self)
+        validator_updates (Dict[str, ValidatorData]): Dictionary of validator datum to update (usually just self)
         client (RestClient): Aptos REST client
         account (Account): Aptos account for signing transactions
         settings (Any): Full settings object

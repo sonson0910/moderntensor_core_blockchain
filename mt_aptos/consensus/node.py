@@ -34,17 +34,15 @@ from mt_aptos.formulas import *  # Import tất cả hoặc import cụ thể
 # Metagraph & Blockchain Interaction
 from mt_aptos.core.datatypes import CycleConsensusResults, MinerConsensusResult
 from mt_aptos.metagraph.metagraph_data import get_all_miner_data, get_all_validator_data
-from mt_aptos.metagraph import metagraph_data, update_metagraph
+from mt_aptos.metagraph import metagraph_data
 from mt_aptos.metagraph.metagraph_datum import (
-    MinerDatum,
-    ValidatorDatum,
+    MinerData,
+    ValidatorData,
     STATUS_ACTIVE,
     STATUS_JAILED,
     STATUS_INACTIVE,
 )
-from mt_aptos.smartcontract.validator import read_validator
 from mt_aptos.metagraph.hash.hash_datum import hash_data  # Import hàm hash thật sự
-from mt_aptos.keymanager.decryption_utils import decode_hotkey_skey
 from mt_aptos.async_client import RestClient
 from mt_aptos.account import Account
 
@@ -52,9 +50,9 @@ from mt_aptos.account import Account
 from mt_aptos.aptos_core.contract_client import AptosContractClient, create_aptos_client
 from mt_aptos.aptos_core.context import get_aptos_context
 from mt_aptos.aptos_core.account_service import check_account_exists, get_account_balance
-from mt_aptos.aptos_core.validator_helper import get_validator_info, get_all_validators
+from mt_aptos.aptos_core.validator_helper import get_validator_info, get_all_validators, get_all_miners
 
-# from mt_aptos.metagraph.hash import hash_data, decode_history_from_hash # Cần hàm hash/decode
+# Mock function for history decoding (to be implemented later)
 async def decode_history_from_hash(hash_str):
     await asyncio.sleep(0)
     return []  # Mock decode
@@ -656,7 +654,6 @@ class ValidatorNode:
             logger.info(
                 f"Processed info for {len(self.miners_info)} miners and {len(self.validators_info)} validators in {load_duration:.2f}s."
             )
-            # Remove UTxO reference since we're using Aptos
 
         except Exception as e:
             logger.exception(
