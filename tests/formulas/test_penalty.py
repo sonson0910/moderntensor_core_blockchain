@@ -1,7 +1,7 @@
 # tests/formulas/test_penalty.py
 import pytest
 import math
-from sdk.formulas import (
+from mt_aptos.formulas import (
     calculate_performance_adjustment,
     calculate_slash_amount,
     # calculate_fraud_severity_value # Hàm này cần logic cụ thể để test

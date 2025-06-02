@@ -1,7 +1,7 @@
 # tests/formulas/test_incentive.py
 import pytest
 import math
-from sdk.formulas import calculate_miner_incentive, calculate_validator_incentive
+from mt_aptos.formulas import calculate_miner_incentive, calculate_validator_incentive
 
 # --- Các tham số sigmoid ---
 INCENTIVE_SIGMOID_L = 1.0

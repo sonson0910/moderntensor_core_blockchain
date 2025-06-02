@@ -1,7 +1,7 @@
 # tests/formulas/test_miner_weight.py
 import pytest
 import math
-from sdk.formulas.miner_weight import calculate_miner_weight
+from mt_aptos.formulas.miner_weight import calculate_miner_weight
 
 # --- Tham số ví dụ (CẦN THAY THẾ BẰNG GIÁ TRỊ THỰC TẾ SAU KHI XÁC ĐỊNH) ---
 EXAMPLE_DECAY_W = 0.5

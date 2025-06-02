@@ -33,18 +33,18 @@ sys.path.insert(0, str(project_root))
 
 # Import các thành phần cần thiết từ SDK Moderntensor
 try:
-    from sdk.metagraph.create_utxo import find_suitable_ada_input  # Dùng lại hàm này
-    from sdk.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE
-    from sdk.core.datatypes import MinerInfo, ValidatorInfo  # Import từ datatypes
-    from sdk.metagraph.hash.hash_datum import (
+    from mt_aptos.metagraph.create_utxo import find_suitable_ada_input  # Dùng lại hàm này
+    from mt_aptos.metagraph.metagraph_datum import MinerDatum, ValidatorDatum, STATUS_ACTIVE
+    from mt_aptos.core.datatypes import MinerInfo, ValidatorInfo  # Import từ datatypes
+    from mt_aptos.metagraph.hash.hash_datum import (
         hash_data,
     )  # Dùng để hash wallet addr nếu cần
-    from sdk.service.context import get_chain_context  # Lấy context trực tiếp
-    from sdk.keymanager.decryption_utils import decode_hotkey_skey
-    from sdk.smartcontract.validator import (
+    from mt_aptos.service.context import get_chain_context  # Lấy context trực tiếp
+    from mt_aptos.keymanager.decryption_utils import decode_hotkey_skey
+    from mt_aptos.smartcontract.validator import (
         read_validator,
     )  # <<<--- Import read_validator
-    from sdk.config.settings import settings as sdk_settings
+    from mt_aptos.config.settings import settings as sdk_settings
 
     # Không dùng BlockFrostService và TransactionService nữa
 except ImportError as e:

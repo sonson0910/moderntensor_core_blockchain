@@ -1,7 +1,7 @@
 # tests/formulas/test_dao.py
 import pytest
 import math
-from sdk.formulas import calculate_voting_power
+from mt_aptos.formulas import calculate_voting_power
 
 # --- Tham số ví dụ (CẦN THAY THẾ) ---
 EXAMPLE_KG = 1.0  # Hệ số bonus thời gian

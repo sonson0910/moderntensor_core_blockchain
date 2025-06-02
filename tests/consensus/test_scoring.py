@@ -13,8 +13,8 @@ from pytest_mock import MockerFixture  # Import MockerFixture
 
 # Import components
 # Assume _calculate_score_from_result is defined/imported in scoring.py
-from sdk.consensus.scoring import score_results_logic, _calculate_score_from_result
-from sdk.core.datatypes import MinerResult, TaskAssignment, ValidatorScore
+from mt_aptos.consensus.scoring import score_results_logic, _calculate_score_from_result
+from mt_aptos.core.datatypes import MinerResult, TaskAssignment, ValidatorScore
 
 # --- Fixtures ---
 

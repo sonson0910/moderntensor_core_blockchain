@@ -9,8 +9,8 @@ from pathlib import Path
 project_root = str(Path(__file__).parent.parent)
 sys.path.append(project_root)
 
-from sdk.keymanager.account_manager import AccountManager
-from sdk.keymanager.encryption_utils import get_or_create_salt, generate_encryption_key
+from mt_aptos.keymanager.account_manager import AccountManager
+from mt_aptos.keymanager.encryption_utils import get_or_create_salt, generate_encryption_key
 
 @click.group()
 def cli():

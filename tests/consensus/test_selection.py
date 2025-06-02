@@ -4,9 +4,9 @@ import random
 from typing import Dict
 
 # --- Import các thành phần cần test ---
-from sdk.consensus.selection import select_miners_logic
-from sdk.aptos.datatypes import MinerInfo, STATUS_ACTIVE, STATUS_INACTIVE
-from sdk.config.settings import settings  # Import settings để lấy tham số
+from mt_aptos.consensus.selection import select_miners_logic
+from mt_aptos.aptos.datatypes import MinerInfo, STATUS_ACTIVE, STATUS_INACTIVE
+from mt_aptos.config.settings import settings  # Import settings để lấy tham số
 
 
 # --- Hàm tạo MinerInfo mẫu (Có thể đưa vào conftest.py nếu dùng nhiều) ---

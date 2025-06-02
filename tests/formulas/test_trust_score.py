@@ -1,8 +1,8 @@
 # tests/formulas/test_trust_score.py
 import pytest
 import math
-from sdk.formulas import update_trust_score, calculate_selection_probability
-from sdk.formulas.utils import sigmoid, calculate_alpha_effective  # Import để kiểm tra
+from mt_aptos.formulas import update_trust_score, calculate_selection_probability
+from mt_aptos.formulas.utils import sigmoid, calculate_alpha_effective  # Import để kiểm tra
 
 # --- Tham số ví dụ (CẦN THAY THẾ BẰNG GIÁ TRỊ THỰC TẾ SAU KHI XÁC ĐỊNH) ---
 EXAMPLE_DELTA_TRUST = 0.1

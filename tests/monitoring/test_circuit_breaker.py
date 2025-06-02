@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from sdk.monitoring.circuit_breaker import CircuitBreaker
+from mt_aptos.monitoring.circuit_breaker import CircuitBreaker
 
 @pytest.fixture
 def circuit_breaker():

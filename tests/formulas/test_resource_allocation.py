@@ -1,6 +1,6 @@
 # tests/formulas/test_resource_allocation.py
 import pytest
-from sdk.formulas import calculate_subnet_resource
+from mt_aptos.formulas import calculate_subnet_resource
 
 
 def test_calculate_subnet_resource_basic():

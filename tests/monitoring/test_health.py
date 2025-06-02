@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from sdk.monitoring.health import app
+from mt_aptos.monitoring.health import app
 import psutil
 import time
 

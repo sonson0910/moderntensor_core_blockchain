@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from sdk.monitoring.rate_limiter import RateLimiter
+from mt_aptos.monitoring.rate_limiter import RateLimiter
 
 @pytest.fixture
 def rate_limiter():

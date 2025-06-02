@@ -1,7 +1,7 @@
 # tests/formulas/test_performance.py
 import pytest
 import math
-from sdk.formulas import (
+from mt_aptos.formulas import (
     calculate_task_completion_rate,
     calculate_adjusted_miner_performance,
     calculate_validator_performance,

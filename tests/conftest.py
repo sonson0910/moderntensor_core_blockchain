@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 import pytest
 import asyncio
-from sdk.config.settings import settings
+from mt_aptos.config.settings import settings
 from aptos_sdk.account import Account
 
 # Add project root to Python path

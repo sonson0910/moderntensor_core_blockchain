@@ -1,7 +1,7 @@
 # tests/formulas/test_validator_weight.py
 import pytest
 import math
-from sdk.formulas import calculate_validator_weight
+from mt_aptos.formulas import calculate_validator_weight
 
 # --- Tham số ví dụ (CẦN THAY THẾ) ---
 EXAMPLE_LAMBDA = 0.5

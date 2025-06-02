@@ -46,11 +46,11 @@ homepage = "https://github.com/sonson0910"
 
 # Scripts (entry_points) - replacement for 'console_scripts' in setup.py
 [project.scripts]
-moderntensor = "sdk.runner:main"
+moderntensor = "mt_aptos.runner:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sdk*"]
+include = ["mt_aptos*"]
 
 [project.optional-dependencies]
 dev = [
@@ -74,4 +74,4 @@ build-backend = "hatchling.build"
 
 # Add Hatch build configuration to specify package directory
 [tool.hatch.build.targets.wheel]
-packages = ["sdk"]
+packages = ["mt_aptos"]
