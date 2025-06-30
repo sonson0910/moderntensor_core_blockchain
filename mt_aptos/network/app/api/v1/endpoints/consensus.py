@@ -21,7 +21,7 @@ from mt_aptos.consensus.scoring import canonical_json_serialize
 
 # Replace PyCardano imports with Aptos SDK
 from mt_aptos.account import Account
-from mt_aptos.ed25519 import PublicKey
+from aptos_sdk.ed25519 import PublicKey
 
 # Keep or adapt the nacl imports for verification as needed
 import nacl.signing
@@ -39,7 +39,7 @@ async def verify_payload_signature(
 ) -> bool:
     """Xác minh chữ ký và Public Key trong payload nhận được từ một peer."""
     signature_hex = payload.signature
-    submitter_public_key_hex = payload.submitter_public_key_hex
+    submitter_public_key_hex = payload.public_key_hex  # Fix field name
     scores_list_dict = payload.scores  # Đây là list các dict
     submitter_uid = payload.submitter_validator_uid  # UID của người gửi
 
@@ -164,7 +164,7 @@ async def verify_payload_signature(
 
 # --- API Endpoint ---
 @router.post(
-    "/receive_scores",
+    "/receive-scores",
     summary="Nhận điểm số từ Validator khác",
     description="Endpoint để một Validator gửi danh sách điểm số (ValidatorScore) mà nó đã chấm. Yêu cầu chữ ký hợp lệ.",
     status_code=status.HTTP_202_ACCEPTED,

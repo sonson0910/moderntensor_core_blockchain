@@ -42,3 +42,7 @@ async def get_aptos_context(network_type="testnet"):
     except Exception as e:
         logger.error(f"Failed to connect to Aptos {network_type}: {e}")
         raise
+
+
+# Legacy alias for backward compatibility
+get_chain_context = get_aptos_context

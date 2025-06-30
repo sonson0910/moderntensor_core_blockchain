@@ -1,0 +1,27 @@
+[package]
+name = "ModernTensorContracts"
+version = "1.0.0"
+authors = ["ModernTensor Team"]
+
+[addresses]
+moderntensor = "0xdbcbf08e0720fc7ed4c8318c0e2cbbde1cc77ba33f06d5c08b7533c4240ca7cf"
+
+[dev-addresses]
+moderntensor = "0xdbcbf08e0720fc7ed4c8318c0e2cbbde1cc77ba33f06d5c08b7533c4240ca7cf"
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-core.git"
+rev = "mainnet"
+subdir = "aptos-move/framework/aptos-framework"
+
+[dependencies.AptosStdlib]
+git = "https://github.com/aptos-labs/aptos-core.git"
+rev = "mainnet"
+subdir = "aptos-move/framework/aptos-stdlib"
+
+[dependencies.MoveStdlib]
+git = "https://github.com/aptos-labs/aptos-core.git"
+rev = "mainnet"
+subdir = "aptos-move/framework/move-stdlib"
+
+[dev-dependencies] 

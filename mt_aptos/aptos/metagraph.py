@@ -2,6 +2,8 @@
 Functions for updating entities in the metagraph on Aptos blockchain.
 """
 import logging
+import json
+import os
 from typing import Dict, Any, Optional, List
 import time
 
@@ -10,7 +12,7 @@ from mt_aptos.account import Account
 from mt_aptos.transactions import EntryFunction, TransactionArgument, TransactionPayload
 
 from mt_aptos.config.settings import settings
-from .datatypes import MinerInfo, ValidatorInfo, SubnetInfo
+from mt_aptos.core.datatypes import MinerInfo, ValidatorInfo
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +288,7 @@ async def get_all_miners(
     subnet_uid: Optional[int] = None
 ) -> List[MinerInfo]:
     """
-    Gets all miners registered in the metagraph.
+    Gets all miners registered in the metagraph by checking known addresses.
     
     Args:
         client: Aptos REST client
@@ -299,32 +301,89 @@ async def get_all_miners(
     try:
         logger.info(f"Getting all miners from contract {contract_address}")
         
-        # Call view function to get all miners
-        all_miners = await client.view_function(
-            contract_address,
-            "moderntensor",
-            "get_all_miners",
-            []
-        )
+        # Known miner addresses from config
+        known_miner_addresses = []
+        
+        # Get all MINER_*_ADDRESS from environment
+        for key, value in os.environ.items():
+            if key.startswith("MINER_") and key.endswith("_ADDRESS") and value:
+                known_miner_addresses.append(value)
+        
+        # Also check legacy MINER_ADDRESS
+        miner_addr = os.getenv("MINER_ADDRESS")
+        if miner_addr and miner_addr not in known_miner_addresses:
+            known_miner_addresses.append(miner_addr)
+            
+        logger.info(f"Checking {len(known_miner_addresses)} known miner addresses: {known_miner_addresses}")
         
         result = []
-        for miner_data in all_miners:
-            # Convert raw data to MinerInfo
-            miner = MinerInfo(
-                uid=miner_data.get("uid", ""),
-                address=miner_data.get("address", ""),
-                api_endpoint=miner_data.get("api_endpoint", ""),
-                trust_score=miner_data.get("scaled_trust_score", 0) / settings.METAGRAPH_DATUM_INT_DIVISOR,
-                stake=miner_data.get("stake", 0) / 100_000_000,  # Convert from smallest unit
-                status=miner_data.get("status", 0),
-                subnet_uid=miner_data.get("subnet_uid", 0),
-                registration_timestamp=miner_data.get("registration_timestamp", 0),
-            )
-            
-            # Filter by subnet if specified
-            if subnet_uid is None or miner.subnet_uid == subnet_uid:
-                result.append(miner)
+        for miner_address in known_miner_addresses:
+            try:
+                # Check if this address is registered as a miner
+                is_miner_response = await client.view(
+                    f"{contract_address}::full_moderntensor::is_miner",
+                    [],
+                    [miner_address]
+                )
                 
+                # Parse bytes response to JSON
+                if isinstance(is_miner_response, bytes):
+                    is_miner_data = json.loads(is_miner_response.decode())
+                else:
+                    is_miner_data = is_miner_response
+                
+                if is_miner_data and len(is_miner_data) > 0 and is_miner_data[0]:
+                    # Get miner info
+                    miner_info_response = await client.view(
+                        f"{contract_address}::full_moderntensor::get_miner_info",
+                        [],
+                        [miner_address]
+                    )
+                    
+                    # Parse bytes response to JSON
+                    if isinstance(miner_info_response, bytes):
+                        miner_data = json.loads(miner_info_response.decode())
+                    else:
+                        miner_data = miner_info_response
+                    
+                    if miner_data and len(miner_data) > 0:
+                        try:
+                            miner_info_raw = miner_data[0]
+                            logger.debug(f"Creating MinerInfo for {miner_address} with data: {miner_info_raw}")
+                            
+                            # Convert raw data to MinerInfo
+                            miner = MinerInfo(
+                                uid=miner_info_raw.get("uid", ""),
+                                address=miner_address,
+                                api_endpoint=miner_info_raw.get("api_endpoint", ""),
+                                trust_score=int(miner_info_raw.get("trust_score", 0)) / 100_000_000,  # Scale down from 1e8
+                                stake=int(miner_info_raw.get("stake", 0)) / 100_000_000,  # Convert from octas 
+                                status=int(miner_info_raw.get("status", 0)),
+                                subnet_uid=int(miner_info_raw.get("subnet_uid", 0)),
+                                registration_time=int(miner_info_raw.get("registration_time", 0)),
+                                weight=int(miner_info_raw.get("weight", 0)) / 100_000_000,  # Scale down from 1e8
+                                performance_history=[],  # Empty for now
+                                wallet_addr_hash=miner_info_raw.get("wallet_addr_hash", ""),
+                                performance_history_hash=miner_info_raw.get("performance_history_hash", "")
+                            )
+                            
+                            # Filter by subnet if specified
+                            if subnet_uid is None or miner.subnet_uid == subnet_uid:
+                                result.append(miner)
+                                logger.info(f"✅ Found miner: {miner.uid} at {miner_address}")
+                            else:
+                                logger.debug(f"Miner {miner.uid} filtered out (subnet {miner.subnet_uid} != {subnet_uid})")
+                                
+                        except Exception as creation_error:
+                            logger.error(f"Failed to create MinerInfo for {miner_address}: {creation_error}")
+                            logger.error(f"Raw data: {miner_info_raw}")
+                            continue
+                        
+            except Exception as e:
+                logger.debug(f"Address {miner_address} is not a registered miner: {e}")
+                continue
+                
+        logger.info(f"Found {len(result)} registered miners")
         return result
         
     except Exception as e:
@@ -338,7 +397,7 @@ async def get_all_validators(
     subnet_uid: Optional[int] = None
 ) -> List[ValidatorInfo]:
     """
-    Gets all validators registered in the metagraph.
+    Gets all validators registered in the metagraph by checking known addresses.
     
     Args:
         client: Aptos REST client
@@ -351,33 +410,81 @@ async def get_all_validators(
     try:
         logger.info(f"Getting all validators from contract {contract_address}")
         
-        # Call view function to get all validators
-        all_validators = await client.view_function(
-            contract_address,
-            "moderntensor",
-            "get_all_validators",
-            []
-        )
+        # Known validator addresses from config
+        known_validator_addresses = []
+        
+        # Get all VALIDATOR_*_ADDRESS from environment
+        for key, value in os.environ.items():
+            if key.startswith("VALIDATOR_") and key.endswith("_ADDRESS") and value:
+                known_validator_addresses.append(value)
+        
+        # Also check legacy VALIDATOR_ADDRESS
+        validator_addr = os.getenv("VALIDATOR_ADDRESS")
+        if validator_addr and validator_addr not in known_validator_addresses:
+            known_validator_addresses.append(validator_addr)
+            
+        logger.info(f"Checking {len(known_validator_addresses)} known validator addresses: {known_validator_addresses}")
         
         result = []
-        for validator_data in all_validators:
-            # Convert raw data to ValidatorInfo
-            validator = ValidatorInfo(
-                uid=validator_data.get("uid", ""),
-                address=validator_data.get("address", ""),
-                api_endpoint=validator_data.get("api_endpoint", ""),
-                trust_score=validator_data.get("scaled_trust_score", 0) / settings.METAGRAPH_DATUM_INT_DIVISOR,
-                stake=validator_data.get("stake", 0) / 100_000_000,  # Convert from smallest unit
-                status=validator_data.get("status", 0),
-                subnet_uid=validator_data.get("subnet_uid", 0),
-                registration_timestamp=validator_data.get("registration_timestamp", 0),
-                last_performance=validator_data.get("scaled_last_performance", 0) / settings.METAGRAPH_DATUM_INT_DIVISOR,
-            )
-            
-            # Filter by subnet if specified
-            if subnet_uid is None or validator.subnet_uid == subnet_uid:
-                result.append(validator)
+        for validator_address in known_validator_addresses:
+            try:
+                # Check if this address is registered as a validator
+                is_validator_response = await client.view(
+                    f"{contract_address}::full_moderntensor::is_validator",
+                    [],
+                    [validator_address]
+                )
                 
+                # Parse bytes response to JSON
+                if isinstance(is_validator_response, bytes):
+                    is_validator_data = json.loads(is_validator_response.decode())
+                else:
+                    is_validator_data = is_validator_response
+                
+                if is_validator_data and len(is_validator_data) > 0 and is_validator_data[0]:
+                    # Get validator info
+                    validator_info_response = await client.view(
+                        f"{contract_address}::full_moderntensor::get_validator_info",
+                        [],
+                        [validator_address]
+                    )
+                    
+                    # Parse bytes response to JSON
+                    if isinstance(validator_info_response, bytes):
+                        validator_data = json.loads(validator_info_response.decode())
+                    else:
+                        validator_data = validator_info_response
+                    
+                    if validator_data and len(validator_data) > 0:
+                        validator_info_raw = validator_data[0]
+                        
+                        # Convert raw data to ValidatorInfo
+                        validator = ValidatorInfo(
+                            uid=validator_info_raw.get("uid", ""),
+                            address=validator_address,
+                            api_endpoint=validator_info_raw.get("api_endpoint", ""),
+                            trust_score=int(validator_info_raw.get("trust_score", 0)) / 100_000_000,  # Scale down from 1e8
+                            stake=int(validator_info_raw.get("stake", 0)) / 100_000_000,  # Convert from octas
+                            status=int(validator_info_raw.get("status", 0)),
+                            subnet_uid=int(validator_info_raw.get("subnet_uid", 0)),
+                            registration_time=int(validator_info_raw.get("registration_time", 0)),
+                            last_performance=int(validator_info_raw.get("last_performance", 0)) / 100_000_000,  # Scale down from 1e8
+                            weight=int(validator_info_raw.get("weight", 0)) / 100_000_000,  # Scale down from 1e8
+                            performance_history=[],  # Empty for now
+                            wallet_addr_hash=validator_info_raw.get("wallet_addr_hash", ""),
+                            performance_history_hash=validator_info_raw.get("performance_history_hash", "")
+                        )
+                        
+                        # Filter by subnet if specified
+                        if subnet_uid is None or validator.subnet_uid == subnet_uid:
+                            result.append(validator)
+                            logger.info(f"✅ Found validator: {validator.uid} at {validator_address}")
+                        
+            except Exception as e:
+                logger.debug(f"Address {validator_address} is not a registered validator: {e}")
+                continue
+                
+        logger.info(f"Found {len(result)} registered validators")
         return result
         
     except Exception as e:

@@ -4,14 +4,14 @@
 """
 # Remove pycardano imports
 from typing import List, Dict, Any, Tuple, Optional
-from mt_aptos.metagraph.metagraph_datum import STATUS_ACTIVE
+from aptos_sdk.metagraph.metagraph_datum import STATUS_ACTIVE
 from dataclasses import dataclass, field
 import time  # Thêm import time
 
 from pydantic import BaseModel, Field
 
 # --- Import Aptos SDK as needed ---
-# from mt_aptos.account import Account  # Import if needed
+# from aptos_sdk.account import Account  # Import if needed
 
 
 @dataclass
@@ -78,15 +78,16 @@ class MinerResult:
     timestamp_received: float
 
 
-class ValidatorScore(BaseModel):
+@dataclass
+class ValidatorScore:
     """Lưu trữ điểm số một Validator chấm cho một Miner về một task."""
 
-    task_id: str = Field(..., description="ID của task")
-    miner_uid: str = Field(..., description="UID của miner")
-    validator_uid: str = Field(..., description="UID của validator đã chấm điểm")
-    score: float = Field(..., description="Điểm P_miner,v")
-    deviation: Optional[float] = Field(None, description="Độ lệch so với điểm đồng thuận")
-    timestamp: float = Field(default_factory=time.time, description="Thời điểm chấm điểm")
+    task_id: str
+    miner_uid: str
+    validator_uid: str  # Validator đã chấm điểm này
+    score: float  # Điểm P_miner,v
+    deviation: Optional[float] = None  # Độ lệch so với điểm đồng thuận (tính sau)
+    timestamp: float = field(default_factory=time.time)  # Thời điểm chấm điểm
 
 
 class ScoreSubmissionPayload(BaseModel):

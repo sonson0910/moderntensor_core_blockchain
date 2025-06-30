@@ -48,6 +48,7 @@ async def get_account_balance(
 ) -> int:
     """
     Lấy số dư của một tài khoản Aptos cho một loại coin cụ thể.
+    Support both old CoinStore và new FungibleAsset framework.
 
     Args:
         client (RestClient): Client REST Aptos.
@@ -57,15 +58,53 @@ async def get_account_balance(
     Returns:
         int: Số dư hiện tại. Trả về 0 nếu tài khoản không tồn tại hoặc không có tài nguyên coin.
     """
+    import aiohttp
+    
     try:
+        # Method 1: Try old CoinStore first (for backwards compatibility)
         resources = await get_account_resources(client, account_address)
-        
-        # Tìm tài nguyên coin
         coin_store_type = f"0x1::coin::CoinStore<{coin_type}>"
         
         for resource in resources:
             if resource["type"] == coin_store_type:
-                return int(resource["data"]["coin"]["value"])
+                balance = int(resource["data"]["coin"]["value"])
+                logger.debug(f"Found APT balance via CoinStore: {balance} octas")
+                return balance
+        
+        # Method 2: Try FungibleAsset (new method) for APT only
+        if coin_type == "0x1::aptos_coin::AptosCoin":
+            async with aiohttp.ClientSession() as session:
+                # Get owned objects
+                view_payload = {
+                    "function": "0x1::object::object_addresses_owned_by",
+                    "type_arguments": [],
+                    "arguments": [account_address]
+                }
+                
+                # Determine node URL from client
+                node_url = str(client.base_url).rstrip('/')
+                view_url = f"{node_url}/view"
+                
+                async with session.post(view_url, json=view_payload) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if result and result[0]:
+                            owned_objects = result[0]
+                            
+                            # Check each object for APT FungibleStore
+                            for obj_addr in owned_objects:
+                                store_url = f"{node_url}/accounts/{obj_addr}/resource/0x1::fungible_asset::FungibleStore"
+                                async with session.get(store_url) as store_response:
+                                    if store_response.status == 200:
+                                        store_data = await store_response.json()
+                                        balance = store_data.get("data", {}).get("balance", "0")
+                                        metadata = store_data.get("data", {}).get("metadata", {}).get("inner", "")
+                                        
+                                        # Check if this is APT (metadata = 0xa)
+                                        if metadata == "0x000000000000000000000000000000000000000000000000000000000000000a" or metadata == "0xa":
+                                            balance_value = int(balance)
+                                            logger.debug(f"Found APT balance via FungibleStore: {balance_value} octas")
+                                            return balance_value
                 
         # Không tìm thấy tài nguyên coin
         logger.warning(f"Không tìm thấy {coin_type} trong tài khoản {account_address}")

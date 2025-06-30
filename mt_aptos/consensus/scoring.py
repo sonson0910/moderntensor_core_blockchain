@@ -117,6 +117,7 @@ def score_results_logic(
     results_received: Dict[str, List[MinerResult]],
     tasks_sent: Dict[str, TaskAssignment],
     validator_uid: str,
+    validator_instance=None,  # Thêm validator instance
 ) -> Dict[str, List[ValidatorScore]]:
     """
     Chấm điểm tất cả các kết quả hợp lệ nhận được từ miners cho chu kỳ hiện tại.
@@ -157,11 +158,16 @@ def score_results_logic(
         valid_result_found = False
         for result in results:
             if result.miner_uid == assignment.miner_uid:
-                # Gọi hàm chấm điểm (có thể là hàm đã override)
+                # Gọi hàm chấm điểm (ưu tiên method từ validator instance)
                 try:
-                    score = _calculate_score_from_result(
-                        assignment.task_data, result.result_data
-                    )
+                    if validator_instance and hasattr(validator_instance, '_score_individual_result'):
+                        score = validator_instance._score_individual_result(
+                            assignment.task_data, result.result_data
+                        )
+                    else:
+                        score = _calculate_score_from_result(
+                            assignment.task_data, result.result_data
+                        )
                     # Đảm bảo điểm nằm trong khoảng [0, 1]
                     score = max(0.0, min(1.0, score))
                     valid_result_found = True  # Đánh dấu đã tìm thấy kết quả hợp lệ

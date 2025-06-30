@@ -22,19 +22,27 @@ async def check_network_connectivity() -> Dict[str, Any]:
             aptos_response = await client.get(settings.APTOS_NODE_URL + "/health")
             aptos_status = aptos_response.status_code == 200
             
-            # Check validator API
-            validator_response = await client.get(settings.VALIDATOR_API_ENDPOINT + "/health")
-            validator_status = validator_response.status_code == 200
+            # Check validator API - use dynamic endpoint
+            validator_endpoint = settings.get_current_validator_endpoint()
+            validator_status = False
+            if validator_endpoint:
+                try:
+                    validator_response = await client.get(validator_endpoint + "/health")
+                    validator_status = validator_response.status_code == 200
+                except Exception:
+                    validator_status = False
             
             return {
                 "aptos_node": aptos_status,
                 "validator_api": validator_status,
+                "validator_endpoint": validator_endpoint,
                 "status": "healthy" if aptos_status and validator_status else "degraded"
             }
     except Exception as e:
         return {
             "aptos_node": False,
             "validator_api": False,
+            "validator_endpoint": None,
             "status": "unhealthy",
             "error": str(e)
         }

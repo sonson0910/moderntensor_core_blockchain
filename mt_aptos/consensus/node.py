@@ -20,6 +20,9 @@ import logging
 import string
 import psutil
 import uvicorn
+import httpx
+from enum import Enum
+from dataclasses import dataclass
 from ..monitoring.health import app as health_app
 from ..monitoring.circuit_breaker import CircuitBreaker
 from ..monitoring.rate_limiter import RateLimiter
@@ -87,6 +90,33 @@ logger = logging.getLogger(__name__)
 # --- Import metrics ---
 from ..monitoring.metrics import metrics
 
+# --- Slot-Based Consensus Enums and Config ---
+class SlotPhase(Enum):
+    TASK_ASSIGNMENT = "task_assignment"
+    TASK_EXECUTION = "task_execution"  
+    CONSENSUS_SCORING = "consensus_scoring"
+    METAGRAPH_UPDATE = "metagraph_update"
+
+@dataclass
+class SlotConfig:
+    slot_duration_minutes: int = 20  # Total slot duration (reduced for testing)
+    task_assignment_minutes: int = 15  # 0-15min: Extended task assignment
+    task_execution_minutes: int = 3    # 15-18min: Quick task execution  
+    consensus_minutes: int = 2         # 18-20min: Fast consensus & metagraph update
+    metagraph_update_minutes: int = 1  # Last 1min: Metagraph update (part of consensus_minutes)
+    
+    def get_phase_boundaries(self) -> Dict[SlotPhase, tuple]:
+        """Get start/end minutes for each phase with proper 4-phase separation"""
+        consensus_start = self.task_assignment_minutes + self.task_execution_minutes
+        metagraph_start = self.slot_duration_minutes - self.metagraph_update_minutes
+        
+        return {
+            SlotPhase.TASK_ASSIGNMENT: (0, self.task_assignment_minutes),
+            SlotPhase.TASK_EXECUTION: (self.task_assignment_minutes, consensus_start),
+            SlotPhase.CONSENSUS_SCORING: (consensus_start, metagraph_start),
+            SlotPhase.METAGRAPH_UPDATE: (metagraph_start, self.slot_duration_minutes)
+        }
+
 
 class ValidatorNode:
     """
@@ -129,48 +159,49 @@ class ValidatorNode:
         account: Account,
         contract_address: str,
         state_file="validator_state.json",
+        consensus_mode="continuous",  # Add consensus mode parameter
+        batch_wait_time=30.0,  # Add configurable wait time
     ):
-        """
-        Initializes the Validator Node.
-
-        Args:
-            validator_info (ValidatorInfo): Information for this validator (UID, Address, API Endpoint).
-            aptos_client (RestClient): Aptos REST client for blockchain interactions.
-            account (Account): Aptos account for signing transactions.
-            contract_address (str): ModernTensor contract address on Aptos.
-            state_file (str): Path to the file for saving/loading the last completed cycle.
-
-        Raises:
-            ValueError: If essential arguments are missing or invalid.
-        """
-        if not validator_info or not validator_info.uid:
-            raise ValueError("Valid ValidatorInfo with a UID must be provided.")
-        if not aptos_client:
-            raise ValueError("Aptos client must be provided.")
-        if not account:
-            raise ValueError("Aptos account must be provided.")
-        if not contract_address:
-            raise ValueError("ModernTensor contract address must be provided.")
-
+        """Initialize ValidatorNode with configurable consensus mode"""
         self.info = validator_info
+        self.aptos_client = aptos_client
+        self.client = aptos_client  # Alias for compatibility
+        self.account = account
+        self.contract_address = contract_address
+        self.state_file = state_file
+        self.consensus_mode = consensus_mode  # "continuous" or "sequential"
+        self.batch_wait_time = batch_wait_time
+        
+        # Initialize settings from environment or defaults
+        from mt_aptos.config.settings import settings
+        self.settings = settings
+        
+        # Initialize metrics
+        from mt_aptos.monitoring.metrics import metrics
+        self.metrics = metrics
+        
         # Define prefix early for use in initial logs
         self.uid_prefix = f"[{self.info.uid}]"  # Base prefix with UID
         init_prefix = f"[Init:{self.uid_prefix}]"  # Specific prefix for init
 
-        self.client = aptos_client
-        self.account = account
-        self.contract_address = contract_address
-        self.settings = settings
-        self.state_file = state_file
-        self.metrics = metrics
         self.metrics.update_memory_usage(psutil.Process().memory_info().rss)
         # Use DEBUG for file path setting
         logger.debug(f"{init_prefix} State file set to: {self.state_file}")
         self.miners_selected_for_cycle = set()
 
-        # Load initial cycle
-        self.current_cycle = self._load_last_cycle()  # This method now uses its own prefix
-        self.slot_length = self.settings.CONSENSUS_CYCLE_SLOT_LENGTH
+        # Load initial cycle - use internal attribute instead of property
+        self._current_cycle = self._load_last_cycle()  # This method now uses its own prefix
+        self.slot_length = self.settings.CONSENSUS_CYCLE_LENGTH
+        
+        # Slot-based consensus configuration (Cardano ModernTensor Pattern)
+        self.slot_config = SlotConfig(
+            slot_duration_minutes=settings.SLOT_DURATION_MINUTES,
+            task_assignment_minutes=settings.TASK_ASSIGNMENT_MINUTES,
+            task_execution_minutes=settings.TASK_EXECUTION_MINUTES,
+            consensus_minutes=settings.CONSENSUS_MINUTES
+        )
+        self.current_slot_phase = SlotPhase.TASK_ASSIGNMENT
+        self.slot_phase_start_time = time.time()
 
         # State variables initialization
         self.miners_info = {}
@@ -180,12 +211,22 @@ class ValidatorNode:
         self.miner_is_busy = set()
         self.results_buffer = {}
         self.results_buffer_lock = asyncio.Lock()
+        self.results_received = defaultdict(list)
         self.validator_scores = defaultdict(list)
         self.consensus_results_cache = OrderedDict()
         self.consensus_results_cache_lock = asyncio.Lock()
         self.received_validator_scores = defaultdict(lambda: defaultdict(dict))
         self.received_scores_lock = asyncio.Lock()
         self.previous_cycle_results = {}
+        
+        # Slot-based state variables
+        self.current_slot_miners = {}  # Miners selected for current slot
+        self.slot_consensus_results = {}  # Final consensus results for slot
+        self.slot_scores = {}  # Scores for each slot (Cardano pattern)
+        
+        # Task tracking by slot (better than object attributes)
+        self.slot_tasks_sent = set()  # Track which slots have sent tasks
+        self.slot_scored = set()  # Track which slots have been scored
         
         # HTTP client for network communications
         self.http_client = httpx.AsyncClient(
@@ -205,11 +246,17 @@ class ValidatorNode:
         
         logger.info(f"{init_prefix} Validator node initialized with UID: {self.info.uid}")
         logger.info(f"{init_prefix} Connected to Aptos network with contract: {self.contract_address}")
-        logger.info(f"{init_prefix} Starting at cycle: {self.current_cycle}")
+        logger.info(f"{init_prefix} Starting at cycle: {self._current_cycle}")
+        logger.info(f"{init_prefix} Consensus mode: {self.consensus_mode}")
 
         self.health_server = None
+        
+        # Initialize signing key for score broadcasting (placeholder)
+        self.signing_key = self.account.private_key  # Use Aptos account's private key
 
         # Initialize circuit breaker and rate limiter
+        from mt_aptos.monitoring.circuit_breaker import CircuitBreaker
+        from mt_aptos.monitoring.rate_limiter import RateLimiter
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=self.settings.CIRCUIT_BREAKER_FAILURE_THRESHOLD or 5,
             reset_timeout=self.settings.CIRCUIT_BREAKER_RESET_TIMEOUT or 60
@@ -218,6 +265,9 @@ class ValidatorNode:
             max_requests=self.settings.RATE_LIMITER_MAX_REQUESTS or 100,
             time_window=self.settings.RATE_LIMITER_TIME_WINDOW or 60
         )
+        
+        # Cache configuration
+        self.max_cache_cycles = 10
 
     def _load_last_cycle(self) -> int:
         """Loads the last completed cycle number from the state file."""
@@ -379,7 +429,7 @@ class ValidatorNode:
                           khiến node không thể tiếp tục chu kỳ.
         """
         logger.info(
-            f"[V:{self.info.uid}] Đang tải dữ liệu từ Aptos blockchain cho chu kỳ {self.current_cycle}..."
+            f"[V:{self.info.uid}] Đang tải dữ liệu từ Aptos blockchain cho chu kỳ {self._current_cycle}..."
         )
         start_time = time.time()
 
@@ -410,27 +460,28 @@ class ValidatorNode:
             # Xử lý lỗi fetch
             if isinstance(miners_data, Exception):
                 logger.error(f"Lỗi khi lấy dữ liệu miners: {miners_data}")
-                miners_data = []
+                import traceback
+                logger.error(f"Miners data exception traceback: {traceback.format_exception(type(miners_data), miners_data, miners_data.__traceback__)}")
+                miners_data = {}  # Fix: Should be empty dict, not list
             if isinstance(validators_data, Exception):
                 logger.error(f"Lỗi khi lấy dữ liệu validators: {validators_data}")
-                validators_data = []
+                import traceback
+                logger.error(f"Validators data exception traceback: {traceback.format_exception(type(validators_data), validators_data, validators_data.__traceback__)}")
+                validators_data = {}  # Fix: Should be empty dict, not list
 
             logger.info(f"Đã lấy {len(miners_data)} miner và {len(validators_data)} validator.")
+            logger.info(f"Miners data type: {type(miners_data)}, content preview: {list(miners_data.keys()) if isinstance(miners_data, dict) else 'Not a dict'}")
+            logger.info(f"Validators data type: {type(validators_data)}, content preview: {list(validators_data.keys()) if isinstance(validators_data, dict) else 'Not a dict'}")
 
             # --- Chuyển đổi dữ liệu miners thành MinerInfo ---
-            for miner_data in miners_data:
+            # miners_data is a dict mapping uid -> MinerInfo objects
+            for uid_hex, miner_data in miners_data.items():
                 try:
-                    uid_hex = miner_data.get("uid")
                     if not uid_hex:
                         continue
 
                     # Lấy history hash từ dữ liệu (nếu có)
-                    on_chain_history_hash_hex = miner_data.get("performance_history_hash")
-                    on_chain_history_hash_bytes = (
-                        bytes.fromhex(on_chain_history_hash_hex)
-                        if on_chain_history_hash_hex
-                        else None
-                    )
+                    on_chain_history_hash_bytes = miner_data.performance_history_hash
 
                     # Lấy lịch sử hiệu suất từ thông tin cũ (nếu có)
                     current_local_history = []  # Mặc định là rỗng
@@ -476,51 +527,28 @@ class ValidatorNode:
                     verified_history = verified_history[-max_history_len:]
 
                     # Lấy wallet_addr_hash nếu có
-                    wallet_addr_hash_hex = miner_data.get("wallet_addr_hash")
-                    wallet_addr_hash_bytes = (
-                        bytes.fromhex(wallet_addr_hash_hex)
-                        if wallet_addr_hash_hex
-                        else None
-                    )
+                    wallet_addr_hash_bytes = miner_data.wallet_addr_hash
 
-                    # Tạo đối tượng MinerInfo
-                    temp_miners_info[uid_hex] = MinerInfo(
-                        uid=uid_hex,
-                        address=miner_data.get("address", f"0x{uid_hex[:8]}..."),
-                        api_endpoint=miner_data.get("api_endpoint"),
-                        trust_score=float(miner_data.get("trust_score", 0.0)),
-                        weight=float(miner_data.get("weight", 0.0)),
-                        stake=float(miner_data.get("stake", 0)),
-                        last_selected_time=int(miner_data.get("last_selected_time", -1)),
-                        performance_history=verified_history,
-                        subnet_uid=int(miner_data.get("subnet_uid", -1)),
-                        status=int(miner_data.get("status", STATUS_INACTIVE)),
-                        registration_slot=int(miner_data.get("registration_slot", 0)),
-                        wallet_addr_hash=wallet_addr_hash_bytes,
-                        performance_history_hash=on_chain_history_hash_bytes,
-                    )
+                    # Use the existing MinerInfo object but update with verified history
+                    miner_data.performance_history = verified_history
+                    temp_miners_info[uid_hex] = miner_data
 
                 except Exception as e:
                     logger.warning(
-                        f"Lỗi khi phân tích dữ liệu Miner cho UID {miner_data.get('uid', 'N/A')}: {e}",
+                        f"Lỗi khi phân tích dữ liệu Miner cho UID {uid_hex}: {e}",
                         exc_info=False,
                     )
                     logger.debug(f"Dữ liệu miner gặp vấn đề: {miner_data}")
 
             # --- Tương tự, chuyển đổi dữ liệu validator thành ValidatorInfo ---
-            for validator_data in validators_data:
+            # validators_data is a dict mapping uid -> ValidatorInfo objects
+            for uid_hex, validator_data in validators_data.items():
                 try:
-                    uid_hex = validator_data.get("uid")
                     if not uid_hex:
                         continue
 
                     # Xử lý tương tự như với miners để lấy và xác minh history
-                    on_chain_history_hash_hex = validator_data.get("performance_history_hash")
-                    on_chain_history_hash_bytes = (
-                        bytes.fromhex(on_chain_history_hash_hex)
-                        if on_chain_history_hash_hex
-                        else None
-                    )
+                    on_chain_history_hash_bytes = validator_data.performance_history_hash
 
                     current_local_history = []
                     previous_info = previous_validators_info.get(uid_hex)
@@ -563,16 +591,11 @@ class ValidatorNode:
 
                     # --- Lấy address bytes từ datum và decode ---
                     # Lấy các hash khác
-                    wallet_addr_hash_hex = validator_data.get("wallet_addr_hash")
-                    wallet_addr_hash_bytes = (
-                        bytes.fromhex(wallet_addr_hash_hex)
-                        if wallet_addr_hash_hex
-                        else None
-                    )
+                    wallet_addr_hash_bytes = validator_data.wallet_addr_hash
                     # ------------------------------------------
 
                     # <<< ADDED: Sanitize api_endpoint >>>
-                    raw_endpoint = validator_data.get("api_endpoint")
+                    raw_endpoint = validator_data.api_endpoint
                     clean_endpoint: Optional[str] = None
                     if isinstance(raw_endpoint, str):
                         # Basic check for common protocols and printable chars
@@ -590,29 +613,16 @@ class ValidatorNode:
                         )
                     # <<< END ADDED >>>
 
-                    temp_validators_info[uid_hex] = ValidatorInfo(
-                        uid=uid_hex,
-                        address=validator_data.get(
-                            "address", f"addr_validator_{uid_hex[:8]}..."
-                        ),
-                        api_endpoint=clean_endpoint,  # <<< Use sanitized endpoint
-                        trust_score=float(validator_data.get("trust_score", 0.0)),
-                        weight=float(validator_data.get("weight", 0.0)),
-                        stake=float(validator_data.get("stake", 0)),
-                        last_performance=float(validator_data.get("last_performance", 0.0)),
-                        performance_history=verified_history,
-                        subnet_uid=int(validator_data.get("subnet_uid", -1)),
-                        status=int(validator_data.get("status", STATUS_INACTIVE)),
-                        registration_slot=int(validator_data.get("registration_slot", 0)),
-                        wallet_addr_hash=wallet_addr_hash_bytes,
-                        performance_history_hash=on_chain_history_hash_bytes,  # Lưu lại hash on-chain
-                    )
+                    # Use the existing ValidatorInfo object but update with verified history and clean endpoint
+                    validator_data.performance_history = verified_history
+                    validator_data.api_endpoint = clean_endpoint  # Use sanitized endpoint
+                    temp_validators_info[uid_hex] = validator_data
                     logger.debug(
-                        f"  Loaded Validator Peer: UID={uid_hex}, Status={validator_data.get('status', 'N/A')}, Endpoint='{validator_data.get('api_endpoint', 'N/A')}'"
+                        f"  Loaded Validator Peer: UID={uid_hex}, Status={validator_data.status}, Endpoint='{validator_data.api_endpoint}'"
                     )
                 except Exception as e:
                     logger.warning(
-                        f"Failed to parse Validator data dict for UID {validator_data.get('uid', 'N/A')}: {e}",
+                        f"Failed to parse Validator data dict for UID {uid_hex}: {e}",
                         exc_info=False,
                     )
                     logger.debug(f"Problematic validator data dict: {validator_data}")
@@ -659,16 +669,23 @@ class ValidatorNode:
             logger.exception(
                 f"Critical error during metagraph data loading/processing: {e}. Cannot proceed this cycle."
             )
+            logger.error(f"DETAILED ERROR TRACE:")
+            import traceback
+            logger.error(f"{traceback.format_exc()}")
+            logger.error(f"Current miners_info before reset: {list(self.miners_info.keys()) if self.miners_info else 'None'}")
+            logger.error(f"Current validators_info before reset: {list(self.validators_info.keys()) if self.validators_info else 'None'}")
+            
             # Initialize empty objects on error
             self.miners_info = {}
             self.validators_info = {}
+            logger.error(f"⚠️ MINERS_INFO RESET TO EMPTY DUE TO EXCEPTION! ⚠️")
             raise RuntimeError(f"Failed to load and process metagraph data: {e}") from e
 
     # --- Lựa chọn Miner ---
     def select_miners(self) -> List[MinerInfo]:
         """Selects miners for task assignment based on configured logic."""
         logger.info(
-            f"[V:{self.info.uid}] Selecting miners for cycle {self.current_cycle}..."
+            f"[V:{self.info.uid}] Selecting miners for cycle {self._current_cycle}..."
         )
         num_to_select = self.settings.CONSENSUS_NUM_MINERS_TO_SELECT
         beta = self.settings.CONSENSUS_PARAM_BETA
@@ -676,7 +693,7 @@ class ValidatorNode:
         # Gọi hàm logic từ selection.py
         return select_miners_logic(
             miners_info=self.miners_info,
-            current_cycle=self.current_cycle,
+            current_cycle=self._current_cycle,
             num_to_select=num_to_select,  # Truyền số lượng cần chọn
             beta=beta,  # Truyền hệ số beta
             max_time_bonus=max_time_bonus,  # Truyền giới hạn bonus thời gian
@@ -735,7 +752,7 @@ class ValidatorNode:
         # Gọi hàm logic từ selection.py
         selected_miners_for_batch = select_miners_logic(
             miners_info=available_miners_dict,
-            current_cycle=self.current_cycle,  # Sử dụng cycle hiện tại để tính bonus time
+            current_cycle=self._current_cycle,  # Sử dụng cycle hiện tại để tính bonus time
             num_to_select=actual_num_to_select,  # Chọn tối đa N
             beta=beta,
             max_time_bonus=max_time_bonus,
@@ -791,7 +808,7 @@ class ValidatorNode:
     #         self.miner_is_busy.add(miner_uid)
 
     #         # Tạo task ID duy nhất (thêm timestamp nhỏ hoặc số thứ tự batch nếu cần)
-    #         task_id = f"task_{self.current_cycle}_{self.info.uid}_{miner_uid}_b{batch_num}_{random.randint(1000,9999)}"
+    #         task_id = f"task_{self._current_cycle}_{self.info.uid}_{miner_uid}_b{batch_num}_{random.randint(1000,9999)}"
     #         try:
     #             task_data = self._create_task_data(miner_uid)
     #             if task_data is None:
@@ -906,7 +923,7 @@ class ValidatorNode:
                 if isinstance(self.info.uid, bytes)
                 else self.info.uid
             )
-            task_id = f"task_{self.current_cycle}_{self_uid_hex}_{miner_uid}_b{batch_num}_{random.randint(1000,9999)}"
+            task_id = f"task_{self._current_cycle}_{self_uid_hex}_{miner_uid}_b{batch_num}_{random.randint(1000,9999)}"
 
             try:
                 # Create task data using the overridable method
@@ -1273,6 +1290,822 @@ class ValidatorNode:
                 f"Slot hiện tại: {current_slot}, Đích: {target_slot}. Đợi {wait_interval:.1f}s..."
             )
             await asyncio.sleep(wait_interval)
+    
+    def get_current_blockchain_slot(self) -> int:
+        """Get current blockchain slot number based on timestamp"""
+        epoch_start = 1735689600  # Jan 1, 2025 00:00:00 UTC
+        current_time = int(time.time())
+        slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
+        return (current_time - epoch_start) // slot_duration_seconds
+    
+    def get_slot_phase(self, slot_number: int) -> tuple[SlotPhase, int, int]:
+        """
+        Get current phase within a slot and time remaining
+        Returns: (phase, minutes_into_slot, minutes_remaining_in_phase)
+        """
+        current_time = int(time.time())
+        epoch_start = 1735689600
+        slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
+        
+        slot_start_time = epoch_start + (slot_number * slot_duration_seconds)
+        minutes_into_slot = (current_time - slot_start_time) // 60
+        
+        boundaries = self.slot_config.get_phase_boundaries()
+        
+        for phase, (start_min, end_min) in boundaries.items():
+            if start_min <= minutes_into_slot < end_min:
+                minutes_remaining = end_min - minutes_into_slot
+                return phase, minutes_into_slot, minutes_remaining
+        
+        # Default to task assignment if outside boundaries
+        return SlotPhase.TASK_ASSIGNMENT, minutes_into_slot, 0
+    
+    async def handle_task_assignment_phase(self, slot: int, minutes_remaining: int):
+        """Phase 1: Cardano ModernTensor task assignment pattern"""
+        logger.info(f"📋 [V:{self.info.uid}] Cardano Task Assignment - Slot {slot} ({minutes_remaining}min remaining)")
+        
+        # Clean up old slot tracking (keep only recent slots)
+        old_slots = [s for s in self.slot_tasks_sent if s < slot - 10]  # Keep last 10 slots
+        for old_slot in old_slots:
+            self.slot_tasks_sent.discard(old_slot)
+        old_scores = [s for s in self.slot_scored if s < slot - 10]
+        for old_slot in old_scores:
+            self.slot_scored.discard(old_slot)
+        
+        # Check if we've already sent tasks for this slot
+        if slot not in self.slot_tasks_sent:
+            logger.info(f"🔄 [V:{self.info.uid}] NEW SLOT {slot} - First time, will send tasks")
+            try:
+                # First time in this slot - update metagraph and send tasks
+                logger.info(f"🔄 [V:{self.info.uid}] First time in slot {slot} - updating metagraph...")
+                await self._update_metagraph()
+                logger.info(f"✅ [V:{self.info.uid}] Metagraph updated. Miners: {len(self.miners_info) if self.miners_info else 0}")
+                
+                # Select miners (Cardano style - simple selection)
+                selected_miners = self.cardano_select_miners(slot)
+                
+                if selected_miners:
+                    logger.info(f"🎯 [V:{self.info.uid}] Cardano selected {len(selected_miners)} miners: {[m.uid for m in selected_miners]}")
+                    
+                    # Send tasks immediately (Cardano pattern)
+                    await self.cardano_send_tasks(slot, selected_miners)
+                    
+                    # Mark that we've sent tasks for this slot
+                    self.slot_tasks_sent.add(slot)
+                    
+                else:
+                    logger.warning(f"⚠️ [V:{self.info.uid}] No miners available for Cardano assignment")
+                    
+            except Exception as e:
+                logger.error(f"❌ [V:{self.info.uid}] Cardano task assignment error: {e}")
+        else:
+            logger.info(f"📋 [V:{self.info.uid}] SLOT {slot} already processed - monitoring only")
+            # Continue monitoring during assignment phase - check for new miners or retry failed tasks
+            try:
+                # Check if any miners finished and can take new tasks
+                if minutes_remaining > 10:  # Only in first part of assignment phase
+                    available_miners = self.cardano_select_miners(slot)
+                    busy_miners = len(self.miner_is_busy)
+                    logger.debug(f"📊 [V:{self.info.uid}] Assignment status: {busy_miners} busy miners, {len(available_miners)} available")
+                    
+                    # Look for miners that failed initial task assignment
+                    failed_miners = []
+                    for miner in available_miners:
+                        if miner.uid not in self.miner_is_busy:
+                            # Check if this miner should have been assigned but wasn't
+                            expected_task_id = f"slot_{slot}_{miner.uid}"
+                            if expected_task_id not in self.tasks_sent:
+                                failed_miners.append(miner)
+                    
+                    if failed_miners:
+                        logger.info(f"🔄 [V:{self.info.uid}] Retrying failed assignments for {len(failed_miners)} miners")
+                        await self.cardano_send_tasks(slot, failed_miners)
+                        
+            except Exception as e:
+                logger.debug(f"Assignment monitoring error: {e}")
+    
+    def cardano_select_miners(self, slot: int) -> List[MinerInfo]:
+        """Select miners using Cardano ModernTensor pattern - simple and effective"""
+        logger.debug(f"🔍 [V:{self.info.uid}] Miners available: {len(self.miners_info) if self.miners_info else 0}")
+        if self.miners_info:
+            logger.debug(f"🔍 [V:{self.info.uid}] Miner UIDs: {list(self.miners_info.keys())}")
+        
+        if not self.miners_info:
+            logger.warning(f"⚠️ [V:{self.info.uid}] No miners_info available!")
+            return []
+        
+        # Get active miners (Cardano pattern)
+        active_miners = [
+            m for m in self.miners_info.values()
+            if getattr(m, "status", STATUS_ACTIVE) == STATUS_ACTIVE and m.uid not in self.miner_is_busy
+        ]
+        
+        if not active_miners:
+            return []
+        
+        # Cardano uses simple round-robin or random selection
+        num_to_select = min(
+            getattr(self.settings, 'CONSENSUS_NUM_MINERS_TO_SELECT', 2),
+            len(active_miners)
+        )
+        
+        # Sort for deterministic selection
+        sorted_miners = sorted(active_miners, key=lambda m: m.uid)
+        
+        # Simple selection based on slot (Cardano pattern)
+        start_idx = slot % len(sorted_miners)
+        selected = []
+        
+        for i in range(num_to_select):
+            idx = (start_idx + i) % len(sorted_miners)
+            selected.append(sorted_miners[idx])
+        
+        return selected
+    
+    async def cardano_send_tasks(self, slot: int, miners: List[MinerInfo]):
+        """Send tasks using Cardano ModernTensor pattern - parallel like original SDK"""
+        logger.info(f"🚀 [V:{self.info.uid}] Cardano sending tasks to {len(miners)} miners (parallel)")
+        
+        # First, check health of all miners
+        logger.info(f"🔍 [V:{self.info.uid}] Checking health of {len(miners)} miners...")
+        healthy_miners = []
+        
+        health_checks = []
+        for miner in miners:
+            health_checks.append(self._check_miner_health(miner.api_endpoint))
+        
+        health_results = await asyncio.gather(*health_checks, return_exceptions=True)
+        
+        for miner, is_healthy in zip(miners, health_results):
+            if is_healthy is True:
+                healthy_miners.append(miner)
+                logger.info(f"✅ [V:{self.info.uid}] Miner {miner.uid} is healthy")
+            else:
+                logger.warning(f"⚠️ [V:{self.info.uid}] Miner {miner.uid} is not healthy - skipping task send")
+        
+        if not healthy_miners:
+            logger.warning(f"❌ [V:{self.info.uid}] No healthy miners available for slot {slot}")
+            return
+        
+        logger.info(f"🎯 [V:{self.info.uid}] Sending tasks to {len(healthy_miners)}/{len(miners)} healthy miners")
+        
+        # Prepare all tasks first (Cardano pattern)
+        task_assignments = []
+        task_sends = []
+        
+        for miner in healthy_miners:
+            try:
+                # Simple task ID (Cardano pattern)
+                task_id = f"slot_{slot}_{miner.uid}"
+                
+                # Create task (Cardano style - simple prompt)
+                task_data = self.cardano_create_task(slot, miner.uid)
+                
+                # Create assignment
+                assignment = TaskAssignment(
+                    task_id=task_id,
+                    task_data=task_data,
+                    miner_uid=miner.uid,
+                    validator_uid=self.info.uid,
+                    timestamp_sent=time.time(),
+                    expected_result_format={},
+                )
+                
+                # Store assignment for tracking
+                task_assignments.append((task_id, assignment, miner))
+                
+                # Prepare task for sending
+                from mt_aptos.network.server import TaskModel
+                task = TaskModel(task_id=task_id, **task_data)
+                
+                # Add to parallel send list
+                task_sends.append(self._cardano_send_single_task(task_id, assignment, miner, task))
+                
+            except Exception as e:
+                logger.error(f"❌ [V:{self.info.uid}] Cardano task prep error for {miner.uid}: {e}")
+        
+        # Send all tasks in parallel (Cardano ModernTensor SDK pattern)
+        if task_sends:
+            logger.info(f"📡 [V:{self.info.uid}] Sending {len(task_sends)} tasks in parallel...")
+            results = await asyncio.gather(*task_sends, return_exceptions=True)
+            
+            # Process results
+            success_count = 0
+            for i, (result, (task_id, assignment, miner)) in enumerate(zip(results, task_assignments)):
+                if result is True:
+                    # Success - store assignment and mark miner busy
+                    self.tasks_sent[task_id] = assignment
+                    self.miner_is_busy.add(miner.uid)
+                    success_count += 1
+                    logger.info(f"✅ [V:{self.info.uid}] Cardano task sent to {miner.uid}")
+                else:
+                    # Failed - log error
+                    logger.warning(f"❌ [V:{self.info.uid}] Failed Cardano task to {miner.uid}: {result if isinstance(result, Exception) else 'Unknown error'}")
+            
+            logger.info(f"🎯 [V:{self.info.uid}] Cardano parallel send complete: {success_count}/{len(task_sends)} successful")
+    
+    async def _cardano_send_single_task(self, task_id: str, assignment: TaskAssignment, miner: MinerInfo, task) -> bool:
+        """Send a single task to miner (used in parallel sends)"""
+        try:
+            logger.debug(f"🚀 Sending task {task_id} to miner {miner.uid} at {miner.api_endpoint}")
+            success = await self._send_task_via_network_async(miner.api_endpoint, task)
+            if not success:
+                logger.warning(f"❌ Task send returned False for {miner.uid}")
+            return success
+        except Exception as e:
+            logger.error(f"❌ Task send exception to {miner.uid}: {e}")
+            import traceback
+            logger.error(f"Task send traceback: {traceback.format_exc()}")
+            return False
+    
+    def cardano_create_task(self, slot: int, miner_uid: str) -> Dict[str, Any]:
+        """Create task using Cardano ModernTensor pattern - simple and consistent"""
+        # Deadline as ISO string (TaskModel requirement)
+        deadline_timestamp = time.time() + (self.slot_config.task_execution_minutes * 60)
+        deadline_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(deadline_timestamp))
+        
+        # TaskModel compatible format
+        task_data = {
+            "description": f"Generate a beautiful landscape image for slot {slot}",  # Required field
+            "deadline": deadline_str,  # String format required
+            "priority": 3,  # Medium priority
+            "validator_endpoint": getattr(self.info, 'api_endpoint', 'http://localhost:8001'),
+            "task_data": {  # Actual task payload
+                "type": "image_generation",
+                "prompt": f"A beautiful landscape for slot {slot}",
+                "slot": slot,
+                "miner_uid": miner_uid,
+                "expected_format": "base64_image"
+            }
+        }
+        
+        return task_data
+    
+    def select_miners_for_slot(self, slot: int) -> List[MinerInfo]:
+        """
+        Deterministic miner selection based on slot number.
+        All validators should select the same miners for the same slot.
+        """
+        if not self.miners_info:
+            return []
+        
+        # Get active miners
+        active_miners = [
+            m for m in self.miners_info.values()
+            if getattr(m, "status", STATUS_ACTIVE) == STATUS_ACTIVE
+        ]
+        
+        if not active_miners:
+            return []
+        
+        # Deterministic selection based on slot number
+        # Use slot as seed for consistent selection across validators
+        import random
+        slot_random = random.Random(slot)  # Deterministic seed
+        
+        # Select miners based on weighted probability
+        num_to_select = min(
+            self.settings.CONSENSUS_NUM_MINERS_TO_SELECT,
+            len(active_miners)
+        )
+        
+        # Sort miners by UID for deterministic ordering
+        sorted_miners = sorted(active_miners, key=lambda m: m.uid)
+        
+        # Select miners using slot-based deterministic shuffle
+        slot_random.shuffle(sorted_miners)
+        selected = sorted_miners[:num_to_select]
+        
+        return selected
+    
+    async def assign_tasks_for_slot(self, slot: int, miners: List[MinerInfo]):
+        """
+        Assign deterministic tasks to miners for this slot.
+        Tasks are consistent across all validators for the same slot.
+        """
+        logger.info(f"🎯 [V:{self.info.uid}] Assigning tasks for slot {slot} to {len(miners)} miners")
+        
+        for miner in miners:
+            try:
+                # Create deterministic task ID based on slot and miner
+                task_id = f"slot_{slot}_{miner.uid}_{self.info.uid}"
+                
+                # Create task data (this should be deterministic too)
+                task_data = self.create_slot_task_data(slot, miner.uid)
+                
+                # Create task assignment
+                assignment = TaskAssignment(
+                    task_id=task_id,
+                    task_data=task_data,
+                    miner_uid=miner.uid,
+                    validator_uid=self.info.uid,
+                    timestamp_sent=time.time(),
+                    expected_result_format={},
+                )
+                
+                # Add to tasks sent
+                self.tasks_sent[task_id] = assignment
+                
+                # Send task to miner
+                from mt_aptos.network.server import TaskModel
+                task = TaskModel(task_id=task_id, **task_data)
+                
+                success = await self._send_task_via_network_async(miner.api_endpoint, task)
+                
+                if success:
+                    logger.info(f"✅ [V:{self.info.uid}] Task {task_id} sent to miner {miner.uid}")
+                    # Mark miner as busy
+                    self.miner_is_busy.add(miner.uid)
+                else:
+                    logger.warning(f"❌ [V:{self.info.uid}] Failed to send task {task_id} to miner {miner.uid}")
+                    # Remove from tasks sent
+                    del self.tasks_sent[task_id]
+                    
+            except Exception as e:
+                logger.error(f"❌ [V:{self.info.uid}] Error assigning task to miner {miner.uid}: {e}")
+    
+    def create_slot_task_data(self, slot: int, miner_uid: str) -> Dict[str, Any]:
+        """
+        Create deterministic task data for a slot and miner.
+        This ensures all validators create the same task for the same slot/miner combination.
+        """
+        # Use slot number to create deterministic task parameters
+        import hashlib
+        
+        # Create deterministic seed from slot and miner
+        seed_string = f"slot_{slot}_miner_{miner_uid}"
+        seed_hash = hashlib.md5(seed_string.encode()).hexdigest()
+        
+        # Create task based on subnet type (override in subnet-specific validators)
+        task_data = {
+            "type": "image_generation",
+            "prompt": f"Generate an image for slot {slot} with seed {seed_hash[:8]}",
+            "seed": seed_hash,
+            "slot": slot,
+            "deadline": time.time() + (self.slot_config.task_execution_minutes * 60),
+            "expected_format": "base64_image"
+        }
+        
+        return task_data
+    
+    async def handle_task_execution_phase(self, slot: int, minutes_remaining: int):
+        """Phase 2: Monitor task execution (slot-based)"""
+        logger.debug(f"⚙️ [V:{self.info.uid}] Task Execution Phase - Slot {slot} ({minutes_remaining}min remaining)")
+        
+        # Monitor task progress continuously during this phase
+        # Results are received via API endpoints, so just wait
+        await asyncio.sleep(30)  # Check every 30 seconds during execution phase
+    
+    async def handle_consensus_phase(self, slot: int, minutes_remaining: int):
+        """Phase 3: Cardano ModernTensor consensus mechanism"""
+        logger.info(f"🤝 [V:{self.info.uid}] Consensus Phase - Slot {slot} ({minutes_remaining}min remaining)")
+        
+        # Check if we've already scored for this slot
+        if slot not in self.slot_scored:
+            try:
+                # First time in consensus phase - score immediately (Cardano pattern)
+                logger.info(f"📊 [V:{self.info.uid}] Starting Cardano scoring for slot {slot}")
+                
+                # Score all received results
+                await self.cardano_score_results(slot)
+                
+                # Broadcast scores to all validators (Cardano pattern)
+                await self.cardano_broadcast_scores(slot)
+                
+                # Mark scoring as complete
+                self.slot_scored.add(slot)
+                
+            except Exception as e:
+                logger.error(f"❌ [V:{self.info.uid}] Error in Cardano scoring: {e}")
+        else:
+            # Already scored - continue with consensus activities
+            try:
+                # Final consensus calculation in last part of phase
+                if minutes_remaining <= 1:
+                    logger.info(f"🎯 [V:{self.info.uid}] Final Cardano consensus calculation")
+                    await self.cardano_finalize_consensus(slot)
+                else:
+                    logger.debug(f"⏳ [V:{self.info.uid}] Waiting for validator consensus...")
+                    
+            except Exception as e:
+                logger.error(f"❌ [V:{self.info.uid}] Error in Cardano consensus: {e}")
+    
+    async def cardano_score_results(self, slot: int):
+        """Score results using Cardano ModernTensor pattern"""
+        logger.info(f"📊 [V:{self.info.uid}] Cardano scoring pattern for slot {slot}")
+        
+        scored_tasks = []
+        
+        # Process all tasks for this slot
+        for task_id, assignment in list(self.tasks_sent.items()):
+            if task_id.startswith(f"slot_{slot}_"):
+                miner_uid = assignment.miner_uid
+                
+                # Check if we have result
+                if task_id in self.results_buffer:
+                    try:
+                        result = self.results_buffer[task_id]
+                        
+                        # Score using subnet-specific logic (CLIP scoring for Subnet1)
+                        score = self._score_individual_result(assignment.task_data, result.result_data)
+                        
+                        # Create score record (Cardano pattern)
+                        score_record = {
+                            "task_id": task_id,
+                            "miner_uid": miner_uid,
+                            "score": score,
+                            "validator_uid": self.info.uid,
+                            "slot": slot,
+                            "timestamp": time.time()
+                        }
+                        
+                        scored_tasks.append(score_record)
+                        logger.info(f"✅ [V:{self.info.uid}] Scored {miner_uid}: {score:.4f}")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Scoring error for {task_id}: {e}")
+                        # Zero score on error (Cardano pattern)
+                        score_record = {
+                            "task_id": task_id,
+                            "miner_uid": miner_uid,
+                            "score": 0.0,
+                            "validator_uid": self.info.uid,
+                            "slot": slot,
+                            "timestamp": time.time()
+                        }
+                        scored_tasks.append(score_record)
+                else:
+                    # No result = timeout score (Cardano pattern)
+                    logger.warning(f"⏰ [V:{self.info.uid}] Timeout for {miner_uid}")
+                    score_record = {
+                        "task_id": task_id,
+                        "miner_uid": miner_uid,
+                        "score": 0.0,
+                        "validator_uid": self.info.uid,
+                        "slot": slot,
+                        "timestamp": time.time()
+                    }
+                    scored_tasks.append(score_record)
+                
+                # Release miner (Cardano pattern)
+                self.miner_is_busy.discard(miner_uid)
+                
+                # Clean up task
+                del self.tasks_sent[task_id]
+                if task_id in self.results_buffer:
+                    del self.results_buffer[task_id]
+        
+        # Store scores for this slot
+        self.slot_scores = {slot: scored_tasks}
+        logger.info(f"📊 [V:{self.info.uid}] Cardano scoring complete: {len(scored_tasks)} tasks")
+    
+    def cardano_calculate_score(self, task_data: Dict, result_data: Dict) -> float:
+        """
+        Calculate score using Cardano ModernTensor pattern.
+        Real scoring based on task completion and result quality.
+        """
+        try:
+            # Check if result exists and is valid
+            if not result_data:
+                logger.warning("No result data provided for scoring")
+                return 0.0
+            
+            # Base score for completing the task
+            base_score = 0.1  # 10% for just submitting
+            
+            # Check result format and content
+            if isinstance(result_data, dict):
+                score = base_score
+                
+                # Score based on result completeness
+                if "result" in result_data:
+                    score += 0.3  # 30% for having result field
+                    
+                    result_content = result_data["result"]
+                    if result_content and str(result_content).strip():
+                        score += 0.3  # 30% for non-empty result
+                        
+                        # Score based on result length/quality
+                        result_str = str(result_content)
+                        if len(result_str) > 10:  # Reasonable length
+                            score += 0.2  # 20% for substantial result
+                        
+                        # Check if it looks like image data (base64 or image reference)
+                        if any(keyword in result_str.lower() for keyword in ['base64', 'image', 'png', 'jpg', 'jpeg']):
+                            score += 0.1  # 10% bonus for image-related content
+                
+                # Check timestamp (recent submissions get bonus)
+                if "timestamp" in result_data:
+                    try:
+                        result_time = float(result_data["timestamp"])
+                        task_time = task_data.get("timestamp", time.time())
+                        response_time = result_time - task_time
+                        
+                        if response_time < 30:  # Fast response (under 30s)
+                            score += 0.1  # 10% speed bonus
+                    except (ValueError, TypeError):
+                        pass  # Ignore timestamp parsing errors
+                
+                # Ensure score is within valid range
+                final_score = max(0.0, min(1.0, score))
+                
+                logger.info(f"📊 Calculated real score: {final_score:.3f} for result type: {type(result_data).__name__}")
+                return final_score
+            
+            else:
+                # Non-dict results get lower scores but not zero
+                if result_data:
+                    result_str = str(result_data).strip()
+                    if result_str and result_str != "null" and result_str != "None":
+                        score = base_score + 0.2  # 30% total for simple non-empty result
+                        logger.info(f"📊 Calculated score for simple result: {score:.3f}")
+                        return score
+                
+                logger.warning("Invalid or empty result data")
+                return 0.0
+            
+        except Exception as e:
+            logger.error(f"❌ Score calculation error: {e}")
+            return 0.0
+    
+    async def cardano_broadcast_scores(self, slot: int):
+        """Broadcast scores using Cardano ModernTensor P2P pattern"""
+        if slot not in self.slot_scores or not self.slot_scores[slot]:
+            logger.warning(f"⚠️ [V:{self.info.uid}] No scores to broadcast for slot {slot}")
+            return
+        
+        try:
+            # Get active validators
+            active_validators = await self._get_active_validators()
+            
+            if len(active_validators) <= 1:  # Only self
+                logger.info(f"📡 [V:{self.info.uid}] Single validator - no broadcast needed")
+                return
+            
+            # Prepare Cardano-style broadcast payload
+            broadcast_payload = {
+                "type": "validator_scores",
+                "slot": slot,
+                "validator_uid": self.info.uid,
+                "scores": self.slot_scores[slot],
+                "timestamp": time.time()
+            }
+            
+            logger.info(f"📡 [V:{self.info.uid}] Broadcasting {len(self.slot_scores[slot])} scores to {len(active_validators)-1} validators")
+            
+            # Send to all other validators (Cardano P2P pattern)
+            broadcast_tasks = []
+            for validator in active_validators:
+                if validator.uid != self.info.uid:
+                    broadcast_tasks.append(
+                        self.cardano_send_scores(validator, broadcast_payload)
+                    )
+            
+            if broadcast_tasks:
+                results = await asyncio.gather(*broadcast_tasks, return_exceptions=True)
+                success_count = sum(1 for r in results if r is True)
+                logger.info(f"📡 [V:{self.info.uid}] Cardano broadcast: {success_count}/{len(broadcast_tasks)} successful")
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Cardano broadcast error: {e}")
+    
+    async def cardano_send_scores(self, validator: ValidatorInfo, payload: Dict) -> bool:
+        """Send scores to validator using Cardano pattern"""
+        try:
+            if not validator.api_endpoint:
+                return False
+            
+            url = f"{validator.api_endpoint}/v1/consensus/receive-scores"
+            response = await self.http_client.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Failed to send scores to {validator.uid}: {e}")
+            return False
+    
+    async def cardano_finalize_consensus(self, slot: int):
+        """Finalize consensus using Cardano ModernTensor aggregation"""
+        logger.info(f"🎯 [V:{self.info.uid}] Cardano consensus finalization for slot {slot}")
+        
+        try:
+            # Collect all scores (own + received from other validators)
+            all_validator_scores = defaultdict(list)  # miner_uid -> list of scores
+            
+            # Add our own scores
+            if slot in self.slot_scores:
+                for score_record in self.slot_scores[slot]:
+                    miner_uid = score_record["miner_uid"]
+                    score = score_record["score"]
+                    all_validator_scores[miner_uid].append(score)
+            
+            # Add scores from other validators (received via P2P)
+            if slot in self.received_validator_scores:
+                for validator_uid, scores_dict in self.received_validator_scores[slot].items():
+                    for score_record in scores_dict.values():
+                        if isinstance(score_record, dict):
+                            miner_uid = score_record.get("miner_uid")
+                            score = score_record.get("score", 0.0)
+                            if miner_uid:
+                                all_validator_scores[miner_uid].append(score)
+            
+            # Calculate final consensus scores (Cardano aggregation)
+            final_scores = {}
+            for miner_uid, score_list in all_validator_scores.items():
+                if score_list:
+                    # Cardano uses median or weighted average
+                    consensus_score = sum(score_list) / len(score_list)  # Average
+                    final_scores[miner_uid] = consensus_score
+                    
+                    logger.info(f"🎯 [V:{self.info.uid}] Final: {miner_uid} = {consensus_score:.4f} (from {len(score_list)} validators)")
+            
+            # Store final results (Cardano pattern)
+            self.slot_consensus_results[slot] = final_scores
+            
+            logger.info(f"✅ [V:{self.info.uid}] Cardano consensus complete: {len(final_scores)} miners scored")
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Cardano consensus error: {e}")
+    
+    def score_slot_results(self, slot: int):
+        """Score all results received for this slot"""
+        logger.info(f"📊 [V:{self.info.uid}] Scoring results for slot {slot}")
+        
+        slot_task_count = 0
+        scored_count = 0
+        
+        # Score tasks for this slot
+        for task_id, assignment in self.tasks_sent.items():
+            if task_id.startswith(f"slot_{slot}_"):
+                slot_task_count += 1
+                
+                # Check if we have results for this task
+                if task_id in self.results_buffer:
+                    try:
+                        result = self.results_buffer[task_id]
+                        score = self._score_individual_result(assignment.task_data, result.result_data)
+                        
+                        # Create validator score
+                        validator_score = ValidatorScore(
+                            task_id=task_id,
+                            miner_uid=assignment.miner_uid,
+                            score=score,
+                            validator_uid=self.info.uid,
+                            timestamp=time.time()
+                        )
+                        
+                        # Add to validator scores for this slot
+                        self.validator_scores[slot].append(validator_score)
+                        scored_count += 1
+                        
+                        logger.debug(f"📊 Scored task {task_id}: {score}")
+                        
+                        # Release miner
+                        self.miner_is_busy.discard(assignment.miner_uid)
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Error scoring task {task_id}: {e}")
+                        # Give 0 score on error
+                        validator_score = ValidatorScore(
+                            task_id=task_id,
+                            miner_uid=assignment.miner_uid,
+                            score=0.0,
+                            validator_uid=self.info.uid,
+                            timestamp=time.time()
+                        )
+                        self.validator_scores[slot].append(validator_score)
+                        self.miner_is_busy.discard(assignment.miner_uid)
+                else:
+                    # No result received - timeout score
+                    logger.warning(f"⏰ No result received for task {task_id} - timeout")
+                    validator_score = ValidatorScore(
+                        task_id=task_id,
+                        miner_uid=assignment.miner_uid,
+                        score=0.0,
+                        validator_uid=self.info.uid,
+                        timestamp=time.time()
+                    )
+                    self.validator_scores[slot].append(validator_score)
+                    self.miner_is_busy.discard(assignment.miner_uid)
+        
+        logger.info(f"📊 [V:{self.info.uid}] Slot {slot} scoring complete: {scored_count}/{slot_task_count} tasks scored")
+    
+    def prepare_slot_scores_for_broadcast(self, slot: int) -> List[ValidatorScore]:
+        """Prepare scores for this slot to broadcast to other validators"""
+        if slot not in self.validator_scores:
+            return []
+        
+        slot_scores = self.validator_scores[slot]
+        logger.info(f"📡 [V:{self.info.uid}] Prepared {len(slot_scores)} scores for broadcast")
+        return slot_scores
+    
+    async def broadcast_slot_scores(self, slot: int, scores: List[ValidatorScore]):
+        """Broadcast scores for this slot to other validators"""
+        try:
+            # Get active validators
+            active_validators = await self._get_active_validators()
+            
+            if not active_validators:
+                logger.warning(f"⚠️ No active validators found for score broadcast")
+                return
+            
+            logger.info(f"📡 [V:{self.info.uid}] Broadcasting slot {slot} scores to {len(active_validators)} validators")
+            
+            # Prepare broadcast data
+            broadcast_data = {
+                "slot": slot,
+                "validator_uid": self.info.uid,
+                "scores": [
+                    {
+                        "task_id": score.task_id,
+                        "miner_uid": score.miner_uid,
+                        "score": score.score,
+                        "timestamp": score.timestamp
+                    }
+                    for score in scores
+                ]
+            }
+            
+            # Send to all other validators
+            broadcast_tasks = []
+            for validator in active_validators:
+                if validator.uid != self.info.uid:  # Don't send to self
+                    broadcast_tasks.append(
+                        self.send_scores_to_validator(validator, broadcast_data)
+                    )
+            
+            if broadcast_tasks:
+                results = await asyncio.gather(*broadcast_tasks, return_exceptions=True)
+                success_count = sum(1 for r in results if r is True)
+                logger.info(f"📡 [V:{self.info.uid}] Score broadcast results: {success_count}/{len(broadcast_tasks)} successful")
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Error broadcasting slot scores: {e}")
+    
+    async def send_scores_to_validator(self, validator: ValidatorInfo, broadcast_data: Dict) -> bool:
+        """Send scores to a specific validator"""
+        try:
+            if not validator.api_endpoint:
+                return False
+            
+            url = f"{validator.api_endpoint}/receive-scores"
+            response = await self.http_client.post(url, json=broadcast_data, timeout=10)
+            response.raise_for_status()
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Failed to send scores to {validator.uid}: {e}")
+            return False
+    
+    async def finalize_slot_consensus(self, slot: int) -> Dict[str, float]:
+        """
+        Finalize consensus for the slot by aggregating scores from all validators.
+        Similar to Cardano ModernTensor's consensus mechanism.
+        """
+        logger.info(f"🎯 [V:{self.info.uid}] Finalizing consensus for slot {slot}")
+        
+        try:
+            # Collect all scores for this slot from all validators
+            all_scores = defaultdict(list)  # task_id -> list of scores from different validators
+            
+            # Add our own scores
+            if slot in self.validator_scores:
+                for score in self.validator_scores[slot]:
+                    all_scores[score.task_id].append(score.score)
+            
+            # Add scores from other validators (received via P2P)
+            if slot in self.received_validator_scores:
+                for validator_uid, validator_slot_scores in self.received_validator_scores[slot].items():
+                    for task_id, score_obj in validator_slot_scores.items():
+                        all_scores[task_id].append(score_obj.score)
+            
+            # Calculate consensus scores (average across validators)
+            consensus_scores = {}
+            for task_id, score_list in all_scores.items():
+                if score_list:
+                    # Use median or average for consensus
+                    consensus_score = sum(score_list) / len(score_list)
+                    consensus_scores[task_id] = consensus_score
+                    logger.debug(f"🎯 Task {task_id}: consensus score {consensus_score:.4f} from {len(score_list)} validators")
+            
+            logger.info(f"✅ [V:{self.info.uid}] Slot {slot} consensus: {len(consensus_scores)} tasks finalized")
+            return consensus_scores
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Error finalizing slot consensus: {e}")
+            return {}
+    
+    async def handle_metagraph_update_phase(self, slot: int, minutes_remaining: int):
+        """Phase 4: Update metagraph synchronously (slot-based)"""
+        logger.info(f"📊 [V:{self.info.uid}] Metagraph Update Phase - Slot {slot} ({minutes_remaining}min remaining)")
+        
+        # All validators update metagraph at the same time
+        # This ensures consistency across the network
+        await self._update_metagraph()
+        
+        # Save slot state
+        self._save_current_cycle(slot)
+        logger.info(f"✅ [V:{self.info.uid}] Slot {slot} completed and saved")
 
     async def _send_task_via_network_async(self, miner_endpoint: str, task: TaskModel) -> bool:
         """Send task via network asynchronously with circuit breaker and rate limiting"""
@@ -1366,7 +2199,7 @@ class ValidatorNode:
                 logger.debug(f"Skipping sending task to self (UID: {miner.uid}).")
                 continue
 
-            task_id = f"task_{self.current_cycle}_{self.info.uid}_{miner.uid}_{random.randint(1000,9999)}"
+            task_id = f"task_{self._current_cycle}_{self.info.uid}_{miner.uid}_{random.randint(1000,9999)}"
             try:
                 task_data = self._create_task_data(miner.uid)
                 # Giả sử TaskModel có thể tạo từ dict hoặc có constructor phù hợp
@@ -1415,13 +2248,13 @@ class ValidatorNode:
                 miner = miners_with_tasks[i]
                 assignment = task_assignments.get(miner.uid)
                 assignment_check = self.tasks_sent.get(
-                    f"task_{self.current_cycle}_{self.info.uid}_{miner.uid}"
+                    f"task_{self._current_cycle}_{self.info.uid}_{miner.uid}"
                 )  # Tìm lại task_id theo cấu trúc
                 # Tìm task_id tương ứng với miner trong lần gửi này
                 for tid, assign in self.tasks_sent.items():
                     # Kiểm tra cycle và miner uid để đảm bảo đúng task
                     if (
-                        tid.startswith(f"task_{self.current_cycle}_")
+                        tid.startswith(f"task_{self._current_cycle}_")
                         and assign.miner_uid == miner.uid
                     ):
                         current_task_id = tid
@@ -1431,10 +2264,10 @@ class ValidatorNode:
                     # Gửi thành công, cập nhật last_selected_time
                     if miner.uid in self.miners_info:
                         self.miners_info[miner.uid].last_selected_time = (
-                            self.current_cycle
+                            self._current_cycle
                         )
                         logger.debug(
-                            f"Updated last_selected_time for miner {miner.uid} to cycle {self.current_cycle}"
+                            f"Updated last_selected_time for miner {miner.uid} to cycle {self._current_cycle}"
                         )
                     successful_sends += 1
                 elif current_task_id:
@@ -1480,10 +2313,8 @@ class ValidatorNode:
                                      based on settings is used.
         """
         if timeout is None:
-            receive_timeout_default = (
-                self.settings.CONSENSUS_SEND_SCORE_OFFSET_MINUTES * 60 * 0.5
-            )  # Ví dụ
-            timeout = receive_timeout_default
+            # Giảm timeout xuống 30 giây để nhanh hơn
+            timeout = 30  # Cố định 30 giây thay vì tính từ settings
 
         logger.info(
             f"[V:{self.info.uid}] Waiting {timeout:.1f}s for miner results via API endpoint..."
@@ -1498,12 +2329,20 @@ class ValidatorNode:
         # Tuy nhiên, nếu API nhận kết quả chậm, có thể kết quả chu kỳ trước bị xử lý ở chu kỳ sau?
         # => Cần cơ chế quản lý kết quả theo chu kỳ trong add_miner_result.
 
-        # Tạm thời: Giả định API đủ nhanh và chỉ xử lý kết quả đã nhận trong khoảng timeout
-        async with self.results_buffer_lock:  # Lock khi đọc số lượng
+        # Chuyển kết quả từ buffer sang results_received để xử lý
+        async with self.results_buffer_lock:
+            # Chuyển tất cả kết quả từ buffer sang results_received
+            for task_id, result in self.results_buffer.items():
+                self.results_received[task_id].append(result)
+            
+            # Đếm tổng số kết quả
             received_count = sum(
                 len(res_list) for res_list in self.results_received.values()
             )
             task_ids_with_results = list(self.results_received.keys())
+            
+            # Xóa buffer sau khi chuyển
+            self.results_buffer.clear()
 
         logger.info(
             f"Finished waiting period. Total results accumulated: {received_count} for tasks: {task_ids_with_results}"
@@ -1580,13 +2419,14 @@ class ValidatorNode:
         # Reset lại dict nhận kết quả cho chu kỳ sau
         self.results_received = defaultdict(list)
 
-        # Gọi hàm logic từ scoring.py (truyền bản copy)
+        # Gọi hàm logic từ scoring.py (truyền bản copy và validator instance)
         self.validator_scores = score_results_logic(
-            results_received=results_to_score,  # <<<--- Dùng bản copy
+            results_received=results_to_score,  # <<<--- Dùng bản copy  
             tasks_sent=self.tasks_sent,
             validator_uid=self.info.uid,
+            validator_instance=self,  # Truyền self để gọi _score_individual_result
         )
-        # Hàm score_results_logic sẽ gọi _calculate_score_from_result (cần override)
+        # Hàm score_results_logic sẽ gọi validator_instance._score_individual_result
 
     async def add_received_score(
         self, submitter_uid: str, cycle: int, scores: List[ValidatorScore]
@@ -1597,7 +2437,7 @@ class ValidatorNode:
         async with self.received_scores_lock:
             if cycle not in self.received_validator_scores:
                 # Chỉ lưu điểm cho chu kỳ hiện tại hoặc tương lai gần? Tránh lưu trữ quá nhiều.
-                if cycle < self.current_cycle - 1:  # Ví dụ: chỉ giữ lại chu kỳ trước đó
+                if cycle < self._current_cycle - 1:  # Ví dụ: chỉ giữ lại chu kỳ trước đó
                     logger.warning(
                         f"Received scores for outdated cycle {cycle} from {submitter_uid}. Ignoring."
                     )
@@ -1649,7 +2489,7 @@ class ValidatorNode:
         # Tính tổng số điểm sẽ gửi
         total_scores = sum(len(v) for v in scores_to_broadcast.values())
         logger.info(
-            f"[V:{self.info.uid}] Broadcasting {total_scores} accumulated local scores for cycle {self.current_cycle}..."
+            f"[V:{self.info.uid}] Broadcasting {total_scores} accumulated local scores for cycle {self._current_cycle}..."
         )
 
         # --- Chuẩn bị danh sách điểm phẳng để gửi ---
@@ -1701,7 +2541,7 @@ class ValidatorNode:
         """
         # Logic này quản lý state nội bộ nên giữ lại trong Node
         current_cycle_scores = self.received_validator_scores.get(
-            self.current_cycle, {}
+            self._current_cycle, {}
         )
         task_scores = current_cycle_scores.get(task_id, {})
         received_validators_for_task = set(
@@ -1753,7 +2593,7 @@ class ValidatorNode:
                   within the timeout, False otherwise.
         """
         logger.info(
-            f"Waiting up to {wait_timeout_seconds:.1f}s for consensus scores for cycle {self.current_cycle}..."
+            f"Waiting up to {wait_timeout_seconds:.1f}s for consensus scores for cycle {self._current_cycle}..."
         )
         start_wait = time.time()
         active_validators = await self._get_active_validators()
@@ -1820,10 +2660,11 @@ class ValidatorNode:
         for attempt in range(max_retries):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{max_retries} to fetch latest block timestamp")
-                ledger_info = await self.client.get_ledger_information()
+                ledger_info = await self.client.info()
                 
-                if ledger_info and "timestamp" in ledger_info:
-                    timestamp = int(ledger_info["timestamp"]) // 1000
+                if ledger_info and "ledger_timestamp" in ledger_info:
+                    # Convert from microseconds to seconds
+                    timestamp = int(ledger_info["ledger_timestamp"]) // 1000000
                     logger.debug(f"Successfully fetched block timestamp: {timestamp}")
                     return timestamp
                     
@@ -1911,75 +2752,915 @@ class ValidatorNode:
             self.metrics.update_active_nodes(active_miners, active_validators)
             logger.info(f"Updated metagraph: {active_miners} active miners, {active_validators} active validators")
         except Exception as e:
+            logger.error(f"⚠️ Failed to update metagraph: {e}")
             self.metrics.record_error('consensus')
-            raise
+            # Don't raise - continue with existing miners_info to avoid breaking the batch
+            logger.warning(f"Continuing with existing miners_info: {len(self.miners_info) if self.miners_info else 0} miners")
+            
+            # If completely empty, try to force reload once more
+            if not self.miners_info:
+                logger.warning("🔄 No existing miners_info, attempting one more metagraph load...")
+                try:
+                    await self.load_metagraph_data()
+                    logger.info(f"✅ Fallback metagraph load successful: {len(self.miners_info) if self.miners_info else 0} miners")
+                except Exception as fallback_e:
+                    logger.error(f"❌ Fallback metagraph load also failed: {fallback_e}")
+                    # Continue with empty - let the main loop handle the "No miners available" case
 
     async def start_health_server(self):
         """Start the health check server"""
+        # Extract port from api_endpoint if available, but use different port for health
+        port = 8000  # Default health port (different from API port)
+        if hasattr(self.info, 'api_endpoint') and self.info.api_endpoint:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(self.info.api_endpoint)
+                if parsed.port:
+                    # Use API port + 1000 for health server to avoid conflict
+                    port = parsed.port + 1000
+                    logger.info(f"Using health port {port} (API port + 1000) from validator api_endpoint: {self.info.api_endpoint}")
+                else:
+                    logger.warning(f"No port found in api_endpoint {self.info.api_endpoint}, using default health port {port}")
+            except Exception as e:
+                logger.warning(f"Failed to parse port from api_endpoint {self.info.api_endpoint}: {e}, using default health port {port}")
+        
         config = uvicorn.Config(
             health_app,
             host="0.0.0.0",
-            port=8000,
+            port=port,
             log_level="info"
         )
         self.health_server = uvicorn.Server(config)
         await self.health_server.serve()
 
+    async def start_api_server(self):
+        """Start the API server for receiving miner results"""
+        # Extract port from api_endpoint if available
+        port = 8001  # Default port
+        if hasattr(self.info, 'api_endpoint') and self.info.api_endpoint:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(self.info.api_endpoint)
+                if parsed.port:
+                    port = parsed.port
+                    logger.info(f"Using port {port} from validator api_endpoint for API server: {self.info.api_endpoint}")
+                else:
+                    logger.warning(f"No port found in api_endpoint {self.info.api_endpoint}, using default port {port}")
+            except Exception as e:
+                logger.warning(f"Failed to parse port from api_endpoint {self.info.api_endpoint}: {e}, using default port {port}")
+        
+        # Set this validator node instance for API dependencies
+        from mt_aptos.network.app.dependencies import set_validator_node_instance
+        set_validator_node_instance(self)
+        
+        # Import FastAPI app with miner endpoints
+        from mt_aptos.network.app.main import app
+        
+        config = uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info"
+        )
+        self.api_server = uvicorn.Server(config)
+        await self.api_server.serve()
+
     async def run(self):
-        """Run the validator node with improved error handling"""
-        # Start health check server
-        await self.start_health_server()
+        """Run the validator node with continuous consensus like Cardano ModernTensor"""
+        # Load initial metagraph data before starting
+        logger.info(f"📊 [V:{self.info.uid}] Loading initial metagraph data...")
+        try:
+            await self.load_metagraph_data()
+            logger.info(f"✅ [V:{self.info.uid}] Initial metagraph loaded. Miners: {len(self.miners_info) if self.miners_info else 0}, Validators: {len(self.validators_info) if self.validators_info else 0}")
+        except Exception as e:
+            logger.error(f"⚠️ [V:{self.info.uid}] Failed to load initial metagraph: {e}")
+            logger.warning(f"Continuing with empty metagraph - will retry during periodic updates")
+        
+        # Start health check server in background
+        health_task = asyncio.create_task(self.start_health_server())
+        
+        # Start API server for miner communications in background
+        api_task = asyncio.create_task(self.start_api_server())
+        
+        # Start consensus based on configured mode
+        logger.info(f"🚀 [V:{self.info.uid}] Starting {self.consensus_mode} consensus mode...")
+        
+        if self.consensus_mode == "sequential":
+            logger.info(f"📋 [V:{self.info.uid}] Sequential batch mode - Wait time: {self.batch_wait_time}s")
+            await self.run_sequential_batch_consensus()
+        elif self.consensus_mode == "synchronized":
+            logger.info(f"🤝 [V:{self.info.uid}] Synchronized consensus mode - Validators coordinate and wait for each other")
+            await self.run_synchronized_consensus()
+        else:
+            logger.info(f"🔄 [V:{self.info.uid}] Continuous consensus mode")
+            await self.run_continuous_cardano_consensus()
+
+    async def run_continuous_cardano_consensus(self):
+        """Run continuous Cardano ModernTensor consensus (original run method logic)"""
+        logger.info(f"📋 Task Config: Continuous task assignment every {self.settings.CONSENSUS_QUERY_INTERVAL_SECONDS}s")
+        
+        # Cardano pattern: Continuous loop with periodic consensus
+        batch_number = 0
+        last_consensus_time = time.time()
+        last_metagraph_update = time.time()
         
         while True:
-            self.metrics.start_consensus_cycle()
             try:
-                # Update last cycle time
-                self.last_cycle_time = time.time()
+                current_time = time.time()
                 
-                # Update metagraph data with circuit breaker
-                await self.circuit_breaker.execute(self._update_metagraph)
+                # Phase 1: Continuous Task Assignment (Cardano pattern)
+                batch_number += 1
+                logger.info(f"🔄 [V:{self.info.uid}] ===== BATCH {batch_number} START =====")
                 
-                # Get current slot with circuit breaker
-                current_slot = await self._get_current_block_timestamp()
-                if current_slot is None:
-                    logger.error("Failed to get current slot, retrying in 5 seconds...")
-                    await asyncio.sleep(5)
-                    continue
+                # Update metagraph periodically (every few minutes) OR if empty
+                if (current_time - last_metagraph_update > 180) or (not self.miners_info):  # 3 minutes OR empty
+                    logger.info(f"📊 [V:{self.info.uid}] Updating metagraph...")
+                    await self._update_metagraph()
+                    last_metagraph_update = current_time
+                    logger.info(f"✅ [V:{self.info.uid}] Metagraph updated. Miners: {len(self.miners_info) if self.miners_info else 0}")
                 
-                # Select miners for this cycle
-                selected_miners = self.select_miners()
-                if not selected_miners:
-                    logger.warning("No miners selected for this cycle")
-                    await asyncio.sleep(self.settings.CONSENSUS_CYCLE_SLOT_LENGTH)
-                    continue
+                # Select miners for this batch (Cardano pattern)
+                selected_miners = self.cardano_select_miners_continuous(batch_number)
                 
-                # Send tasks to selected miners with rate limiting
-                await self.send_task_and_track(selected_miners)
+                if selected_miners:
+                    logger.info(f"🎯 [V:{self.info.uid}] Selected {len(selected_miners)} miners: {[m.uid for m in selected_miners]}")
+                    
+                    # Send tasks immediately (Cardano pattern)
+                    await self.cardano_send_tasks_continuous(batch_number, selected_miners)
+                    
+                    # Wait for results (short wait - Cardano pattern)
+                    await self.cardano_wait_for_results_batch(batch_number)
+                    
+                    # Score results immediately (Cardano pattern)
+                    await self.cardano_score_results_continuous(batch_number)
+                    
+                else:
+                    logger.warning(f"⚠️ [V:{self.info.uid}] No miners available for batch {batch_number}")
                 
-                # Wait for results
-                await self.receive_results()
+                # Phase 2: Periodic Consensus & P2P Sharing (Cardano pattern)
+                if current_time - last_consensus_time > self.settings.CONSENSUS_CYCLE_LENGTH:
+                    logger.info(f"🎯 [V:{self.info.uid}] ===== CONSENSUS ROUND START =====")
+                    
+                    # Broadcast all accumulated scores (Cardano P2P pattern)
+                    await self.cardano_broadcast_accumulated_scores()
+                    
+                    # Wait for other validators' scores
+                    await self.cardano_wait_for_peer_scores()
+                    
+                    # Finalize consensus with all validator scores
+                    await self.cardano_finalize_consensus_round()
+                    
+                    # Update metagraph with consensus results
+                    await self.cardano_update_metagraph_with_consensus()
+                    
+                    last_consensus_time = current_time
+                    logger.info(f"✅ [V:{self.info.uid}] Consensus round completed")
                 
-                # Score results
-                self.score_miner_results()
-                
-                # Broadcast scores with rate limiting
-                await self.broadcast_scores(self.validator_scores)
-                
-                # Wait for consensus
-                await self.wait_for_consensus_scores(self.settings.CONSENSUS_SCORE_WAIT_TIMEOUT)
-                
-                # Update memory usage
-                self.metrics.update_memory_usage(psutil.Process().memory_info().rss)
-                
-                # Wait for next cycle
-                await asyncio.sleep(self.settings.CONSENSUS_CYCLE_SLOT_LENGTH)
+                # Short sleep between batches (Cardano pattern)
+                await asyncio.sleep(self.settings.CONSENSUS_QUERY_INTERVAL_SECONDS)
                 
             except Exception as e:
-                self.metrics.record_error('consensus')
-                logger.error(f"Error in consensus cycle: {e}")
-                await asyncio.sleep(5)  # Wait before retrying
-            finally:
-                self.metrics.end_consensus_cycle()
+                logger.error(f"❌ [V:{self.info.uid}] Error in batch {batch_number}: {e}")
+                await asyncio.sleep(5)  # Brief pause before retry
+
+    def cardano_select_miners_continuous(self, cycle: int) -> List[MinerInfo]:
+        """Select miners using Cardano ModernTensor continuous pattern"""
+        logger.debug(f"🔍 [V:{self.info.uid}] Continuous miner selection for cycle {cycle}")
+        
+        if not self.miners_info:
+            logger.warning(f"⚠️ [V:{self.info.uid}] No miners_info available!")
+            return []
+        
+        # Get active miners (Cardano pattern)
+        active_miners = [
+            m for m in self.miners_info.values()
+            if getattr(m, "status", STATUS_ACTIVE) == STATUS_ACTIVE and m.uid not in self.miner_is_busy
+        ]
+        
+        if not active_miners:
+            logger.warning(f"⚠️ [V:{self.info.uid}] No active miners available!")
+            return []
+        
+        # Cardano continuous pattern - select different miners each cycle
+        num_to_select = min(
+            getattr(self.settings, 'CONSENSUS_NUM_MINERS_TO_SELECT', 2),
+            len(active_miners)
+        )
+        
+        # Deterministic but rotating selection
+        sorted_miners = sorted(active_miners, key=lambda m: m.uid)
+        start_idx = cycle % len(sorted_miners)
+        selected = []
+        
+        for i in range(num_to_select):
+            idx = (start_idx + i) % len(sorted_miners)
+            selected.append(sorted_miners[idx])
+        
+        return selected
+    
+    async def cardano_send_tasks_continuous(self, cycle: int, miners: List[MinerInfo]):
+        """Send tasks using Cardano ModernTensor continuous pattern"""
+        logger.info(f"🚀 [V:{self.info.uid}] Cardano continuous sending tasks to {len(miners)} miners (cycle {cycle})")
+        
+        # First, check health of all miners
+        logger.info(f"🔍 [V:{self.info.uid}] Checking health of {len(miners)} miners...")
+        healthy_miners = []
+        
+        health_checks = []
+        for miner in miners:
+            health_checks.append(self._check_miner_health(miner.api_endpoint))
+        
+        health_results = await asyncio.gather(*health_checks, return_exceptions=True)
+        
+        for miner, is_healthy in zip(miners, health_results):
+            if is_healthy is True:
+                healthy_miners.append(miner)
+                logger.info(f"✅ [V:{self.info.uid}] Miner {miner.uid} is healthy")
+            else:
+                logger.warning(f"⚠️ [V:{self.info.uid}] Miner {miner.uid} is not healthy - skipping task send")
+        
+        if not healthy_miners:
+            logger.warning(f"❌ [V:{self.info.uid}] No healthy miners available for cycle {cycle}")
+            return
+        
+        logger.info(f"🎯 [V:{self.info.uid}] Sending tasks to {len(healthy_miners)}/{len(miners)} healthy miners")
+        
+        # Prepare all tasks first (Cardano pattern)
+        task_assignments = []
+        task_sends = []
+        
+        for miner in healthy_miners:
+            try:
+                # Continuous task ID (Cardano pattern)
+                task_id = f"cycle_{cycle}_{miner.uid}_{self.info.uid}"
+                
+                # Create task (Cardano style)
+                task_data = self.cardano_create_task_continuous(cycle, miner.uid)
+                
+                # Create assignment
+                assignment = TaskAssignment(
+                    task_id=task_id,
+                    task_data=task_data,
+                    miner_uid=miner.uid,
+                    validator_uid=self.info.uid,
+                    timestamp_sent=time.time(),
+                    expected_result_format={},
+                )
+                
+                # Store assignment for tracking
+                task_assignments.append((task_id, assignment, miner))
+                
+                # Prepare task for sending
+                from mt_aptos.network.server import TaskModel
+                task = TaskModel(task_id=task_id, **task_data)
+                
+                # Add to parallel send list
+                task_sends.append(self._cardano_send_single_task(task_id, assignment, miner, task))
+                
+            except Exception as e:
+                logger.error(f"❌ [V:{self.info.uid}] Cardano continuous task prep error for {miner.uid}: {e}")
+        
+        # Send all tasks in parallel (Cardano ModernTensor SDK pattern)
+        if task_sends:
+            logger.info(f"📡 [V:{self.info.uid}] Sending {len(task_sends)} tasks in parallel...")
+            results = await asyncio.gather(*task_sends, return_exceptions=True)
+            
+            # Process results
+            success_count = 0
+            for i, (result, (task_id, assignment, miner)) in enumerate(zip(results, task_assignments)):
+                if result is True:
+                    # Success - store assignment and mark miner busy
+                    self.tasks_sent[task_id] = assignment
+                    self.miner_is_busy.add(miner.uid)
+                    success_count += 1
+                    logger.info(f"✅ [V:{self.info.uid}] Cardano continuous task sent to {miner.uid}")
+                else:
+                    # Failed - log error
+                    logger.warning(f"❌ [V:{self.info.uid}] Failed Cardano continuous task to {miner.uid}: {result if isinstance(result, Exception) else 'Unknown error'}")
+            
+            logger.info(f"🎯 [V:{self.info.uid}] Cardano continuous send complete: {success_count}/{len(task_sends)} successful")
+    
+    def cardano_create_task_continuous(self, cycle: int, miner_uid: str) -> Dict[str, Any]:
+        """Create task using Cardano ModernTensor continuous pattern"""
+        # Deadline for continuous cycles (shorter than slot-based)
+        deadline_timestamp = time.time() + (self.settings.CONSENSUS_CYCLE_LENGTH * 0.6)  # 60% of cycle time
+        deadline_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(deadline_timestamp))
+        
+        # TaskModel compatible format
+        task_data = {
+            "description": f"Generate an image for cycle {cycle}",  # Required field
+            "deadline": deadline_str,  # String format required
+            "priority": 3,  # Medium priority
+            "validator_endpoint": getattr(self.info, 'api_endpoint', 'http://localhost:8001'),
+            "task_data": {  # Actual task payload
+                "type": "image_generation",
+                "prompt": f"Beautiful landscape for cycle {cycle}",
+                "cycle": cycle,
+                "miner_uid": miner_uid,
+                "expected_format": "base64_image"
+            }
+        }
+        
+        return task_data
+    
+    async def cardano_wait_for_results_batch(self, batch_number: int):
+        """Wait for results using Cardano ModernTensor continuous pattern"""
+        wait_time = self.settings.CONSENSUS_CYCLE_LENGTH * 0.5  # 50% of cycle time for results
+        logger.info(f"⏳ [V:{self.info.uid}] Waiting {wait_time:.1f}s for batch {batch_number} results...")
+        
+        start_time = time.time()
+        while time.time() - start_time < wait_time:
+            # Check if we have results for current batch tasks
+            batch_tasks = [task_id for task_id in self.tasks_sent.keys() if task_id.startswith(f"cycle_{batch_number}_")]
+            received_results = [task_id for task_id in batch_tasks if task_id in self.results_buffer]
+            
+            if len(received_results) >= len(batch_tasks) * 0.8:  # 80% response rate
+                logger.info(f"✅ [V:{self.info.uid}] Got {len(received_results)}/{len(batch_tasks)} results early!")
+                break
+                
+            await asyncio.sleep(1)  # Check every second
+        
+        # Final check
+        batch_tasks = [task_id for task_id in self.tasks_sent.keys() if task_id.startswith(f"cycle_{batch_number}_")]
+        received_results = [task_id for task_id in batch_tasks if task_id in self.results_buffer]
+        logger.info(f"📊 [V:{self.info.uid}] Final results: {len(received_results)}/{len(batch_tasks)} for batch {batch_number}")
+    
+    async def cardano_score_results_continuous(self, batch_number: int):
+        """Score results using Cardano ModernTensor continuous pattern"""
+        logger.info(f"📊 [V:{self.info.uid}] Cardano continuous scoring for batch {batch_number}")
+        
+        scored_tasks = []
+        
+        # Process all tasks for this batch
+        batch_tasks = [task_id for task_id, assignment in self.tasks_sent.items() if task_id.startswith(f"cycle_{batch_number}_")]
+        
+        for task_id in batch_tasks:
+            if task_id not in self.tasks_sent:
+                continue
+                
+            assignment = self.tasks_sent[task_id]
+            miner_uid = assignment.miner_uid
+            
+            # Check if we have result
+            if task_id in self.results_buffer:
+                try:
+                    result = self.results_buffer[task_id]
+                    
+                    # Score using subnet-specific logic (CLIP scoring for Subnet1)
+                    score = self._score_individual_result(assignment.task_data, result.result_data)
+                    
+                    # Create score record (Cardano pattern)
+                    score_record = {
+                        "task_id": task_id,
+                        "miner_uid": miner_uid,
+                        "score": score,
+                        "validator_uid": self.info.uid,
+                        "batch": batch_number,
+                        "timestamp": time.time()
+                    }
+                    
+                    scored_tasks.append(score_record)
+                    logger.info(f"✅ [V:{self.info.uid}] Scored {miner_uid}: {score:.4f}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Scoring error for {task_id}: {e}")
+                    # Zero score on error
+                    score_record = {
+                        "task_id": task_id,
+                        "miner_uid": miner_uid,
+                        "score": 0.0,
+                        "validator_uid": self.info.uid,
+                        "batch": batch_number,
+                        "timestamp": time.time()
+                    }
+                    scored_tasks.append(score_record)
+            else:
+                # No result = timeout score
+                logger.warning(f"⏰ [V:{self.info.uid}] Timeout for {miner_uid}")
+                score_record = {
+                    "task_id": task_id,
+                    "miner_uid": miner_uid,
+                    "score": 0.0,
+                    "validator_uid": self.info.uid,
+                    "batch": batch_number,
+                    "timestamp": time.time()
+                }
+                scored_tasks.append(score_record)
+            
+            # Release miner (Cardano pattern)
+            self.miner_is_busy.discard(miner_uid)
+            
+            # Clean up task
+            del self.tasks_sent[task_id]
+            if task_id in self.results_buffer:
+                del self.results_buffer[task_id]
+        
+        # Store scores for this batch (accumulate scores)
+        if batch_number not in self.cycle_scores:
+            self.cycle_scores[batch_number] = []
+        self.cycle_scores[batch_number].extend(scored_tasks)
+        
+        logger.info(f"📊 [V:{self.info.uid}] Cardano continuous scoring complete: {len(scored_tasks)} tasks")
+    
+    def get_current_cycle_number(self) -> int:
+        """Get current cycle number based on time"""
+        return int(time.time() // self.settings.CONSENSUS_CYCLE_LENGTH)
+    
+    @property
+    def current_cycle(self) -> int:
+        """Get current cycle number"""
+        return getattr(self, '_current_cycle', self.get_current_cycle_number())
+
+    def set_current_cycle(self, cycle: int):
+        """Set the current cycle number"""
+        self._current_cycle = cycle
+
+    def advance_to_next_cycle(self):
+        """Advance to the next cycle"""
+        self._current_cycle = getattr(self, '_current_cycle', self.get_current_cycle_number()) + 1
+    
+    async def cardano_broadcast_accumulated_scores(self):
+        """Broadcast all accumulated scores to other validators"""
+        if not self.cycle_scores:
+            logger.warning("No scores to broadcast.")
+            return
+        
+        try:
+            # Prepare Cardano-style broadcast payload
+            broadcast_payload = {
+                "type": "validator_scores",
+                "cycle": self._current_cycle,
+                "validator_uid": self.info.uid,
+                "scores": [
+                    {
+                        "task_id": score_record.get("task_id", ""),
+                        "miner_uid": score_record.get("miner_uid", ""),
+                        "score": score_record.get("score", 0.0),
+                        "validator_uid": self.info.uid,
+                        "cycle": self._current_cycle,
+                        "timestamp": time.time()
+                    }
+                    for batch_scores in self.cycle_scores.values()
+                    for score_record in batch_scores
+                ],
+                "timestamp": time.time()
+            }
+            
+            logger.info(f"📡 [V:{self.info.uid}] Broadcasting {len(broadcast_payload['scores'])} scores to {len(self.validators_info) - 1} validators")
+            
+            # Send to all other validators (Cardano P2P pattern)
+            broadcast_tasks = []
+            for validator in self.validators_info.values():
+                if validator.uid != self.info.uid:
+                    broadcast_tasks.append(
+                        self.cardano_send_scores(validator, broadcast_payload)
+                    )
+            
+            if broadcast_tasks:
+                results = await asyncio.gather(*broadcast_tasks, return_exceptions=True)
+                success_count = sum(1 for r in results if r is True)
+                logger.info(f"📡 [V:{self.info.uid}] Cardano broadcast: {success_count}/{len(broadcast_tasks)} successful")
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Cardano broadcast error: {e}")
+    
+    async def cardano_wait_for_peer_scores(self):
+        """Wait for other validators' scores"""
+        logger.info(f"🕒 [V:{self.info.uid}] Waiting for other validators' scores...")
+        await self.wait_for_consensus_scores(self.settings.CONSENSUS_CYCLE_LENGTH)
+    
+    async def cardano_finalize_consensus_round(self):
+        """Finalize consensus with all validator scores"""
+        logger.info(f"🎯 [V:{self.info.uid}] Finalizing consensus with all validator scores")
+        
+        try:
+            # STEP 1: Calculate and broadcast OUR average scores to other validators
+            await self.cardano_broadcast_average_scores()
+            
+            # STEP 2: Collect all scores (own + received from other validators)
+            all_validator_scores = defaultdict(list)  # miner_uid -> list of scores
+            
+            # Add our own scores
+            if self._current_cycle in self.cycle_scores:
+                for score_record in self.cycle_scores[self._current_cycle]:
+                    miner_uid = score_record["miner_uid"]
+                    score = score_record["score"]
+                    all_validator_scores[miner_uid].append(score)
+            
+            # Add scores from other validators (received via P2P)
+            if self._current_cycle in self.received_validator_scores:
+                for validator_uid, scores_dict in self.received_validator_scores[self._current_cycle].items():
+                    for score_record in scores_dict.values():
+                        if isinstance(score_record, dict):
+                            miner_uid = score_record.get("miner_uid")
+                            score = score_record.get("score", 0.0)
+                            if miner_uid:
+                                all_validator_scores[miner_uid].append(score)
+            
+            # Calculate final consensus scores (Cardano aggregation)
+            final_scores = {}
+            for miner_uid, score_list in all_validator_scores.items():
+                if score_list:
+                    # Cardano uses median or weighted average
+                    consensus_score = sum(score_list) / len(score_list)  # Average
+                    final_scores[miner_uid] = consensus_score
+                    
+                    logger.info(f"🎯 [V:{self.info.uid}] Final: {miner_uid} = {consensus_score:.4f} (from {len(score_list)} validators)")
+            
+            # Store final results (Cardano pattern)
+            self.slot_consensus_results[self._current_cycle] = final_scores
+            
+            # 🔥 SUBMIT CONSENSUS RESULTS TO BLOCKCHAIN 🔥
+            await self.cardano_submit_consensus_to_blockchain(final_scores)
+            
+            logger.info(f"✅ [V:{self.info.uid}] Cardano consensus complete: {len(final_scores)} miners scored")
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Cardano consensus error: {e}")
+    
+    async def cardano_update_metagraph_with_consensus(self):
+        """Update metagraph with consensus results"""
+        logger.info(f"📊 [V:{self.info.uid}] Updating metagraph with consensus results")
+        
+        try:
+            # Update active nodes count
+            active_miners = len([m for m in self.miners_info.values() if m.status == STATUS_ACTIVE])
+            active_validators = len([v for v in self.validators_info.values() if v.status == STATUS_ACTIVE])
+            
+            self.metrics.update_active_nodes(active_miners, active_validators)
+            logger.info(f"Updated metagraph: {active_miners} active miners, {active_validators} active validators")
+            
+            # Update metagraph data
+            await self.load_metagraph_data()
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Error updating metagraph: {e}")
+
+    async def _check_miner_health(self, miner_endpoint: str, timeout: float = 5.0) -> bool:
+        """Check if miner is healthy and available to receive tasks"""
+        try:
+            if not miner_endpoint or not miner_endpoint.startswith(("http://", "https://")):
+                return False
+                
+            health_url = f"{miner_endpoint}/health"
+            response = await self.http_client.get(health_url, timeout=timeout)
+            
+            if response.status_code == 200:
+                health_data = response.json()
+                return health_data.get("status") == "healthy"
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Health check failed for {miner_endpoint}: {e}")
+            return False
+
+    async def _cardano_send_single_task(self, task_id: str, assignment: TaskAssignment, miner: MinerInfo, task) -> bool:
+        """Send a single task to miner (used in parallel sends)"""
+        try:
+            logger.debug(f"🚀 Sending task {task_id} to miner {miner.uid} at {miner.api_endpoint}")
+            success = await self._send_task_via_network_async(miner.api_endpoint, task)
+            if not success:
+                logger.warning(f"❌ Task send returned False for {miner.uid}")
+            return success
+        except Exception as e:
+            logger.error(f"❌ Task send exception to {miner.uid}: {e}")
+            import traceback
+            logger.error(f"Task send traceback: {traceback.format_exc()}")
+            return False
+
+    async def run_sequential_batch_consensus(self):
+        """Run sequential batch consensus - wait for scoring before next batch"""
+        logger.info(f"🔄 [V:{self.info.uid}] Starting SEQUENTIAL batch consensus mode")
+        
+        batch_number = 1
+        
+        while True:
+            try:
+                logger.info(f"🔄 [V:{self.info.uid}] ===== SEQUENTIAL BATCH {batch_number} START =====")
+                
+                # 1. Load metagraph if needed
+                if not self.miners_info:
+                    await self._update_metagraph()
+                
+                # 2. Select miners for this batch
+                selected_miners = self.cardano_select_miners_continuous(batch_number)
+                if not selected_miners:
+                    logger.warning(f"⚠️ [V:{self.info.uid}] No miners available for batch {batch_number}")
+                    await asyncio.sleep(10)  # Wait 10s before retry
+                    continue
+                
+                logger.info(f"🎯 [V:{self.info.uid}] Selected {len(selected_miners)} miners: {[m.uid for m in selected_miners]}")
+                
+                # 3. Send tasks to all selected miners
+                await self.cardano_send_tasks_continuous(batch_number, selected_miners)
+                
+                # 4. Wait for results with SHORT timeout (30 seconds max)
+                await self.cardano_wait_for_results_batch_quick(batch_number)
+                
+                # 5. Score results immediately
+                await self.cardano_score_results_continuous(batch_number)
+                
+                # 6. REMOVED: Don't broadcast scores immediately - only at end of cycle
+                # await self.cardano_broadcast_batch_scores(batch_number)
+                
+                logger.info(f"✅ [V:{self.info.uid}] ===== SEQUENTIAL BATCH {batch_number} COMPLETED =====")
+                
+                # 7. Advance to next batch
+                batch_number += 1
+                
+                # 8. Short pause before next batch (1-2 seconds)
+                await asyncio.sleep(2)
+                
+            except Exception as e:
+                logger.error(f"❌ [V:{self.info.uid}] Error in sequential batch {batch_number}: {e}")
+                await asyncio.sleep(5)  # Brief pause before retry
+
+    async def cardano_wait_for_results_batch_quick(self, batch_number: int):
+        """Wait for results with SHORT timeout - optimized for fast batching"""
+        max_wait_time = self.batch_wait_time  # Use configured wait time
+        check_interval = 1.0   # Check every 1 second
+        
+        logger.info(f"⏳ [V:{self.info.uid}] Waiting max {max_wait_time}s for batch {batch_number} results...")
+        
+        start_time = time.time()
+        while time.time() - start_time < max_wait_time:
+            # Check if we have results for current batch tasks
+            batch_tasks = [task_id for task_id in self.tasks_sent.keys() if task_id.startswith(f"cycle_{batch_number}_")]
+            received_results = [task_id for task_id in batch_tasks if task_id in self.results_buffer]
+            
+            if batch_tasks:  # Only check if we have tasks
+                response_rate = len(received_results) / len(batch_tasks)
+                
+                # Early exit conditions:
+                if len(received_results) == len(batch_tasks):  # 100% response
+                    logger.info(f"✅ [V:{self.info.uid}] Got ALL {len(received_results)}/{len(batch_tasks)} results!")
+                    break
+                elif len(received_results) >= len(batch_tasks) * 0.8:  # 80% response after some time
+                    elapsed = time.time() - start_time
+                    if elapsed > max_wait_time * 0.5:  # Wait at least half the max time for stragglers
+                        logger.info(f"✅ [V:{self.info.uid}] Got {len(received_results)}/{len(batch_tasks)} results ({response_rate:.1%}) - proceeding")
+                        break
+                        
+                # Log progress every 5 seconds
+                if int(time.time() - start_time) % 5 == 0:
+                    logger.info(f"⏳ [V:{self.info.uid}] Progress: {len(received_results)}/{len(batch_tasks)} ({response_rate:.1%})")
+                    
+            await asyncio.sleep(check_interval)
+        
+        # Final summary
+        batch_tasks = [task_id for task_id in self.tasks_sent.keys() if task_id.startswith(f"cycle_{batch_number}_")]
+        received_results = [task_id for task_id in batch_tasks if task_id in self.results_buffer]
+        logger.info(f"📊 [V:{self.info.uid}] Final results: {len(received_results)}/{len(batch_tasks)} for batch {batch_number}")
+
+    async def cardano_broadcast_batch_scores(self, batch_number: int):
+        """Broadcast scores for this specific batch (optional, can be done in background)"""
+        if batch_number not in self.cycle_scores:
+            return
+            
+        try:
+            batch_scores = self.cycle_scores[batch_number]
+            
+            broadcast_payload = {
+                "type": "batch_scores",
+                "batch": batch_number, 
+                "validator_uid": self.info.uid,
+                "scores": batch_scores,
+                "timestamp": time.time()
+            }
+            
+            logger.info(f"📡 [V:{self.info.uid}] Broadcasting {len(batch_scores)} scores for batch {batch_number}")
+            
+            # Send to other validators (can be done async)
+            active_validators = [v for v in self.validators_info.values() if v.uid != self.info.uid]
+            if active_validators:
+                broadcast_tasks = [
+                    self.cardano_send_scores(validator, broadcast_payload)
+                    for validator in active_validators
+                ]
+                
+                results = await asyncio.gather(*broadcast_tasks, return_exceptions=True)
+                success_count = sum(1 for r in results if r is True)
+                logger.info(f"📡 [V:{self.info.uid}] Batch {batch_number} broadcast: {success_count}/{len(active_validators)} successful")
+                
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Error broadcasting batch {batch_number} scores: {e}")
+
+    async def run_synchronized_consensus(self):
+        """Run synchronized consensus - validators coordinate and wait for each other"""
+        logger.info(f"🔄 [V:{self.info.uid}] Starting SYNCHRONIZED consensus mode")
+        logger.info(f"📋 [V:{self.info.uid}] Consensus Config: Wait for peer scores, coordinate batches")
+        
+        batch_number = 1
+        consensus_round = 1
+        last_consensus_time = time.time()
+        
+        while True:
+            try:
+                current_time = time.time()
+                
+                # === PHASE 1: COORDINATED BATCH EXECUTION ===
+                logger.info(f"🔄 [V:{self.info.uid}] ===== SYNCHRONIZED BATCH {batch_number} START =====")
+                
+                # Load metagraph if needed
+                if not self.miners_info:
+                    await self._update_metagraph()
+                
+                # Select miners for this batch
+                selected_miners = self.cardano_select_miners_continuous(batch_number)
+                if not selected_miners:
+                    logger.warning(f"⚠️ [V:{self.info.uid}] No miners available for batch {batch_number}")
+                    await asyncio.sleep(10)
+                    continue
+                
+                logger.info(f"🎯 [V:{self.info.uid}] Selected {len(selected_miners)} miners: {[m.uid for m in selected_miners]}")
+                
+                # Send tasks to selected miners
+                await self.cardano_send_tasks_continuous(batch_number, selected_miners)
+                
+                # Wait for results
+                await self.cardano_wait_for_results_batch_quick(batch_number)
+                
+                # Score results locally
+                await self.cardano_score_results_continuous(batch_number)
+                
+                # REMOVED: Don't broadcast scores immediately - only during consensus rounds  
+                # === PHASE 2: BROADCAST SCORES TO OTHER VALIDATORS ===
+                # logger.info(f"📡 [V:{self.info.uid}] Broadcasting scores for batch {batch_number}")
+                # await self.cardano_broadcast_batch_scores(batch_number)
+                
+                logger.info(f"✅ [V:{self.info.uid}] ===== SYNCHRONIZED BATCH {batch_number} COMPLETED =====")
+                batch_number += 1
+                
+                # === PHASE 3: PERIODIC CONSENSUS ROUNDS ===
+                if current_time - last_consensus_time > self.settings.CONSENSUS_CYCLE_LENGTH:
+                    logger.info(f"🎯 [V:{self.info.uid}] ===== CONSENSUS ROUND {consensus_round} START =====")
+                    
+                    # Wait for scores from other validators
+                    logger.info(f"⏳ [V:{self.info.uid}] Waiting for peer validator scores...")
+                    await self.cardano_wait_for_peer_scores()
+                    
+                    # Finalize consensus with all validator scores
+                    logger.info(f"🧮 [V:{self.info.uid}] Finalizing consensus with all validator scores...")
+                    await self.cardano_finalize_consensus_round()
+                    
+                    # Update metagraph with consensus results
+                    logger.info(f"🔄 [V:{self.info.uid}] Updating metagraph with consensus results...")
+                    await self.cardano_update_metagraph_with_consensus()
+                    
+                    logger.info(f"✅ [V:{self.info.uid}] ===== CONSENSUS ROUND {consensus_round} COMPLETED =====")
+                    
+                    last_consensus_time = current_time
+                    consensus_round += 1
+                
+                # Short pause between batches
+                await asyncio.sleep(5)  # 5 seconds between batches
+                
+            except Exception as e:
+                logger.error(f"❌ [V:{self.info.uid}] Error in synchronized batch {batch_number}: {e}")
+                await asyncio.sleep(10)  # Brief pause before retry
+
+    async def cardano_submit_consensus_to_blockchain(self, final_scores: Dict[str, float]):
+        """Submit consensus results to Aptos blockchain"""
+        logger.info(f"🔗 [V:{self.info.uid}] Submitting {len(final_scores)} consensus scores to blockchain...")
+        
+        try:
+            from aptos_sdk.transactions import EntryFunction, TransactionArgument, TransactionPayload
+            from aptos_sdk.bcs import Serializer
+            from aptos_sdk.account_address import AccountAddress
+            
+            # Submit each miner's final score to blockchain
+            transaction_hashes = []
+            
+            for miner_uid, consensus_score in final_scores.items():
+                try:
+                    # Find miner address from uid
+                    miner_address = None
+                    for addr, miner_info in self.miners_info.items():
+                        if miner_info.uid == miner_uid:
+                            miner_address = addr
+                            break
+                    
+                    if not miner_address:
+                        logger.warning(f"⚠️ [V:{self.info.uid}] Miner {miner_uid} address not found, skipping...")
+                        continue
+                    
+                    # Scale score (0.0-1.0 -> 0-100000000)
+                    trust_score_scaled = int(consensus_score * 100_000_000)
+                    performance_scaled = int(consensus_score * 100_000_000)
+                    
+                    # Create transaction payload with correct module name and address format
+                    payload = EntryFunction.natural(
+                        f"{self.contract_address}::full_moderntensor",  # Use correct module name
+                        "update_miner_performance",
+                        [],  # Type args
+                        [
+                            # Match smart contract signature exactly
+                            TransactionArgument(AccountAddress.from_str(miner_address), Serializer.struct),  # miner_addr: address
+                            TransactionArgument(trust_score_scaled, Serializer.u64),  # trust_score: u64
+                            TransactionArgument(performance_scaled, Serializer.u64),  # performance: u64
+                            TransactionArgument(0, Serializer.u64),  # rewards: u64
+                            TransactionArgument("", Serializer.str),  # performance_hash: String
+                            TransactionArgument(100_000_000, Serializer.u64),  # weight: u64 (default 1.0)
+                        ],
+                    )
+                    
+                    # Submit transaction
+                    signed_txn = await self.aptos_client.create_bcs_signed_transaction(
+                        self.account, TransactionPayload(payload)
+                    )
+                    tx_hash = await self.aptos_client.submit_bcs_transaction(signed_txn)
+                    
+                    # Wait for confirmation
+                    await self.aptos_client.wait_for_transaction(tx_hash)
+                    
+                    transaction_hashes.append(tx_hash)
+                    logger.info(f"✅ [V:{self.info.uid}] Submitted score for {miner_uid}: {consensus_score:.4f} → TX: {tx_hash}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ [V:{self.info.uid}] Failed to submit score for {miner_uid}: {e}")
+                    continue
+            
+            logger.info(f"🎯 [V:{self.info.uid}] Blockchain submission complete: {len(transaction_hashes)}/{len(final_scores)} transactions submitted")
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Blockchain submission error: {e}")
+
+    async def cardano_broadcast_average_scores(self):
+        """Calculate and broadcast average scores for current cycle to other validators"""
+        logger.info(f"📡 [V:{self.info.uid}] Broadcasting average scores for cycle {self._current_cycle}")
+        
+        try:
+            # Calculate average scores for each miner from all our batches
+            miner_averages = {}
+            miner_score_counts = defaultdict(list)
+            
+            # Collect all scores for each miner across all batches
+            if self._current_cycle in self.cycle_scores:
+                for score_record in self.cycle_scores[self._current_cycle]:
+                    miner_uid = score_record["miner_uid"]
+                    score = score_record["score"]
+                    miner_score_counts[miner_uid].append(score)
+            
+            # Calculate averages
+            for miner_uid, scores in miner_score_counts.items():
+                average_score = sum(scores) / len(scores)
+                miner_averages[miner_uid] = average_score
+                logger.info(f"📊 [V:{self.info.uid}] Average for {miner_uid}: {average_score:.4f} (from {len(scores)} tasks)")
+            
+            if not miner_averages:
+                logger.warning(f"⚠️ [V:{self.info.uid}] No scores to broadcast for cycle {self._current_cycle}")
+                return
+            
+            # Create ValidatorScore objects for P2P broadcast
+            broadcast_scores = []
+            for miner_uid, avg_score in miner_averages.items():
+                score_obj = ValidatorScore(
+                    task_id=f"cycle_{self._current_cycle}_average",
+                    miner_uid=miner_uid,
+                    validator_uid=self.info.uid,
+                    score=avg_score,
+                    timestamp=time.time()
+                )
+                broadcast_scores.append(score_obj)
+            
+            # Broadcast to other validators
+            await self.cardano_broadcast_accumulated_scores_to_peers(broadcast_scores)
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Error broadcasting average scores: {e}")
+
+    async def cardano_broadcast_accumulated_scores_to_peers(self, scores: List[ValidatorScore]):
+        """Broadcast scores to other validators using P2P"""
+        try:
+            active_validators = [v for v in self.validators_info.values() if v.uid != self.info.uid and v.api_endpoint]
+            
+            if not active_validators:
+                logger.warning(f"⚠️ [V:{self.info.uid}] No other validators to broadcast to")
+                return
+            
+            # Create broadcast payload
+            broadcast_payload = {
+                "type": "average_scores",
+                "cycle": self._current_cycle,
+                "validator_uid": self.info.uid,
+                "scores": [score.dict() for score in scores],  # Convert to dict for JSON
+                "timestamp": time.time()
+            }
+            
+            logger.info(f"📡 [V:{self.info.uid}] Broadcasting {len(scores)} average scores to {len(active_validators)} validators")
+            
+            # Send to all validators in parallel
+            broadcast_tasks = [
+                self.cardano_send_scores(validator, broadcast_payload)
+                for validator in active_validators
+            ]
+            
+            results = await asyncio.gather(*broadcast_tasks, return_exceptions=True)
+            success_count = sum(1 for r in results if r is True)
+            logger.info(f"📡 [V:{self.info.uid}] Average scores broadcast: {success_count}/{len(active_validators)} successful")
+            
+        except Exception as e:
+            logger.error(f"❌ [V:{self.info.uid}] Error broadcasting to peers: {e}")
 
 async def run_validator_node():
     node = None
@@ -1995,13 +3676,18 @@ async def run_validator_node():
             'APTOS_NODE_URL': settings.APTOS_NODE_URL,
             'APTOS_PRIVATE_KEY': settings.APTOS_PRIVATE_KEY,
             'APTOS_CONTRACT_ADDRESS': settings.APTOS_CONTRACT_ADDRESS,
-            'VALIDATOR_API_ENDPOINT': settings.VALIDATOR_API_ENDPOINT,
             'HTTP_CLIENT_TIMEOUT': settings.HTTP_CLIENT_TIMEOUT,
             'HTTP_CLIENT_MAX_CONNECTIONS': settings.HTTP_CLIENT_MAX_CONNECTIONS,
-            'CONSENSUS_CYCLE_SLOT_LENGTH': settings.CONSENSUS_CYCLE_SLOT_LENGTH,
+            'CONSENSUS_CYCLE_LENGTH': settings.CONSENSUS_CYCLE_LENGTH,
             'CONSENSUS_MAX_RETRIES': settings.CONSENSUS_MAX_RETRIES,
             'CONSENSUS_RETRY_DELAY_SECONDS': settings.CONSENSUS_RETRY_DELAY_SECONDS
         }
+
+        # Check validator API endpoint dynamically
+        validator_api_endpoint = settings.get_current_validator_endpoint()
+        if not validator_api_endpoint:
+            logger.error("No validator API endpoint configured. Please set VALIDATOR_API_ENDPOINT or VALIDATOR_1_API_ENDPOINT")
+            return
 
         missing_settings = [key for key, value in required_settings.items() if value is None]
         if missing_settings:
@@ -2017,7 +3703,7 @@ async def run_validator_node():
             logger.error("APTOS_CONTRACT_ADDRESS must start with '0x'")
             return
 
-        if not settings.VALIDATOR_API_ENDPOINT.startswith(('http://', 'https://')):
+        if not validator_api_endpoint.startswith(('http://', 'https://')):
             logger.error("VALIDATOR_API_ENDPOINT must be a valid HTTP(S) URL")
             return
 
@@ -2027,8 +3713,8 @@ async def run_validator_node():
                 raise ValueError("HTTP_CLIENT_TIMEOUT must be positive")
             if settings.HTTP_CLIENT_MAX_CONNECTIONS <= 0:
                 raise ValueError("HTTP_CLIENT_MAX_CONNECTIONS must be positive")
-            if settings.CONSENSUS_CYCLE_SLOT_LENGTH <= 0:
-                raise ValueError("CONSENSUS_CYCLE_SLOT_LENGTH must be positive")
+            if settings.CONSENSUS_CYCLE_LENGTH <= 0:
+                raise ValueError("CONSENSUS_CYCLE_LENGTH must be positive")
             if settings.CONSENSUS_MAX_RETRIES <= 0:
                 raise ValueError("CONSENSUS_MAX_RETRIES must be positive")
             if settings.CONSENSUS_RETRY_DELAY_SECONDS <= 0:
@@ -2081,7 +3767,7 @@ async def run_validator_node():
             validator_info = ValidatorInfo(
                 uid=validator_data.get("uid", ""),
                 address=validator_address,
-                api_endpoint=settings.VALIDATOR_API_ENDPOINT
+                api_endpoint=validator_api_endpoint
             )
             
             if not validator_info.uid:
@@ -2122,3 +3808,156 @@ async def run_validator_node():
             except Exception as e:
                 logger.error(f"Error closing HTTP client: {str(e)}")
         logger.info("Validator node shutdown complete.")
+
+
+async def create_and_run_validator_sequential(
+    validator_name: str = "validator",
+    batch_wait_time: float = 30.0,
+    auto_password: str = "default123"
+) -> None:
+    """
+    Factory function để tạo và chạy ValidatorNode với sequential batch mode
+    Tự động tạo account nếu chưa có và sử dụng cấu hình tối ưu.
+    
+    Args:
+        validator_name: Tên account validator 
+        batch_wait_time: Thời gian đợi cho sequential mode (seconds)
+        auto_password: Mật khẩu tự động để tạo account
+    """
+    from mt_aptos.keymanager.account_manager import AccountKeyManager
+    from aptos_sdk.client import RestClient
+    from mt_aptos.core.datatypes import ValidatorInfo
+    import os
+    
+    # Load environment settings 
+    from mt_aptos.config.env import load_environment_variables
+    env_vars = load_environment_variables()
+    
+    # Hiển thị cấu hình
+    print("╭───────────────────────────────────╮")
+    print("│ 🔄 ModernTensor Aptos Validator  │")
+    print("│       SEQUENTIAL BATCH MODE       │")
+    print("╰───────────────────────────────────╯")
+    print("📋 Configuration:")
+    print("   • Mode: Sequential Batch Processing")
+    print(f"   • Wait Time: {batch_wait_time} seconds max per batch")
+    print("   • Scoring: Immediate after results")
+    print("   • Next Batch: 2 seconds after scoring")
+    print()
+    
+    # Initialize account manager và tự động tạo account nếu cần
+    account_manager = AccountKeyManager()
+    
+    try:
+        # Sử dụng load_or_create_account thay vì load_account
+        validator_account = account_manager.load_or_create_account(
+            validator_name, 
+            auto_password=auto_password
+        )
+        logger.info(f"✅ Validator account loaded/created: {validator_account.address()}")
+    except Exception as e:
+        logger.error(f"❌ Failed to load/create validator account: {e}")
+        raise
+    
+    # Initialize Aptos client
+    aptos_client = RestClient(env_vars.get("APTOS_NODE_URL", "https://fullnode.testnet.aptoslabs.com/v1"))
+    
+    # Create validator info
+    validator_info = ValidatorInfo(
+        uid=validator_name,
+        address=str(validator_account.address()),
+        api_endpoint=env_vars.get("VALIDATOR_API_ENDPOINT", "http://127.0.0.1:8080")
+    )
+    
+    # Create ValidatorNode với sequential consensus mode 
+    node = ValidatorNode(
+        validator_info=validator_info,
+        aptos_client=aptos_client,
+        account=validator_account,
+        contract_address=env_vars.get("CONTRACT_ADDRESS", ""),
+        consensus_mode="sequential",  # Force sequential mode
+        batch_wait_time=batch_wait_time
+    )
+    
+    # Log configuration
+    logger.info(f"🎯 Validator configured:")
+    logger.info(f"   • Name: {validator_name}")
+    logger.info(f"   • Mode: sequential batch processing")
+    logger.info(f"   • Address: {validator_account.address()}")
+    logger.info(f"   • Batch wait: {batch_wait_time}s")
+    
+    # Start node
+    await node.run()
+
+
+async def create_and_run_validator_continuous(
+    validator_name: str = "validator",
+    auto_password: str = "default123"
+) -> None:
+    """
+    Factory function để tạo và chạy ValidatorNode với continuous slot-based mode
+    
+    Args:
+        validator_name: Tên account validator
+        auto_password: Mật khẩu tự động để tạo account
+    """
+    from mt_aptos.keymanager.account_manager import AccountKeyManager
+    from aptos_sdk.client import RestClient
+    from mt_aptos.core.datatypes import ValidatorInfo
+    
+    # Load environment settings
+    from mt_aptos.config.env import load_environment_variables
+    env_vars = load_environment_variables()
+    
+    # Hiển thị cấu hình
+    print("╭───────────────────────────────────╮")
+    print("│ 🔄 ModernTensor Aptos Validator  │")
+    print("│      CONTINUOUS SLOT MODE         │")
+    print("╰───────────────────────────────────╯")
+    print("📋 Configuration:")
+    print("   • Mode: Continuous Slot-Based Processing")
+    print("   • Slot Duration: 20 minutes")
+    print("   • Phases: Assignment → Execution → Consensus → Update")
+    print()
+    
+    # Initialize account manager và tự động tạo account nếu cần
+    account_manager = AccountKeyManager()
+    
+    try:
+        validator_account = account_manager.load_or_create_account(
+            validator_name,
+            auto_password=auto_password
+        )
+        logger.info(f"✅ Validator account loaded/created: {validator_account.address()}")
+    except Exception as e:
+        logger.error(f"❌ Failed to load/create validator account: {e}")
+        raise
+    
+    # Initialize Aptos client
+    aptos_client = RestClient(env_vars.get("APTOS_NODE_URL", "https://fullnode.testnet.aptoslabs.com/v1"))
+    
+    # Create validator info
+    validator_info = ValidatorInfo(
+        uid=validator_name,
+        address=str(validator_account.address()),
+        api_endpoint=env_vars.get("VALIDATOR_API_ENDPOINT", "http://127.0.0.1:8080")
+    )
+    
+    # Create ValidatorNode với continuous consensus mode
+    node = ValidatorNode(
+        validator_info=validator_info,
+        aptos_client=aptos_client,
+        account=validator_account,
+        contract_address=env_vars.get("CONTRACT_ADDRESS", ""),
+        consensus_mode="continuous",  # Force continuous mode
+        batch_wait_time=30.0  # Not used in continuous mode
+    )
+    
+    # Log configuration
+    logger.info(f"🎯 Validator configured:")
+    logger.info(f"   • Name: {validator_name}")
+    logger.info(f"   • Mode: continuous slot-based")
+    logger.info(f"   • Address: {validator_account.address()}")
+    
+    # Start node
+    await node.run()

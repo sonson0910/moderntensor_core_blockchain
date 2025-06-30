@@ -176,3 +176,8 @@ def to_move_resource(data_obj: Any) -> Dict[str, Any]:
         resource_data[field_name] = field_value
     
     return resource_data
+
+
+# --- Legacy aliases for backward compatibility ---
+MinerDatum = MinerData
+ValidatorDatum = ValidatorData

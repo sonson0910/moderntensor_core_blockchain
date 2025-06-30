@@ -16,6 +16,27 @@ router = APIRouter()
 
 
 @router.post(
+    "/receive-task",
+    summary="Miner nhận Task từ Validator",
+    description="Endpoint để Validator gửi task cho Miner.",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def receive_task(
+    task_payload: dict,  # Nhận payload task từ validator
+):
+    """
+    Nhận task từ Validator để xử lý.
+    Endpoint này chủ yếu để validator có thể gửi task đến.
+    """
+    task_id = task_payload.get("task_id", "unknown")
+    logger.info(f"📨 Received task {task_id} from validator")
+    
+    # Trong môi trường thực tế, đây sẽ là logic xử lý task của miner
+    # Hiện tại chỉ trả về success để tránh 404 error
+    return {"message": f"Task {task_id} received successfully"}
+
+
+@router.post(
     "/miner/submit_result",
     summary="Miner gửi kết quả Task",
     description="Endpoint để Miner gửi đối tượng ResultModel sau khi hoàn thành task.",

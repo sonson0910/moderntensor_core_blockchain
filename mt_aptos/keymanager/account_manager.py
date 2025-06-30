@@ -140,7 +140,7 @@ class AccountKeyManager:
         
         # Lưu thông tin tài khoản
         self._accounts_info[name] = {
-            "address": account.address().hex(),
+            "address": str(account.address()),
             "ciphertext": binascii.hexlify(ciphertext).decode(),
             "salt": binascii.hexlify(salt).decode(),
             "nonce": binascii.hexlify(nonce).decode(),
@@ -186,6 +186,36 @@ class AccountKeyManager:
             return Account(account_address, private_key)
         except Exception as e:
             raise ValueError(f"Failed to decrypt account. Incorrect password? Error: {e}")
+
+    def load_or_create_account(self, name: str, password: Optional[str] = None, auto_password: str = None) -> Account:
+        """
+        Tải account nếu tồn tại, hoặc tự động tạo mới nếu chưa có.
+        
+        Args:
+            name: Tên của tài khoản.
+            password: Mật khẩu để giải mã/mã hóa private key.
+            auto_password: Mật khẩu tự động để tạo account mới (không cần hỏi user)
+            
+        Returns:
+            Account: Đối tượng Account Aptos đã tải hoặc tạo mới.
+        """
+        try:
+            # Thử tải account trước
+            return self.load_account(name, password)
+        except ValueError as e:
+            if "does not exist" in str(e):
+                print(f"🔧 Account '{name}' not found. Creating new account...")
+                
+                # Sử dụng auto_password nếu có, nếu không thì hỏi user
+                create_password = auto_password if auto_password else password
+                
+                # Tạo account mới
+                account = self.create_account(name, create_password)
+                print(f"✅ Created new account '{name}' with address: {account.address()}")
+                return account
+            else:
+                # Lỗi khác (mật khẩu sai, etc.) - re-raise
+                raise
     
     def list_accounts(self) -> List[Dict[str, str]]:
         """
@@ -262,7 +292,7 @@ class AccountKeyManager:
             
             # Lưu thông tin tài khoản
             self._accounts_info[name] = {
-                "address": account.address().hex(),
+                "address": str(account.address()),
                 "ciphertext": binascii.hexlify(ciphertext).decode(),
                 "salt": binascii.hexlify(salt).decode(),
                 "nonce": binascii.hexlify(nonce).decode(),

@@ -198,18 +198,30 @@ def decode_hotkey_account(
         logger.error(
             f":warning: [red]Invalid private key hex for hotkey '{hotkey_name}': {e}[/red]"
         )
-        raise ValueError(
-            f"Invalid private key format for hotkey '{hotkey_name}'."
-        )
-    except Exception as e:
-        logger.error(
-            f":rotating_light: [red]Failed to create Aptos Account for '{hotkey_name}': {e}[/red]"
-        )
-        raise Exception(f"Failed to create Aptos Account for hotkey '{hotkey_name}'.")
+        raise Exception(f"Invalid private key format for hotkey '{hotkey_name}'.")
 
     logger.info(
-        f":unlock: [green]Successfully decoded hotkey[/green] [bold blue]'{hotkey_name}'[/bold blue] "
-        f"[dim]under coldkey[/dim] [bold cyan]'{coldkey_name}'[/bold cyan]."
+        f":key: [green]Successfully loaded Aptos account for hotkey '{hotkey_name}' "
+        f"from {hotkeys_json_path}. Address: {actual_address}[/green]"
     )
-
     return account
+
+
+def decode_hotkey_skey(
+    base_dir: Optional[str] = None,
+    coldkey_name: str = "",
+    hotkey_name: str = "",
+    password: str = "",
+) -> Tuple[Optional[Account], Optional[Account]]:
+    """
+    Legacy compatibility function for old Cardano-style interface.
+    
+    In Aptos, we only have one Account object (not separate payment/stake keys),
+    so this returns the same Account for both payment and stake positions.
+    
+    Returns:
+        Tuple[Optional[Account], Optional[Account]]: (payment_account, stake_account)
+            Both are the same Aptos Account object, or (None, None) if loading fails.
+    """
+    account = decode_hotkey_account(base_dir, coldkey_name, hotkey_name, password)
+    return (account, account)

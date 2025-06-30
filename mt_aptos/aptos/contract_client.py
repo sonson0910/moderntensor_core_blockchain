@@ -70,15 +70,22 @@ class ModernTensorClient:
         """
         logger.info(f"Registering miner with UID {uid.hex()} on subnet {subnet_uid}")
         
+        # Convert bytes uid to hex string for the contract
+        uid_string = uid.hex()
+        # Generate wallet address hash
+        import hashlib
+        wallet_addr_hash = hashlib.sha256(self.account.address().hex().encode()).hexdigest()[:32]
+        
         payload = EntryFunction.natural(
-            f"{self.moderntensor_address}::miner",
+            f"{self.moderntensor_address}::moderntensor_hybrid",
             "register_miner",
             [],  # Type args
             [
-                TransactionArgument(uid, Serializer.SEQUENCE),
+                TransactionArgument(uid_string, Serializer.STR),
                 TransactionArgument(subnet_uid, Serializer.U64),
                 TransactionArgument(stake_amount, Serializer.U64),
                 TransactionArgument(api_endpoint, Serializer.STR),
+                TransactionArgument(wallet_addr_hash, Serializer.STR),
             ],
         )
         
@@ -118,15 +125,22 @@ class ModernTensorClient:
         """
         logger.info(f"Registering validator with UID {uid.hex()} on subnet {subnet_uid}")
         
+        # Convert bytes uid to hex string for the contract
+        uid_string = uid.hex()
+        # Generate wallet address hash
+        import hashlib
+        wallet_addr_hash = hashlib.sha256(self.account.address().hex().encode()).hexdigest()[:32]
+        
         payload = EntryFunction.natural(
-            f"{self.moderntensor_address}::validator",
+            f"{self.moderntensor_address}::moderntensor_hybrid",
             "register_validator",
             [],  # Type args
             [
-                TransactionArgument(uid, Serializer.SEQUENCE),
+                TransactionArgument(uid_string, Serializer.STR),
                 TransactionArgument(subnet_uid, Serializer.U64),
                 TransactionArgument(stake_amount, Serializer.U64),
                 TransactionArgument(api_endpoint, Serializer.STR),
+                TransactionArgument(wallet_addr_hash, Serializer.STR),
             ],
         )
         
@@ -165,13 +179,16 @@ class ModernTensorClient:
         logger.info(f"Updating scores for miner {miner_address}")
         
         payload = EntryFunction.natural(
-            f"{self.moderntensor_address}::miner",
-            "update_miner_scores",
+            f"{self.moderntensor_address}::moderntensor_hybrid",
+            "update_miner_performance",
             [],  # Type args
             [
                 TransactionArgument(miner_address, Serializer.ADDRESS),
-                TransactionArgument(new_performance, Serializer.U64),
                 TransactionArgument(new_trust_score, Serializer.U64),
+                TransactionArgument(new_performance, Serializer.U64),
+                TransactionArgument(0, Serializer.U64),  # rewards
+                TransactionArgument("", Serializer.STR),  # performance_hash
+                TransactionArgument(100_000_000, Serializer.U64),  # weight (default 1.0)
             ],
         )
         
@@ -221,22 +238,9 @@ class ModernTensorClient:
         """
         logger.info(f"Creating subnet with UID {net_uid} named '{name}'")
         
-        payload = EntryFunction.natural(
-            f"{self.moderntensor_address}::subnet",
-            "create_subnet",
-            [],  # Type args
-            [
-                TransactionArgument(net_uid, Serializer.U64),
-                TransactionArgument(name, Serializer.STR),
-                TransactionArgument(description, Serializer.STR),
-                TransactionArgument(max_miners, Serializer.U64),
-                TransactionArgument(max_validators, Serializer.U64),
-                TransactionArgument(immunity_period, Serializer.U64),
-                TransactionArgument(min_stake_miner, Serializer.U64),
-                TransactionArgument(min_stake_validator, Serializer.U64),
-                TransactionArgument(reg_cost, Serializer.U64),
-            ],
-        )
+        # Note: create_subnet function is not available in the deployed contract
+        # This would need to be implemented separately or the contract would need to be updated
+        raise NotImplementedError("create_subnet function is not available in the deployed moderntensor_hybrid contract")
         
         txn_hash = await self.client.submit_transaction(
             self.account,
@@ -263,30 +267,27 @@ class ModernTensorClient:
             ValueError: Nếu miner không tồn tại.
         """
         try:
+            # Get full miner info using the deployed contract's view function
             result = await self.client.view_function(
                 self.moderntensor_address,
-                "miner",
-                "get_miner_performance",
+                "moderntensor_hybrid",
+                "get_miner_info",
                 [miner_address],
             )
             
-            # Kết quả là performance scaled
-            performance = result / 1_000_000
+            # Parse the result structure returned by get_miner_info
+            if result and len(result) > 0:
+                miner_data = result[0]
+                performance = miner_data.get("last_performance", 0) / 100_000_000  # scaled by 1e8
+                trust_score = miner_data.get("trust_score", 0) / 100_000_000  # scaled by 1e8
+            else:
+                performance = 0.0
+                trust_score = 0.0
             
-            # Lấy trust score
-            trust_result = await self.client.view_function(
-                self.moderntensor_address,
-                "miner",
-                "get_miner_trust_score",
-                [miner_address],
-            )
-            
-            trust_score = trust_result / 1_000_000
-            
-            # Lấy thông tin resource miner
+            # Lấy thông tin resource miner từ deployed contract
             resource = await self.client.account_resource(
                 miner_address,
-                f"{self.moderntensor_address}::miner::MinerInfo",
+                f"{self.moderntensor_address}::moderntensor_hybrid::MinerInfo",
             )
             
             data = resource["data"]

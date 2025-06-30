@@ -72,6 +72,15 @@ class BaseMiner:
     def setup_routes(self):
         """Set up routes for the miner server."""
 
+        @self.app.get("/health")
+        async def health_check():
+            """Health check endpoint for miner"""
+            return {
+                "status": "healthy",
+                "miner_uid": self.miner_uid,
+                "timestamp": time.time()
+            }
+
         @self.app.post("/receive-task")
         async def receive_task(task: TaskModel):
             logger.info(

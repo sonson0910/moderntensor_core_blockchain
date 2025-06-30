@@ -4,6 +4,40 @@ import os
 from typing import Dict, Any, Optional, List
 
 
+def read_validator(filename: str = "validator_data.json") -> Optional[Dict[str, Any]]:
+    """
+    Legacy compatibility function for reading validator data.
+    
+    Args:
+        filename (str): The name of the JSON file containing validator data.
+                        Defaults to "validator_data.json".
+    
+    Returns:
+        Optional[Dict[str, Any]]: A dictionary containing validator data,
+                                  or None if reading fails.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        # Get the directory where this validator.py script resides
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Join the directory path with the filename
+        file_path = os.path.join(script_dir, filename)
+        
+        logger.debug(f"Attempting to read validator data from: {file_path}")
+        
+        if not os.path.exists(file_path):
+            logger.warning(f"Validator data file not found at path: {file_path}")
+            return {}
+            
+        with open(file_path) as f:
+            validator_data = json.load(f)
+            
+        return validator_data
+    except Exception as e:
+        logger.error(f"Error reading validator data: {e}")
+        return {}
+
+
 def read_module_definition(filename: str = "aptos_module.json") -> Optional[Dict[str, Any]]:
     """
     Reads the Aptos Move module definition from a JSON file.

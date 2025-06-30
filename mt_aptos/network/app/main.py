@@ -42,6 +42,10 @@ async def startup_event():
     """Khởi tạo Validator Node và inject vào dependency."""
     global main_validator_node_instance
     logger.info("FastAPI application starting up...")
+    # ValidatorNode will be set by the main validator process, not here
+    logger.info("ValidatorNode instance will be set by the main validator process")
+    return
+    
     if ValidatorInfo and ValidatorNode and settings:
         try:
             # Lấy thông tin validator từ settings
@@ -49,7 +53,7 @@ async def startup_event():
             validator_address = settings.VALIDATOR_ADDRESS or "0x_default_api..."
             host = os.getenv("HOST", "127.0.0.1")
             port = settings.API_PORT
-            api_endpoint = settings.VALIDATOR_API_ENDPOINT or f"http://{host}:{port}"
+            api_endpoint = settings.get_current_validator_endpoint() or f"http://{host}:{port}"
 
             # --- KHỞI TẠO CONTEXT APTOS ---
             aptos_ctx = get_aptos_context()  # Get Aptos context

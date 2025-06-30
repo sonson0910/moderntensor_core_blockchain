@@ -29,3 +29,7 @@ def init_logging(custom_config=None):
         # Merging logic, tuỳ bạn triển khai
         pass
     logging.config.dictConfig(config)
+
+# Initialize logging and create logger instance
+init_logging()
+logger = logging.getLogger("moderntensor")

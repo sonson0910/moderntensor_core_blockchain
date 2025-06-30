@@ -76,12 +76,50 @@ def query_account_cmd(address, node_url, network):
             # Get account resources
             resources = await client.account_resources(address)
             
-            # Get APT balance from CoinStore resource
+            # Get APT balance from CoinStore resource or FungibleAsset
             apt_balance = None
+            
+            # Method 1: Try old CoinStore first
             for resource in resources:
                 if resource["type"] == "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>":
                     apt_balance = int(resource["data"]["coin"]["value"]) / 100_000_000
                     break
+            
+            # Method 2: If no CoinStore found, try FungibleAsset
+            if apt_balance is None:
+                try:
+                    import aiohttp
+                    
+                    async with aiohttp.ClientSession() as session:
+                        # Get owned objects
+                        view_payload = {
+                            "function": "0x1::object::object_addresses_owned_by",
+                            "type_arguments": [],
+                            "arguments": [address]
+                        }
+                        
+                        view_url = f"{node_url}/view"
+                        async with session.post(view_url, json=view_payload) as response:
+                            if response.status == 200:
+                                result = await response.json()
+                                if result and result[0]:
+                                    owned_objects = result[0]
+                                    
+                                    # Check each object for APT FungibleStore
+                                    for obj_addr in owned_objects:
+                                        store_url = f"{node_url}/accounts/{obj_addr}/resource/0x1::fungible_asset::FungibleStore"
+                                        async with session.get(store_url) as store_response:
+                                            if store_response.status == 200:
+                                                store_data = await store_response.json()
+                                                balance = store_data.get("data", {}).get("balance", "0")
+                                                metadata = store_data.get("data", {}).get("metadata", {}).get("inner", "")
+                                                
+                                                # Check if this is APT (metadata = 0xa)
+                                                if metadata == "0x000000000000000000000000000000000000000000000000000000000000000a" or metadata == "0xa":
+                                                    apt_balance = int(balance) / 100_000_000
+                                                    break
+                except Exception as e:
+                    pass  # Continue with apt_balance = None
             
             # Display account information
             console.print(Panel(
