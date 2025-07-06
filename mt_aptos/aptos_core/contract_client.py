@@ -10,19 +10,19 @@ import json
 from typing import List, Dict, Any, Optional, Union, Tuple
 import asyncio
 
-from mt_aptos.account import Account
-from mt_aptos.async_client import RestClient
-from mt_aptos.bcs import Serializer
-from mt_aptos.transactions import (
+from moderntensor.mt_aptos.account import Account
+from moderntensor.mt_aptos.async_client import RestClient
+from moderntensor.mt_aptos.bcs import Serializer
+from moderntensor.mt_aptos.transactions import (
     EntryFunction,
     TransactionArgument,
     TransactionPayload,
     SignedTransaction,
 )
-from mt_aptos.type_tag import TypeTag, StructTag
+from moderntensor.mt_aptos.type_tag import TypeTag, StructTag
 
-from mt_aptos.core.datatypes import MinerInfo, ValidatorInfo
-from mt_aptos.config.settings import settings
+from moderntensor.mt_aptos.core.datatypes import MinerInfo, ValidatorInfo
+from moderntensor.mt_aptos.config.settings import settings
 
 logger = logging.getLogger(__name__)
 

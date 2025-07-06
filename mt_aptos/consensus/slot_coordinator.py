@@ -19,7 +19,7 @@ import asyncio
 import time
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
 import logging
@@ -27,7 +27,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Constants
-EPOCH_START = 1735689600  # Jan 1, 2025 00:00:00 UTC
+EPOCH_START = 1751827027  # 1 hour before current time - slots will start from 0
 EXPECTED_VALIDATORS = ['validator_1', 'validator_2', 'validator_3']
 MAJORITY_THRESHOLD = 2  # Need 2 out of 3 validators
 CONSENSUS_CHECK_INTERVAL = 5  # Check every 5 seconds
@@ -77,20 +77,22 @@ class SlotCoordinator:
     synchronize their phase transitions and consensus activities.
     """
     
-    def __init__(self, validator_uid: str, coordination_dir: str = "slot_coordination"):
+    def __init__(self, validator_uid: str, coordination_dir: str = "slot_coordination", slot_config: Optional[SlotConfig] = None):
         """
         Initialize SlotCoordinator
         
         Args:
             validator_uid: Unique identifier for this validator
             coordination_dir: Directory for coordination files
+            slot_config: Optional slot configuration (uses default if None)
         """
         self.validator_uid = validator_uid
         self.coordination_dir = Path(coordination_dir)
         self.coordination_dir.mkdir(exist_ok=True)
-        self.slot_config = SlotConfig()
+        self.slot_config = slot_config or SlotConfig()
         
         logger.debug(f"SlotCoordinator initialized for {validator_uid}")
+        logger.debug(f"Slot config: {self.slot_config.slot_duration_minutes}min slots, {self.slot_config.task_assignment_minutes}min assignment")
         
     def get_current_blockchain_slot(self) -> int:
         """Get current blockchain slot number based on timestamp"""
@@ -352,11 +354,24 @@ class SlotCoordinator:
                         data = json.load(f)
                         scores = data.get('extra_data', {}).get('scores', {})
                         
-                        # Aggregate scores per miner
-                        for miner_uid, score in scores.items():
-                            if miner_uid not in all_scores:
-                                all_scores[miner_uid] = []
-                            all_scores[miner_uid].append(score)
+                        # Handle both dict and list formats
+                        if isinstance(scores, dict):
+                            # Standard dict format: {miner_uid: score}
+                            for miner_uid, score in scores.items():
+                                if miner_uid not in all_scores:
+                                    all_scores[miner_uid] = []
+                                all_scores[miner_uid].append(score)
+                        elif isinstance(scores, list):
+                            # List format: [{"miner_uid": "...", "score": 0.5}]
+                            for score_entry in scores:
+                                if isinstance(score_entry, dict) and 'miner_uid' in score_entry and 'score' in score_entry:
+                                    miner_uid = score_entry['miner_uid']
+                                    score = score_entry['score']
+                                    if miner_uid not in all_scores:
+                                        all_scores[miner_uid] = []
+                                    all_scores[miner_uid].append(score)
+                        else:
+                            logger.warning(f"Invalid scores format from {validator_uid}: {type(scores)}")
                             
                 except Exception as e:
                     logger.error(f"Error reading scores from {validator_uid}: {e}")

@@ -4,8 +4,6 @@ Contains logic for consensus calculations, validator penalty checks,
 and preparing/committing state updates to the blockchain.
 """
 import logging
-import math
-import hashlib  # Đảm bảo đã import
 import asyncio
 from typing import List, Dict, Any, Tuple, Optional, Set, Union
 import numpy as np  # Cần cài đặt numpy: pip install numpy
@@ -518,7 +516,7 @@ async def verify_and_penalize_logic(
     # Get tolerance settings
     tolerance = settings.CONSENSUS_DATUM_COMPARISON_TOLERANCE
 
-    from mt_aptos.aptos_core.contract_client import AptosContractClient
+    from ..aptos_core.contract_client import AptosContractClient
     
     # Create contract client
     contract_client = AptosContractClient(
@@ -668,7 +666,7 @@ async def prepare_miner_updates_logic(
     logger.info(f"Preparing miner updates for cycle {current_cycle}")
     miner_updates = {}
 
-    from mt_aptos.aptos_core.contract_client import AptosContractClient
+    from ..aptos_core.contract_client import AptosContractClient
     
     # Create contract client
     contract_client = AptosContractClient(
@@ -821,7 +819,7 @@ async def prepare_validator_updates_logic(
         logger.warning(f"Calculated state for validator {self_uid_hex} not found, skipping update")
         return {}
 
-    from mt_aptos.aptos_core.contract_client import AptosContractClient
+    from ..aptos_core.contract_client import AptosContractClient
     
     # Create contract client if client is provided
     contract_client = None
@@ -903,7 +901,7 @@ async def commit_updates_logic(
 
     tx_results = []
     
-    from mt_aptos.aptos_core.contract_client import AptosContractClient
+    from ..aptos_core.contract_client import AptosContractClient
     
     # Create contract client
     contract_client = AptosContractClient(

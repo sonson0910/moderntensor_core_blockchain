@@ -8,10 +8,10 @@ from typing import List, Dict
 
 # Import các thành phần cần thiết
 try:
-    from mt_aptos.config.settings import settings
-    from mt_aptos.core.datatypes import MinerInfo
-    from mt_aptos.metagraph.metagraph_datum import STATUS_ACTIVE
-    from mt_aptos.formulas.trust_score import calculate_selection_probability
+    from ..config.settings import settings
+    from ..core.datatypes import MinerInfo
+    from ..metagraph.metagraph_datum import STATUS_ACTIVE
+    from ..formulas.trust_score import calculate_selection_probability
 except ImportError as e:
     raise ImportError(f"Error importing dependencies in selection.py: {e}")
 

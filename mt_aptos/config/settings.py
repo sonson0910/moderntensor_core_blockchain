@@ -2,7 +2,6 @@
 
 import logging
 import math
-import os
 from typing import Optional
 import coloredlogs
 import re
@@ -616,11 +615,20 @@ class Settings(BaseSettings):
     @field_validator("APTOS_NETWORK", mode="before")
     def validate_network(cls, value: Optional[str]):
         if value is None:
-            value = "testnet"
-        normalized = str(value).lower().strip()
+            return "https://testnet.aptoslabs.com/v1"
+        
+        value_str = str(value).strip()
+        
+        # If already full URL, keep it
+        if value_str.startswith("http://") or value_str.startswith("https://"):
+            return value_str
+        
+        # Otherwise convert network name to full URL
+        normalized = value_str.lower()
         if normalized == "mainnet":
-            return "mainnet"
-        return "testnet"
+            return "https://mainnet.aptoslabs.com/v1"
+        else:  # Default to testnet
+            return "https://testnet.aptoslabs.com/v1"
 
 
 # --- Tạo một instance để sử dụng trong toàn bộ ứng dụng ---

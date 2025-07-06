@@ -5,8 +5,15 @@ import time
 from typing import Annotated, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from mt_aptos.consensus.node import ValidatorNode
-from mt_aptos.network.app.dependencies import get_validator_node
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mt_aptos.consensus.validator_node_refactored import ValidatorNode
+else:
+    # Runtime import - avoid circular import
+    ValidatorNode = None
+
+from ....dependencies import get_validator_node
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -19,7 +26,7 @@ router = APIRouter()
     status_code=status.HTTP_200_OK,
 )
 async def get_validator_health(
-    node: Annotated[ValidatorNode, Depends(get_validator_node)],
+    node: Annotated["ValidatorNode", Depends(get_validator_node)],
 ) -> Dict[str, Any]:
     """
     Return health status of the validator node.
@@ -54,7 +61,7 @@ async def get_validator_health(
     status_code=status.HTTP_200_OK,
 )
 async def get_metagraph(
-    node: Annotated[ValidatorNode, Depends(get_validator_node)],
+    node: Annotated["ValidatorNode", Depends(get_validator_node)],
 ) -> Dict[str, Any]:
     """
     Return current metagraph data.
@@ -110,7 +117,7 @@ async def get_metagraph(
     status_code=status.HTTP_200_OK,
 )
 async def get_consensus_info(
-    node: Annotated[ValidatorNode, Depends(get_validator_node)],
+    node: Annotated["ValidatorNode", Depends(get_validator_node)],
 ) -> Dict[str, Any]:
     """
     Return current consensus information.
@@ -145,7 +152,7 @@ async def get_consensus_info(
     status_code=status.HTTP_200_OK,
 )
 async def get_consensus_results(
-    node: Annotated[ValidatorNode, Depends(get_validator_node)],
+    node: Annotated["ValidatorNode", Depends(get_validator_node)],
 ) -> Dict[str, Any]:
     """
     Return recent consensus results.

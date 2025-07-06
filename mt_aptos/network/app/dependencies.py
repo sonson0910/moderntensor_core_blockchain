@@ -3,29 +3,29 @@
 Định nghĩa các dependency providers cho ứng dụng FastAPI.
 """
 from fastapi import HTTPException, status
-from typing import Optional
-from mt_aptos.consensus.node import ValidatorNode
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mt_aptos.consensus.validator_node_refactored import ValidatorNode
+else:
+    # Runtime import - avoid circular import
+    ValidatorNode = None
 
 # Biến global để giữ instance của ValidatorNode
 # Trong ứng dụng lớn, nên dùng container quản lý dependency chuyên dụng hơn (vd: dependency-injector)
-_validator_node_instance: Optional[ValidatorNode] = None
+_validator_node_instance: Optional["ValidatorNode"] = None
 
 
-def set_validator_node_instance(node: ValidatorNode):
+def set_validator_node_instance(node: "ValidatorNode"):
     """
     Hàm để thiết lập instance ValidatorNode toàn cục (sẽ được gọi khi khởi tạo app).
     """
     global _validator_node_instance
-    if ValidatorNode is None:
-        print("Error: ValidatorNode class not imported correctly. Cannot set instance.")
-        return
-    if not isinstance(node, ValidatorNode):
-        raise TypeError("Provided instance is not a valid ValidatorNode.")
     _validator_node_instance = node
     print("ValidatorNode instance has been set for API dependencies.")
 
 
-async def get_validator_node() -> ValidatorNode:
+async def get_validator_node() -> "ValidatorNode":
     """
     Dependency function cho FastAPI để lấy instance ValidatorNode.
     """

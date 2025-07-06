@@ -6,7 +6,7 @@ Chứa hàm cơ sở cần được kế thừa và triển khai bởi các vali
 import logging
 from typing import List, Dict, Any, Optional, Union, cast, TYPE_CHECKING
 from collections import defaultdict
-from mt_aptos.metagraph.metagraph_datum import STATUS_ACTIVE, STATUS_INACTIVE
+from ..metagraph.metagraph_datum import STATUS_ACTIVE, STATUS_INACTIVE
 import binascii
 import asyncio
 import httpx
@@ -71,9 +71,8 @@ def canonical_json_serialize(data: Any) -> str:
 # --- END INSERT ---
 
 if TYPE_CHECKING:
-    # Đảm bảo import đúng đường dẫn tương đối hoặc tuyệt đối
-    # from ..consensus.node import ValidatorNode # Incorrect relative path likely
-    from mt_aptos.consensus.node import ValidatorNode  # Use absolute path
+    # Import ValidatorNode only for type checking to avoid circular import
+    from .validator_node_refactored import ValidatorNode
     from ..core.datatypes import (
         ValidatorScore,
         ValidatorInfo,
