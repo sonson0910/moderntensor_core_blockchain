@@ -7,12 +7,12 @@ import os
 from typing import Dict, Any, Optional, List
 import time
 
-from mt_aptos.async_client import RestClient
-from mt_aptos.account import Account
-from mt_aptos.transactions import EntryFunction, TransactionArgument, TransactionPayload
+from ..async_client import RestClient
+from ..account import Account
+from ..transactions import EntryFunction, TransactionArgument, TransactionPayload
 
-from mt_aptos.config.settings import settings
-from mt_aptos.core.datatypes import MinerInfo, ValidatorInfo
+from ..config.settings import settings
+from ..core.datatypes import MinerInfo, ValidatorInfo
 
 logger = logging.getLogger(__name__)
 
@@ -321,7 +321,7 @@ async def get_all_miners(
             try:
                 # Check if this address is registered as a miner
                 is_miner_response = await client.view(
-                    f"{contract_address}::full_moderntensor::is_miner",
+                    f"{contract_address}::moderntensor::is_miner",
                     [],
                     [miner_address]
                 )
@@ -335,7 +335,7 @@ async def get_all_miners(
                 if is_miner_data and len(is_miner_data) > 0 and is_miner_data[0]:
                     # Get miner info
                     miner_info_response = await client.view(
-                        f"{contract_address}::full_moderntensor::get_miner_info",
+                        f"{contract_address}::moderntensor::get_miner_info",
                         [],
                         [miner_address]
                     )
@@ -430,7 +430,7 @@ async def get_all_validators(
             try:
                 # Check if this address is registered as a validator
                 is_validator_response = await client.view(
-                    f"{contract_address}::full_moderntensor::is_validator",
+                    f"{contract_address}::moderntensor::is_validator",
                     [],
                     [validator_address]
                 )
@@ -444,7 +444,7 @@ async def get_all_validators(
                 if is_validator_data and len(is_validator_data) > 0 and is_validator_data[0]:
                     # Get validator info
                     validator_info_response = await client.view(
-                        f"{contract_address}::full_moderntensor::get_validator_info",
+                        f"{contract_address}::moderntensor::get_validator_info",
                         [],
                         [validator_address]
                     )

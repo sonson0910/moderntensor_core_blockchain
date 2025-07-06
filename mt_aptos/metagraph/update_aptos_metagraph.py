@@ -5,12 +5,11 @@ import logging
 from typing import Dict, Any, Optional, List
 import time
 
-from mt_aptos.async_client import RestClient
-from mt_aptos.account import Account
-from mt_aptos.transactions import EntryFunction, TransactionArgument, TransactionPayload
+from aptos_sdk.account import Account
+from aptos_sdk.async_client import RestClient, EntryFunction, TransactionArgument, TransactionPayload
 
 from .metagraph_datum import MinerData, ValidatorData, to_move_resource
-from mt_aptos.config.settings import settings
+from ..config.settings import settings
 
 logger = logging.getLogger(__name__)
 

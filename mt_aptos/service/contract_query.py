@@ -13,7 +13,9 @@ class ModernTensorQueryService:
     
     def __init__(self, client: RestClient, contract_address: str):
         self.client = client
-        self.contract_address = contract_address.replace("0x", "") if contract_address.startswith("0x") else contract_address
+        # Ensure contract address has proper format (remove and re-add 0x to normalize)
+        clean_address = contract_address.replace("0x", "") if contract_address.startswith("0x") else contract_address
+        self.contract_address = f"0x{clean_address}"
     
     async def get_validator_info(self, validator_address: str) -> Optional[Dict[str, Any]]:
         """
@@ -32,7 +34,7 @@ class ModernTensorQueryService:
             
             # Call view function
             result = await self.client.view_function(
-                f"0x{self.contract_address}::full_moderntensor",
+                f"{self.contract_address}::moderntensor",
                 "get_validator_info",
                 [],
                 [validator_address]
@@ -80,7 +82,7 @@ class ModernTensorQueryService:
             
             # Call view function
             result = await self.client.view_function(
-                f"0x{self.contract_address}::full_moderntensor",
+                f"{self.contract_address}::moderntensor",
                 "get_miner_info",
                 [],
                 [miner_address]
@@ -118,7 +120,7 @@ class ModernTensorQueryService:
                 address = f"0x{address}"
             
             result = await self.client.view_function(
-                f"0x{self.contract_address}::full_moderntensor",
+                f"{self.contract_address}::moderntensor",
                 "is_validator",
                 [],
                 [address]
@@ -137,7 +139,7 @@ class ModernTensorQueryService:
                 address = f"0x{address}"
             
             result = await self.client.view_function(
-                f"0x{self.contract_address}::full_moderntensor",
+                f"{self.contract_address}::moderntensor",
                 "is_miner",
                 [],
                 [address]
@@ -156,7 +158,7 @@ class ModernTensorQueryService:
                 address = f"0x{address}"
             
             result = await self.client.view_function(
-                f"0x{self.contract_address}::full_moderntensor",
+                f"{self.contract_address}::moderntensor",
                 "get_validator_weight",
                 [],
                 [address]
@@ -175,7 +177,7 @@ class ModernTensorQueryService:
                 address = f"0x{address}"
             
             result = await self.client.view_function(
-                f"0x{self.contract_address}::full_moderntensor",
+                f"{self.contract_address}::moderntensor",
                 "get_miner_weight",
                 [],
                 [address]

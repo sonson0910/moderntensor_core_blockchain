@@ -6,7 +6,7 @@ import httpx
 from typing import Dict, Any
 from .circuit_breaker import CircuitBreaker
 from .rate_limiter import RateLimiter
-from mt_aptos.config.settings import settings
+from ..config.settings import settings
 
 app = FastAPI(title="Validator Node Health Check")
 

@@ -5,11 +5,11 @@ Client để tương tác với các contract ModernTensor trên Aptos
 from typing import Dict, Any, List, Optional, Union, cast
 import time
 import logging
-from mt_aptos.account import Account
-from mt_aptos.client import RestClient
-from mt_aptos.transactions import EntryFunction, TransactionArgument, TransactionPayload
-from mt_aptos.type_tag import TypeTag, StructTag
-from mt_aptos.bcs import Serializer
+from ..account import Account
+from ..client import RestClient
+from ..transactions import EntryFunction, TransactionArgument, TransactionPayload
+from ..type_tag import TypeTag, StructTag
+from ..bcs import Serializer
 
 from .datatypes import MinerInfo, ValidatorInfo, SubnetInfo, STATUS_ACTIVE
 
@@ -77,7 +77,7 @@ class ModernTensorClient:
         wallet_addr_hash = hashlib.sha256(self.account.address().hex().encode()).hexdigest()[:32]
         
         payload = EntryFunction.natural(
-            f"{self.moderntensor_address}::moderntensor_hybrid",
+            f"{self.moderntensor_address}::moderntensor",
             "register_miner",
             [],  # Type args
             [
@@ -132,7 +132,7 @@ class ModernTensorClient:
         wallet_addr_hash = hashlib.sha256(self.account.address().hex().encode()).hexdigest()[:32]
         
         payload = EntryFunction.natural(
-            f"{self.moderntensor_address}::moderntensor_hybrid",
+            f"{self.moderntensor_address}::moderntensor",
             "register_validator",
             [],  # Type args
             [
@@ -179,7 +179,7 @@ class ModernTensorClient:
         logger.info(f"Updating scores for miner {miner_address}")
         
         payload = EntryFunction.natural(
-            f"{self.moderntensor_address}::moderntensor_hybrid",
+            f"{self.moderntensor_address}::moderntensor",
             "update_miner_performance",
             [],  # Type args
             [
@@ -240,7 +240,7 @@ class ModernTensorClient:
         
         # Note: create_subnet function is not available in the deployed contract
         # This would need to be implemented separately or the contract would need to be updated
-        raise NotImplementedError("create_subnet function is not available in the deployed moderntensor_hybrid contract")
+        raise NotImplementedError("create_subnet function is not available in the deployed moderntensor contract")
         
         txn_hash = await self.client.submit_transaction(
             self.account,
@@ -270,7 +270,7 @@ class ModernTensorClient:
             # Get full miner info using the deployed contract's view function
             result = await self.client.view_function(
                 self.moderntensor_address,
-                "moderntensor_hybrid",
+                "moderntensor",
                 "get_miner_info",
                 [miner_address],
             )
@@ -287,7 +287,7 @@ class ModernTensorClient:
             # Lấy thông tin resource miner từ deployed contract
             resource = await self.client.account_resource(
                 miner_address,
-                f"{self.moderntensor_address}::moderntensor_hybrid::MinerInfo",
+                f"{self.moderntensor_address}::moderntensor::MinerInfo",
             )
             
             data = resource["data"]

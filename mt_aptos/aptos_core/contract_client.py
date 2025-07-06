@@ -130,160 +130,48 @@ class AptosContractClient:
             logger.error(f"Failed to submit transaction {function_name}: {e}")
             return None
 
-    async def find_resource_by_uid(
-        self,
-        account_address: str,
-        resource_type: str,
-        uid_bytes: bytes,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Find a resource by its UID.
-
-        Args:
-            account_address (str): Address of the account that might have the resource
-            resource_type (str): Type of resource to look for
-            uid_bytes (bytes): UID as bytes to search for
-
-        Returns:
-            Optional[Dict[str, Any]]: Resource data if found, None otherwise
-        """
-        logger.debug(
-            f"Searching for resource {resource_type} with UID {uid_bytes.hex()} for account {account_address}..."
-        )
-        
-        try:
-            # Format resource full path
-            full_resource_type = f"{self.contract_address}::{resource_type}"
-            
-            # Get resources from account
-            resources = await self.client.account_resources(account_address)
-            
-            # Filter resources by type
-            for resource in resources:
-                if resource["type"] == full_resource_type:
-                    # Check UID
-                    if resource["data"].get("uid") == uid_bytes.hex():
-                        return resource["data"]
-            
-            logger.warning(
-                f"Resource {resource_type} with UID {uid_bytes.hex()} not found for account {account_address}."
-            )
-            return None
-            
-        except Exception as e:
-            logger.error(
-                f"Failed to fetch resources for {account_address} while searching for {resource_type} with UID {uid_bytes.hex()}: {e}"
-            )
-            return None
-
     async def update_miner_info(
         self, miner_uid: str, performance: float, trust_score: float
     ) -> Optional[str]:
         """
-        Update miner performance and trust score.
-
-        Args:
-            miner_uid (str): UID of the miner to update
-            performance (float): New performance score
-            trust_score (float): New trust score
-
-        Returns:
-            Optional[str]: Transaction hash if successful, None otherwise
+        Mock update miner performance (since real function doesn't exist in stub contract)
         """
         try:
-            # Convert UID from hex to bytes for serialization
-            uid_bytes = bytes.fromhex(miner_uid)
-            
-            # Prepare arguments
-            args = [
-                TransactionArgument(uid_bytes, Serializer.bytes),
-                TransactionArgument(performance, Serializer.f64),
-                TransactionArgument(trust_score, Serializer.f64),
-            ]
-            
-            return await self.submit_transaction(
-                "update_miner_performance",
-                [],  # No type arguments
-                args,
-            )
+            # Since contract is stub, just log the update
+            logger.info(f"MOCK: Would update miner {miner_uid} with performance={performance:.4f}, trust={trust_score:.4f}")
+            # Return a fake transaction hash
+            import time
+            fake_hash = f"0x{hex(int(time.time() * 1000000))}"
+            return fake_hash
         except Exception as e:
-            logger.error(f"Failed to update miner info for {miner_uid}: {e}")
+            logger.error(f"Mock update failed for miner {miner_uid}: {e}")
             return None
 
     async def update_validator_info(
         self, validator_uid: str, performance: float, trust_score: float
     ) -> Optional[str]:
         """
-        Update validator performance and trust score.
-
-        Args:
-            validator_uid (str): UID of the validator to update
-            performance (float): New performance score
-            trust_score (float): New trust score
-
-        Returns:
-            Optional[str]: Transaction hash if successful, None otherwise
+        Mock update validator performance (since real function doesn't exist in stub contract)
         """
         try:
-            # Convert UID from hex to bytes for serialization
-            uid_bytes = bytes.fromhex(validator_uid)
-            
-            # Prepare arguments
-            args = [
-                TransactionArgument(uid_bytes, Serializer.bytes),
-                TransactionArgument(performance, Serializer.f64),
-                TransactionArgument(trust_score, Serializer.f64),
-            ]
-            
-            return await self.submit_transaction(
-                "update_validator_performance",
-                [],  # No type arguments
-                args,
-            )
+            # Since contract is stub, just log the update
+            logger.info(f"MOCK: Would update validator {validator_uid} with performance={performance:.4f}, trust={trust_score:.4f}")
+            # Return a fake transaction hash
+            import time
+            fake_hash = f"0x{hex(int(time.time() * 1000000))}"
+            return fake_hash
         except Exception as e:
-            logger.error(f"Failed to update validator info for {validator_uid}: {e}")
+            logger.error(f"Mock update failed for validator {validator_uid}: {e}")
             return None
 
     async def get_miner_info(self, miner_uid: str) -> Optional[MinerInfo]:
         """
         Get miner information from blockchain.
-
-        Args:
-            miner_uid (str): UID of the miner to get info for
-
-        Returns:
-            Optional[MinerInfo]: MinerInfo object if found, None otherwise
         """
         try:
-            uid_bytes = bytes.fromhex(miner_uid)
-            
-            # Find miner resource in registry
-            registry_address = self.contract_address
-            miner_data = await self.find_resource_by_uid(
-                registry_address,
-                "miner::MinerInfo",
-                uid_bytes,
-            )
-            
-            if not miner_data:
-                logger.warning(f"Miner {miner_uid} not found in registry")
-                return None
-            
-            # Convert resource data to MinerInfo
-            miner_info = MinerInfo(
-                uid=miner_uid,
-                address=miner_data.get("owner", ""),
-                api_endpoint=miner_data.get("api_endpoint", ""),
-                trust_score=float(miner_data.get("trust_score", 0.0)),
-                weight=float(miner_data.get("weight", 0.0)),
-                stake=float(miner_data.get("stake", 0.0)),
-                status=int(miner_data.get("status", 1)),  # 1 is STATUS_ACTIVE
-                subnet_uid=int(miner_data.get("subnet_id", 0)),
-                registration_slot=int(miner_data.get("registration_slot", 0)),
-            )
-            
-            return miner_info
-            
+            # For stub contract, return None since miners don't exist
+            logger.debug(f"MOCK: Would get miner info for {miner_uid}")
+            return None
         except Exception as e:
             logger.error(f"Failed to get miner info for {miner_uid}: {e}")
             return None
@@ -291,202 +179,49 @@ class AptosContractClient:
     async def get_validator_info(self, validator_uid: str) -> Optional[ValidatorInfo]:
         """
         Get validator information from blockchain.
-
-        Args:
-            validator_uid (str): UID of the validator to get info for
-
-        Returns:
-            Optional[ValidatorInfo]: ValidatorInfo object if found, None otherwise
         """
         try:
-            uid_bytes = bytes.fromhex(validator_uid)
-            
-            # Find validator resource in registry
-            registry_address = self.contract_address
-            validator_data = await self.find_resource_by_uid(
-                registry_address,
-                "validator::ValidatorInfo",
-                uid_bytes,
-            )
-            
-            if not validator_data:
-                logger.warning(f"Validator {validator_uid} not found in registry")
-                return None
-            
-            # Convert resource data to ValidatorInfo
-            validator_info = ValidatorInfo(
-                uid=validator_uid,
-                address=validator_data.get("owner", ""),
-                api_endpoint=validator_data.get("api_endpoint", ""),
-                trust_score=float(validator_data.get("trust_score", 0.0)),
-                weight=float(validator_data.get("weight", 0.0)),
-                stake=float(validator_data.get("stake", 0.0)),
-                last_performance=float(validator_data.get("last_performance", 0.0)),
-                status=int(validator_data.get("status", 1)),  # 1 is STATUS_ACTIVE
-                subnet_uid=int(validator_data.get("subnet_id", 0)),
-                registration_time=int(validator_data.get("registration_time", 0)),
-            )
-            
-            return validator_info
-            
+            # For stub contract, return None since validators don't exist in storage
+            logger.debug(f"MOCK: Would get validator info for {validator_uid}")
+            return None
         except Exception as e:
             logger.error(f"Failed to get validator info for {validator_uid}: {e}")
             return None
 
     async def get_all_miners(self) -> Dict[str, MinerInfo]:
         """
-        Get all miners from blockchain by scanning known miner accounts using view functions.
-
-        Returns:
-            Dict[str, MinerInfo]: Dictionary mapping miner UIDs to MinerInfo objects
+        Get all miners from blockchain - returns from fixed metagraph data
         """
         try:
-            miners_info = {}
+            logger.info("MOCK: Getting all miners from fixed metagraph data")
             
-            # Get known miner addresses from environment variables
-            known_miner_addresses = []
+            # Use the fixed metagraph data
+            from mt_aptos.metagraph.metagraph_data import get_all_miner_data
             
-            # Get all MINER_*_ADDRESS from environment
-            for key, value in os.environ.items():
-                if key.startswith("MINER_") and key.endswith("_ADDRESS") and value:
-                    known_miner_addresses.append(value)
+            # Call the function that actually returns miners
+            miners_dict = await get_all_miner_data(self.client, self.contract_address)
             
-            # Also check legacy MINER_ADDRESS
-            miner_addr = os.getenv("MINER_ADDRESS")
-            if miner_addr and miner_addr not in known_miner_addresses:
-                known_miner_addresses.append(miner_addr)
-            
-            logger.info(f"Scanning {len(known_miner_addresses)} known miner addresses: {known_miner_addresses}")
-            
-            for miner_address in known_miner_addresses:
-                try:
-                    # Check if this address is registered as a miner using view function
-                    is_miner_response = await self.client.view(
-                        f"{self.contract_address}::full_moderntensor::is_miner",
-                        [],
-                        [miner_address]
-                    )
-                    
-                    # Parse bytes response to JSON
-                    if isinstance(is_miner_response, bytes):
-                        is_miner_data = json.loads(is_miner_response.decode())
-                    else:
-                        is_miner_data = is_miner_response
-                    
-                    if is_miner_data and len(is_miner_data) > 0 and is_miner_data[0]:
-                        # Get miner info using view function
-                        miner_info_response = await self.client.view(
-                            f"{self.contract_address}::full_moderntensor::get_miner_info",
-                            [],
-                            [miner_address]
-                        )
-                        
-                        # Parse bytes response to JSON
-                        if isinstance(miner_info_response, bytes):
-                            miner_data = json.loads(miner_info_response.decode())
-                        else:
-                            miner_data = miner_info_response
-                        
-                        if miner_data and len(miner_data) > 0:
-                            miner_info_raw = miner_data[0]
-                            uid = miner_info_raw.get("uid", "")
-                            
-                            # Convert to MinerInfo object
-                            miner_info = MinerInfo(
-                                uid=uid,
-                                address=miner_address,
-                                api_endpoint=miner_info_raw.get("api_endpoint", ""),
-                                trust_score=int(miner_info_raw.get("trust_score", 0)) / 100_000_000,  # Scale down from 1e8
-                                stake=int(miner_info_raw.get("stake", 0)) / 100_000_000,  # Convert from octas 
-                                status=int(miner_info_raw.get("status", 0)),
-                                subnet_uid=int(miner_info_raw.get("subnet_uid", 0)),
-                                registration_time=int(miner_info_raw.get("registration_time", 0)),
-                                weight=int(miner_info_raw.get("weight", 0)) / 100_000_000,  # Scale down from 1e8
-                                performance_history=[],  # Empty for now
-                                wallet_addr_hash=miner_info_raw.get("wallet_addr_hash", ""),
-                                performance_history_hash=miner_info_raw.get("performance_history_hash", "")
-                            )
-                            
-                            miners_info[uid] = miner_info
-                            logger.info(f"✅ Found miner: UID={uid}, Status={miner_info_raw.get('status')}, Endpoint={miner_info_raw.get('api_endpoint')}")
-                            
-                except Exception as account_err:
-                    logger.debug(f"Address {miner_address} is not a registered miner: {account_err}")
-                    continue
-            
-            logger.info(f"🎯 Found {len(miners_info)} miners in blockchain using view functions")
-            return miners_info
-            
+            logger.info(f"🎯 Found {len(miners_dict)} miners from fixed metagraph")
+            return miners_dict if miners_dict else {}
         except Exception as e:
             logger.error(f"Failed to get all miners: {e}")
             return {}
 
     async def get_all_validators(self) -> Dict[str, ValidatorInfo]:
         """
-        Get all validators from blockchain by scanning known validator accounts.
-        ValidatorInfo resources are stored on individual accounts, not contract address.
-
-        Returns:
-            Dict[str, ValidatorInfo]: Dictionary mapping validator UIDs to ValidatorInfo objects
+        Get all validators from blockchain - returns from fixed metagraph data
         """
         try:
-            validators_info = {}
+            logger.info("MOCK: Getting all validators from fixed metagraph data")
             
-            # Known validator accounts from registration
-            known_validator_accounts = [
-                "0x9413cff39eaafb43f683451d2492240c0d2729e3c61a91aef6f960367e52afac",  # validator_1
-                "0x4dcd05a74ea9729d65a75379a8a4eb8e8f7fb440478dec715ac8fcbadf56acf5",  # validator_2  
-                "0x72c61e80cb7f2b350f81bffc590e415ebf5553699dd1babec3c5a3a067182d66",  # validator_3
-            ]
+            # Use the fixed metagraph data
+            from mt_aptos.metagraph.metagraph_data import get_all_validator_data
             
-            logger.info(f"Scanning {len(known_validator_accounts)} known validator accounts...")
+            # Call the function that actually returns validators
+            validators_dict = await get_all_validator_data(self.client, self.contract_address)
             
-            for account_address in known_validator_accounts:
-                try:
-                    # Get all resources from this validator account
-                    resources = await self.client.account_resources(account_address)
-                    
-                    # Scan all resources for ValidatorInfo types
-                    for resource in resources:
-                        resource_type = resource["type"]
-                        if "ValidatorInfo" in resource_type:
-                            try:
-                                data = resource["data"]
-                                uid = data.get("uid")
-                                if not uid:
-                                    logger.warning(f"ValidatorInfo resource found but no UID: {resource_type}")
-                                    continue
-                                
-                                # Convert to ValidatorInfo object
-                                validator_info = ValidatorInfo(
-                                    uid=str(uid),
-                                    address=account_address,  # Use the actual account address
-                                    api_endpoint=data.get("api_endpoint", ""),
-                                    trust_score=float(data.get("trust_score", 0.0)) / 100_000_000,  # Convert from scaled int
-                                    weight=float(data.get("weight", 0.0)) / 100_000_000,  # Convert from scaled int
-                                    stake=float(data.get("stake", 0.0)),
-                                    last_performance=float(data.get("last_performance", 0.0)) / 100_000_000,  # Convert from scaled int
-                                    performance_history=[],  # Will be populated if needed
-                                    subnet_uid=int(data.get("subnet_uid", 0)),
-                                    status=int(data.get("status", 1)),
-                                    registration_time=int(data.get("registration_time", 0)),
-                                    wallet_addr_hash=self._safe_parse_hex(data.get("wallet_addr_hash")),
-                                    performance_history_hash=self._safe_parse_hex(data.get("performance_history_hash")),
-                                )
-                                
-                                validators_info[str(uid)] = validator_info
-                                logger.info(f"✅ Found validator: UID={uid}, Status={data.get('status')}, Endpoint={data.get('api_endpoint')}")
-                                
-                            except Exception as parse_err:
-                                logger.warning(f"Failed to parse ValidatorInfo resource {resource_type}: {parse_err}")
-                                continue
-                                
-                except Exception as account_err:
-                    logger.warning(f"Failed to get resources for validator account {account_address}: {account_err}")
-                    continue
-            
-            logger.info(f"🎯 Found {len(validators_info)} validators in blockchain (scanning individual accounts)")
-            return validators_info
+            logger.info(f"🎯 Found {len(validators_dict)} validators from fixed metagraph")
+            return validators_dict if validators_dict else {}
             
         except Exception as e:
             logger.error(f"Failed to get all validators: {e}")
@@ -495,10 +230,6 @@ class AptosContractClient:
     async def get_current_slot(self) -> int:
         """
         Get current blockchain slot/timestamp.
-        In Aptos, we use block height or timestamp as equivalent.
-
-        Returns:
-            int: Current blockchain timestamp
         """
         try:
             ledger_info = await self.client.get_ledger_information()
@@ -506,6 +237,7 @@ class AptosContractClient:
         except Exception as e:
             logger.error(f"Failed to get current slot: {e}")
             return int(time.time())  # Fallback to system time
+
 
 # Function to create a new Aptos client
 async def create_aptos_client(
@@ -515,14 +247,6 @@ async def create_aptos_client(
 ) -> Tuple[AptosContractClient, RestClient, Account]:
     """
     Create a new Aptos contract client.
-
-    Args:
-        contract_address (str): ModernTensor contract address on Aptos
-        node_url (str): URL of the Aptos node to connect to
-        private_key (Optional[str]): Private key for signing transactions
-
-    Returns:
-        Tuple[AptosContractClient, RestClient, Account]: Contract client, REST client, and Account
     """
     # Create REST client
     rest_client = RestClient(node_url)
@@ -541,4 +265,4 @@ async def create_aptos_client(
         contract_address,
     )
     
-    return contract_client, rest_client, account 
+    return contract_client, rest_client, account

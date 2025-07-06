@@ -7,16 +7,16 @@ This module provides various service functions to interact with Aptos blockchain
 """
 
 from typing import Optional, Dict, Any, List
-from mt_aptos.account import Account
-from mt_aptos.async_client import RestClient
-from mt_aptos.transactions import (
+from ..account import Account
+from ..async_client import RestClient
+from ..transactions import (
     EntryFunction,
     TransactionArgument,
     TransactionPayload,
     SignedTransaction
 )
 
-from mt_aptos.config.settings import settings, logger
+from ..config.settings import settings, logger
 
 
 # Staking Service Functions

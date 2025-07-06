@@ -4,7 +4,7 @@
 """
 # Remove pycardano imports
 from typing import List, Dict, Any, Tuple, Optional
-from mt_aptos.metagraph.metagraph_datum import STATUS_ACTIVE
+from ..metagraph.metagraph_datum import STATUS_ACTIVE
 from dataclasses import dataclass, field
 import time  # Thêm import time
 

@@ -11,30 +11,25 @@ from typing import List, Dict, Any, Tuple, Optional, Set, Union
 import numpy as np  # Cần cài đặt numpy: pip install numpy
 from collections import defaultdict
 
-from mt_aptos.config.settings import settings
-from mt_aptos.core.datatypes import MinerInfo, ValidatorInfo, ValidatorScore, TaskAssignment
-from mt_aptos.formulas import (
-    calculate_adjusted_miner_performance,
-    calculate_validator_performance,
-    update_trust_score,
-    calculate_fraud_severity_value,  # Cần logic cụ thể
-    calculate_slash_amount,
-    calculate_miner_incentive,
-    calculate_validator_incentive,
-    # Import các công thức khác nếu cần
-)
+from ..config.settings import settings
+from ..core.datatypes import MinerInfo, ValidatorInfo, ValidatorScore, TaskAssignment
+from ..formulas.performance import calculate_adjusted_miner_performance, calculate_validator_performance
+from ..formulas.trust_score import update_trust_score
+from ..formulas.penalty import calculate_fraud_severity_value, calculate_slash_amount
+from ..formulas.incentive import calculate_miner_incentive, calculate_validator_incentive
 
-from mt_aptos.metagraph.metagraph_data import get_all_validator_data
-from mt_aptos.metagraph.hash.hash_datum import hash_data  # Cần hàm hash
+from ..metagraph.metagraph_data import get_all_validator_data
+from ..metagraph.hash.hash_datum import hash_data
 
-# Thay thế các import từ pycardano bằng Aptos SDK
-from mt_aptos.client import RestClient
-from mt_aptos.account import Account
-from mt_aptos.transactions import EntryFunction, TransactionArgument, TransactionPayload
-from mt_aptos.type_tag import TypeTag, StructTag
-from mt_aptos.bcs import Serializer
+# Aptos SDK imports
+from aptos_sdk.account import Account
+from aptos_sdk.async_client import RestClient, EntryFunction, TransactionArgument, TransactionPayload, TypeTag, StructTag
+try:
+    from aptos_sdk.bcs import Serializer
+except ImportError:
+    from aptos_sdk.async_client import Serializer
 
-from mt_aptos.metagraph.metagraph_datum import (
+from ..metagraph.metagraph_datum import (
     MinerData,
     ValidatorData,
     STATUS_ACTIVE,

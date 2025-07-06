@@ -13,12 +13,12 @@ import httpx
 import json
 import nacl.signing
 from nacl.exceptions import CryptoError
-# Replace pycardano imports with Aptos SDK
-from mt_aptos.account import Account
+# Aptos SDK imports
+from aptos_sdk.account import Account
 
-# Giả định các kiểu dữ liệu này đã được import hoặc định nghĩa đúng
+# Core datatypes
 try:
-    from mt_aptos.core.datatypes import (
+    from ..core.datatypes import (
         MinerResult,
         TaskAssignment,
         ValidatorScore,

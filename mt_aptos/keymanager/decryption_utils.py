@@ -4,12 +4,12 @@ import os
 import json
 import binascii
 from cryptography.fernet import Fernet, InvalidToken
-from mt_aptos.account import Account
+from ..account import Account
 from rich.console import Console
 from typing import cast, Tuple, Optional
 
-from mt_aptos.keymanager.encryption_utils import get_or_create_salt, generate_encryption_key
-from mt_aptos.config.settings import settings, logger
+from .encryption_utils import get_or_create_salt, generate_encryption_key
+from ..config.settings import settings, logger
 
 
 def decode_hotkey_account(

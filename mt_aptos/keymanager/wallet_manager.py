@@ -5,9 +5,9 @@ import json
 from rich.console import Console
 from typing import Optional
 
-from mt_aptos.config.settings import settings, logger
-from mt_aptos.keymanager.coldkey_manager import ColdKeyManager
-from mt_aptos.keymanager.hotkey_manager import HotKeyManager
+from ..config.settings import settings, logger
+from .coldkey_manager import ColdKeyManager
+from .hotkey_manager import HotKeyManager
 
 
 class WalletManager:
@@ -37,7 +37,6 @@ class WalletManager:
         self.hk_manager = HotKeyManager(
             coldkeys_dict=self.ck_manager.coldkeys,
             base_dir=self.base_dir,
-            network=self.network,
         )
 
     def create_coldkey(self, name: str, password: str):

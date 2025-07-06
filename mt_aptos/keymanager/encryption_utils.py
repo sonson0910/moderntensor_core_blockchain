@@ -9,7 +9,7 @@ from cryptography.fernet import Fernet
 from rich.console import Console
 from typing import cast, Optional
 
-from mt_aptos.config.settings import settings, logger
+from ..config.settings import settings, logger
 
 
 def get_or_create_salt(coldkey_dir: str) -> bytes:

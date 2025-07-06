@@ -7,12 +7,12 @@ from bip_utils import (
     Bip39Languages,
 )
 from cryptography.fernet import InvalidToken
-from mt_aptos.account import Account
+from ..account import Account
 from rich.console import Console
 from typing import cast, Optional
 
-from mt_aptos.keymanager.encryption_utils import get_cipher_suite
-from mt_aptos.config.settings import settings, logger
+from .encryption_utils import get_cipher_suite
+from ..config.settings import settings, logger
 
 
 class ColdKeyManager:

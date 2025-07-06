@@ -81,7 +81,7 @@ class Settings(BaseSettings):
         alias="APTOS_FAUCET_URL"
     )
     APTOS_CONTRACT_ADDRESS: str = Field(
-        default="0x9413cff39eaafb43f683451d2492240c0d2729e3c61a91aef6f960367e52afac", 
+        default="0xdbcbf08e0720fc7ed4c8318c0e2cbbde1cc77ba33f06d5c08b7533c4240ca7cf", 
         alias="APTOS_CONTRACT_ADDRESS"
     )
     APTOS_NETWORK: str = Field(

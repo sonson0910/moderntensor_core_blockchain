@@ -5,15 +5,15 @@ This module provides functions to interact with Move contracts on Aptos.
 """
 
 from typing import Dict, Any, List, Optional
-from mt_aptos.account import Account
-from mt_aptos.async_client import RestClient
-from mt_aptos.transactions import (
+from ..account import Account
+from ..async_client import RestClient
+from ..transactions import (
     EntryFunction,
     TransactionArgument,
     TransactionPayload
 )
 
-from mt_aptos.config.settings import settings, logger
+from ..config.settings import settings, logger
 
 
 async def execute_entry_function(

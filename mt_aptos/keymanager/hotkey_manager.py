@@ -3,12 +3,12 @@
 import os
 import json
 from cryptography.fernet import Fernet
-from mt_aptos.account import Account
+from ..account import Account
 from rich.console import Console
 from typing import cast, Dict, Optional
 import binascii
 
-from mt_aptos.config.settings import settings, logger
+from ..config.settings import settings, logger
 
 
 class HotKeyManager:

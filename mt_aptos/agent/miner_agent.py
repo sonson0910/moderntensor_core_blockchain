@@ -209,10 +209,9 @@ class MinerAgent:
             logger.debug(f"{uid_prefix} Fetching miner data from blockchain...")
             
             # Call view function để lấy miner data
-            result = await self.client.view_function(
-                self.contract_address,
-                "moderntensor",
-                "get_miner",
+            result = await self.client.view(
+                f"{self.contract_address}::moderntensor::get_miner_info",
+                [],
                 [self.miner_uid_hex]
             )
             

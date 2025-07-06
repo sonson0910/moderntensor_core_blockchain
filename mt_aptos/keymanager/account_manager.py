@@ -11,9 +11,9 @@ from typing import Tuple, Dict, Any, Optional, List, Union
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from mt_aptos.account import Account, AccountAddress
-from mt_aptos.account import ed25519
-from mt_aptos.bcs import Serializer
+from ..account import Account, AccountAddress
+from ..account import ed25519
+from ..bcs import Serializer
 
 
 class AccountKeyManager:
