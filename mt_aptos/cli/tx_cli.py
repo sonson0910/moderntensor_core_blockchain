@@ -8,11 +8,12 @@ import asyncio
 from rich.console import Console
 from rich.table import Table
 
-from mt_aptos.account import Account
-from mt_aptos.async_client import RestClient
+from moderntensor.mt_aptos.account import Account
+from moderntensor.mt_aptos.async_client import RestClient
 
-from mt_aptos.config.settings import settings, logger
-from mt_aptos.aptos import (
+from moderntensor.mt_aptos.config.settings import settings, logger
+from moderntensor.mt_aptos.keymanager.wallet_utils import WalletUtils
+from moderntensor.mt_aptos.aptos import (
     send_coin, 
     send_token, 
     submit_transaction,
@@ -32,13 +33,45 @@ def tx_cli():
     pass
 
 
-# Helper function to load account from disk
+# Helper function to load account from disk or HD wallet
 def _load_account(account_name: str, password: str, base_dir: str) -> Optional[Account]:
     console = Console()
+    
+    # Check if account_name is in HD wallet format (wallet.coldkey or wallet.coldkey.hotkey)
+    if '.' in account_name:
+        parts = account_name.split('.')
+        if len(parts) == 2:
+            # Format: wallet.coldkey
+            wallet_name, coldkey_name = parts
+            hotkey_name = None
+        elif len(parts) == 3:
+            # Format: wallet.coldkey.hotkey
+            wallet_name, coldkey_name, hotkey_name = parts
+        else:
+            console.print(f"[bold red]Error:[/bold red] Invalid account format. Use 'wallet.coldkey' or 'wallet.coldkey.hotkey'")
+            return None
+        
+        # Load from HD wallet
+        try:
+            wallet_utils = WalletUtils()
+            account = wallet_utils.quick_load_account(wallet_name, coldkey_name, hotkey_name, password)
+            if account:
+                address = str(account.address())
+                if not address.startswith("0x"):
+                    address = f"0x{address}"
+                console.print(f"✅ HD Wallet account loaded: [blue]{address}[/blue]")
+            return account
+        except Exception as e:
+            console.print(f"[bold red]Error loading HD wallet account:[/bold red] {e}")
+            logger.exception(f"Error loading HD wallet account {account_name}")
+            return None
+    
+    # Traditional JSON account file loading
     try:
         account_path = os.path.join(base_dir, f"{account_name}.json")
         if not os.path.exists(account_path):
             console.print(f"[bold red]Error:[/bold red] Account file {account_path} not found")
+            console.print(f"[bold yellow]Tip:[/bold yellow] Use HD wallet format: 'wallet.coldkey' or 'wallet.coldkey.hotkey'")
             return None
             
         # In a real implementation, you would decrypt the account file with the password
@@ -48,10 +81,10 @@ def _load_account(account_name: str, password: str, base_dir: str) -> Optional[A
             # This is simplified - in a real implementation, you'd need to decrypt private keys
             private_key_bytes = bytes.fromhex(account_data["private_key"])
             account = Account.load(private_key_bytes)
-            console.print(f"✅ Account loaded: [blue]{account.address().hex()}[/blue]")
+            console.print(f"✅ Traditional account loaded: [blue]{str(account.address())}[/blue]")
             return account
     except Exception as e:
-        console.print(f"[bold red]Error loading account:[/bold red] {e}")
+        console.print(f"[bold red]Error loading traditional account:[/bold red] {e}")
         logger.exception(f"Error loading account {account_name}")
         return None
 
@@ -73,7 +106,7 @@ def _get_client(network: str) -> RestClient:
 # SEND TRANSACTION COMMAND
 # ------------------------------------------------------------------------------
 @tx_cli.command("send")
-@click.option("--account", required=True, help="Sender account name.")
+@click.option("--account", required=True, help="Sender account name (JSON file or HD wallet format: wallet.coldkey or wallet.coldkey.hotkey).")
 @click.option("--password", prompt=True, hide_input=True, help="Sender account password.")
 @click.option("--to", required=True, help="Recipient address.")
 @click.option("--amount", required=True, type=int, help="Amount to send in octas (1 APT = 10^8 octas).")
@@ -97,6 +130,17 @@ def _get_client(network: str) -> RestClient:
 def send_cmd(account, password, to, amount, token, network, base_dir, yes):
     """
     ➡️ Send APT or other tokens to an address.
+    
+    Examples:
+    \b
+    • Send APT using HD wallet:
+      mtcli tx-cli send --account wallet.coldkey --to 0x123... --amount 1000000
+    
+    • Send APT using hotkey:
+      mtcli tx-cli send --account wallet.coldkey.hotkey --to 0x123... --amount 1000000
+    
+    • Send using traditional account:
+      mtcli tx-cli send --account my_account --to 0x123... --amount 1000000
     """
     console = Console()
     account_obj = _load_account(account, password, base_dir)
@@ -111,7 +155,7 @@ def send_cmd(account, password, to, amount, token, network, base_dir, yes):
 
     # Display transaction info
     console.print(f"🚀 Preparing transaction...")
-    console.print(f"  Sender: [blue]{account_obj.address().hex()}[/blue]")
+    console.print(f"  Sender: [blue]{str(account_obj.address())}[/blue]")
     console.print(f"  Amount: [yellow]{amount:,}[/yellow] octas ({amount / 100_000_000:.8f} APT)")
     console.print(f"  To: [green]{to}[/green]")
     console.print(f"  Network: [yellow]{network.upper()}[/yellow]")
@@ -149,6 +193,7 @@ def send_cmd(account, password, to, amount, token, network, base_dir, yes):
         
         console.print(f":heavy_check_mark: [bold green]Transaction submitted![/bold green]")
         console.print(f"  Transaction hash: [bold blue]{tx_hash}[/bold blue]")
+        console.print(f"  Explorer: [blue]https://explorer.aptoslabs.com/txn/{tx_hash}?network={network}[/blue]")
         
     except Exception as e:
         console.print(f"[bold red]Error sending transaction:[/bold red] {e}")

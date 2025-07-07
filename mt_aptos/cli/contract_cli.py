@@ -7,7 +7,7 @@ Quản lý smart contracts: compile, test, deploy
 import click
 import json
 from pathlib import Path
-from mt_aptos.smartcontract.contract_manager import (
+from moderntensor.mt_aptos.smartcontract.contract_manager import (
     get_default_contract_manager, 
     get_sdk_contract_info,
     compile_sdk_contracts

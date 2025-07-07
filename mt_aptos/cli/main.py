@@ -10,11 +10,12 @@ from rich.panel import Panel
 from rich.text import Text
 from rich import box
 
-from mt_aptos.cli.wallet_cli import aptosctl as wallet_cli
-from mt_aptos.cli.query_cli import query_cli
-from mt_aptos.cli.tx_cli import tx_cli
-from mt_aptos.cli.metagraph_cli import metagraph_cli
-from mt_aptos.cli.stake_cli import stake_cli
+from .wallet_cli import aptosctl as wallet_cli
+from .query_cli import query_cli
+from .tx_cli import tx_cli
+from .metagraph_cli import metagraph_cli
+from .stake_cli import stake_cli
+from .hd_wallet_cli import hdwallet
 
 # from .metagraph_cli import metagraph_cli  # If you have
 
@@ -54,6 +55,7 @@ aptosctl.add_command(query_cli)
 aptosctl.add_command(tx_cli)
 aptosctl.add_command(metagraph_cli)
 aptosctl.add_command(stake_cli)
+aptosctl.add_command(hdwallet)
 
 @aptosctl.command()
 def version():

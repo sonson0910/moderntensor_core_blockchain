@@ -14,14 +14,14 @@ from rich.table import Table
 import asyncio
 from typing import Dict, Any
 
-from mt_aptos.account import Account, AccountAddress
-from mt_aptos.bcs import Serializer
-from mt_aptos.transactions import EntryFunction, TransactionArgument
-from mt_aptos.client import RestClient
+from moderntensor.mt_aptos.account import Account, AccountAddress
+from moderntensor.mt_aptos.bcs import Serializer
+from moderntensor.mt_aptos.transactions import EntryFunction, TransactionArgument
+from moderntensor.mt_aptos.client import RestClient
 
-from mt_aptos.keymanager.wallet_manager import WalletManager
-from mt_aptos.keymanager.decryption_utils import decode_hotkey_skey
-from mt_aptos.config.settings import settings, logger
+from moderntensor.mt_aptos.keymanager.wallet_manager import WalletManager
+from moderntensor.mt_aptos.keymanager.decryption_utils import decode_hotkey_skey
+from moderntensor.mt_aptos.config.settings import settings, logger
 
 # Network selection parameters
 NETWORK_CHOICES = ["mainnet", "testnet", "devnet", "local"]

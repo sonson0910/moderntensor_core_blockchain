@@ -19,8 +19,8 @@ import asyncio
 import time
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass, asdict
 from enum import Enum
 import logging
 
@@ -31,6 +31,31 @@ EPOCH_START = 1751827027  # 1 hour before current time - slots will start from 0
 EXPECTED_VALIDATORS = ['validator_1', 'validator_2', 'validator_3']
 MAJORITY_THRESHOLD = 2  # Need 2 out of 3 validators
 CONSENSUS_CHECK_INTERVAL = 5  # Check every 5 seconds
+
+
+class CustomJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles non-serializable objects"""
+    
+    def default(self, obj):
+        # Handle ValidatorScore objects (both dataclass and Pydantic versions)
+        if hasattr(obj, '__dict__'):
+            # For dataclass objects
+            if hasattr(obj, '__dataclass_fields__'):
+                return asdict(obj)
+            # For Pydantic BaseModel objects
+            elif hasattr(obj, 'dict'):
+                return obj.dict()
+            # For other objects with __dict__
+            else:
+                return obj.__dict__
+        # Handle other non-serializable objects
+        elif hasattr(obj, 'to_dict'):
+            return obj.to_dict()
+        elif hasattr(obj, '_asdict'):
+            return obj._asdict()
+        # For any other case, convert to string
+        else:
+            return str(obj)
 
 
 class SlotPhase(Enum):
@@ -158,6 +183,7 @@ class SlotCoordinator:
         """
         phase_file = self.coordination_dir / f"slot_{slot}_{phase.value}_{self.validator_uid}.json"
         
+        # Prepare phase data
         phase_data = {
             'validator_uid': self.validator_uid,
             'slot': slot,
@@ -167,13 +193,112 @@ class SlotCoordinator:
         }
         
         try:
-            with open(phase_file, 'w') as f:
-                json.dump(phase_data, f, indent=2)
+            # Pre-validate the data by attempting to serialize it
+            test_json = json.dumps(phase_data, cls=CustomJSONEncoder, indent=2)
+            
+            # Write to a temporary file first, then rename (atomic operation)
+            temp_file = phase_file.with_suffix('.tmp')
+            
+            with open(temp_file, 'w') as f:
+                f.write(test_json)
+                f.flush()  # Ensure data is written to disk
+                
+            # Atomic rename to final filename
+            temp_file.rename(phase_file)
+            
             logger.info(f"✅ [V:{self.validator_uid}] Registered entry to {phase.value} phase of slot {slot}")
+            
         except Exception as e:
             logger.error(f"❌ [V:{self.validator_uid}] Failed to register phase entry: {e}")
-            raise
+            
+            # Clean up temp file if it exists
+            temp_file = phase_file.with_suffix('.tmp')
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
+                    
+            # If the error is related to serialization, try a simplified version
+            try:
+                # Create a simplified version without problematic objects
+                simplified_data = {
+                    'validator_uid': str(self.validator_uid),
+                    'slot': int(slot),
+                    'phase': str(phase.value),
+                    'timestamp': float(time.time()),
+                    'extra_data': self._simplify_extra_data(extra_data)
+                }
+                
+                with open(phase_file, 'w') as f:
+                    json.dump(simplified_data, f, indent=2)
+                    f.flush()
+                    
+                logger.warning(f"⚠️ [V:{self.validator_uid}] Used simplified data for phase entry due to serialization issues")
+                
+            except Exception as e2:
+                logger.error(f"❌ [V:{self.validator_uid}] Failed even with simplified data: {e2}")
+                raise
     
+    def _simplify_extra_data(self, extra_data: Dict) -> Dict:
+        """
+        Simplify extra_data to make it JSON serializable
+        
+        Args:
+            extra_data: Original extra data that might contain complex objects
+            
+        Returns:
+            Simplified data that can be JSON serialized
+        """
+        if not extra_data:
+            return {}
+            
+        simplified = {}
+        
+        for key, value in extra_data.items():
+            try:
+                if value is None:
+                    simplified[key] = None
+                elif isinstance(value, (str, int, float, bool)):
+                    simplified[key] = value
+                elif isinstance(value, (list, tuple)):
+                    # Simplify list/tuple items
+                    simplified_list = []
+                    for item in value:
+                        if hasattr(item, '__dict__'):
+                            # Convert objects to dict representation
+                            if hasattr(item, 'dict'):  # Pydantic
+                                simplified_list.append(item.dict())
+                            elif hasattr(item, '__dataclass_fields__'):  # dataclass
+                                simplified_list.append(asdict(item))
+                            else:
+                                simplified_list.append(str(item))
+                        elif isinstance(item, dict):
+                            simplified_list.append(self._simplify_extra_data(item))
+                        else:
+                            simplified_list.append(str(item))
+                    simplified[key] = simplified_list
+                elif isinstance(value, dict):
+                    # Recursively simplify nested dicts
+                    simplified[key] = self._simplify_extra_data(value)
+                elif hasattr(value, '__dict__'):
+                    # Convert objects to dict representation
+                    if hasattr(value, 'dict'):  # Pydantic
+                        simplified[key] = value.dict()
+                    elif hasattr(value, '__dataclass_fields__'):  # dataclass
+                        simplified[key] = asdict(value)
+                    else:
+                        simplified[key] = str(value)
+                else:
+                    # Fallback: convert to string
+                    simplified[key] = str(value)
+                    
+            except Exception as e:
+                logger.debug(f"Error simplifying key {key}: {e}")
+                simplified[key] = f"<error_serializing_{type(value).__name__}>"
+                
+        return simplified
+
     async def wait_for_phase_consensus(self, slot: int, phase: SlotPhase, timeout: int = 120) -> List[str]:
         """
         Wait for majority of validators to enter the same phase

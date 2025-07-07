@@ -8,7 +8,7 @@ import json
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from mt_aptos.config.settings import settings, logger
+from moderntensor.mt_aptos.config.settings import settings, logger
 
 
 class ContractManager:

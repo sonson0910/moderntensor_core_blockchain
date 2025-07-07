@@ -9,11 +9,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from mt_aptos.account import Account
-from mt_aptos.async_client import RestClient
+from moderntensor.mt_aptos.account import Account
+from moderntensor.mt_aptos.async_client import RestClient
 
-from mt_aptos.config.settings import settings, logger
-from mt_aptos.aptos import (
+from moderntensor.mt_aptos.config.settings import settings, logger
+from moderntensor.mt_aptos.aptos import (
     update_miner,
     update_validator,
     register_miner,

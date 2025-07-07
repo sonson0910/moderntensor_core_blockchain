@@ -9,93 +9,77 @@ from pathlib import Path
 project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
 
-from mt_aptos.keymanager.account_manager import AccountManager
-from mt_aptos.keymanager.encryption_utils import get_or_create_salt, generate_encryption_key
+# Import CLI modules (HD wallet is the main one now)
+from .wallet_cli import wallet
+from .contract_cli import contract
+from .hd_wallet_cli import hdwallet
 
 @click.group()
 def cli():
-    """Aptos Control Tool (aptosctl) - A command line interface for managing Aptos accounts and operations."""
+    """Aptos Control Tool (aptosctl) - ModernTensor CLI using HD wallet system."""
     pass
 
 @cli.group()
-def wallet():
-    """Wallet management commands."""
+def migration():
+    """Migration tools for moving from old keymanager to HD wallet."""
     pass
 
-@wallet.command()
-@click.option('--name', required=True, help='Name of the coldkey')
-@click.option('--base-dir', default='moderntensor', help='Base directory for storing keys')
-def create_coldkey(name, base_dir):
-    """Create a new coldkey."""
+@migration.command()
+@click.option('--base-dir', default='wallets', help='Base directory for storing HD wallets')
+def wizard(base_dir):
+    """Run interactive migration wizard to migrate from old keymanager."""
     try:
-        manager = AccountManager(base_dir)
-        manager.create_coldkey(name)
-        click.echo(f"Successfully created coldkey: {name}")
+        # Import migration helper
+        from moderntensor.mt_aptos.keymanager.migration_helper import MigrationHelper
+        
+        migration_helper = MigrationHelper(base_dir)
+        migration_helper.interactive_migration_wizard()
     except Exception as e:
-        click.echo(f"Error creating coldkey: {str(e)}", err=True)
+        click.echo(f"Error running migration wizard: {str(e)}", err=True)
 
-@wallet.command()
-@click.option('--coldkey', required=True, help='Name of the coldkey')
-@click.option('--hotkey-name', required=True, help='Name for the new hotkey')
-@click.option('--base-dir', default='moderntensor', help='Base directory for storing keys')
-def generate_hotkey(coldkey, hotkey_name, base_dir):
-    """Generate a new hotkey for a coldkey."""
-    try:
-        manager = AccountManager(base_dir)
-        manager.generate_hotkey(coldkey, hotkey_name)
-        click.echo(f"Successfully generated hotkey {hotkey_name} for coldkey {coldkey}")
-    except Exception as e:
-        click.echo(f"Error generating hotkey: {str(e)}", err=True)
+@migration.command()
+def guide():
+    """Show migration guide for upgrading to HD wallet system."""
+    guide_text = """
+🔄 ModernTensor HD Wallet Migration Guide
+========================================
 
-@wallet.command()
-@click.option('--name', required=True, help='Name of the coldkey')
-@click.option('--base-dir', default='moderntensor', help='Base directory for storing keys')
-def info(name, base_dir):
-    """Display information about a coldkey."""
-    try:
-        manager = AccountManager(base_dir)
-        info = manager.get_coldkey_info(name)
-        click.echo(f"Coldkey Information for {name}:")
-        click.echo(f"Address: {info['address']}")
-        click.echo(f"Public Key: {info['public_key']}")
-    except Exception as e:
-        click.echo(f"Error getting coldkey info: {str(e)}", err=True)
+The old keymanager system has been replaced with a new HD wallet system.
+Here's how to migrate:
 
-@cli.group()
-def validator():
-    """Validator management commands."""
-    pass
+1. CREATE HD WALLET:
+   mtcli hdwallet create --name my_wallet
 
-@validator.command()
-@click.option('--name', required=True, help='Name of the validator')
-@click.option('--coldkey', required=True, help='Name of the coldkey to use')
-@click.option('--base-dir', default='moderntensor', help='Base directory for storing keys')
-def register(name, coldkey, base_dir):
-    """Register a new validator."""
-    try:
-        manager = AccountManager(base_dir)
-        manager.register_validator(name, coldkey)
-        click.echo(f"Successfully registered validator: {name}")
-    except Exception as e:
-        click.echo(f"Error registering validator: {str(e)}", err=True)
+2. CREATE COLDKEY:
+   mtcli hdwallet create-coldkey --wallet my_wallet --name my_coldkey
 
-@cli.group()
-def subnet():
-    """Subnet management commands."""
-    pass
+3. CREATE HOTKEYS:
+   mtcli hdwallet create-hotkey --wallet my_wallet --coldkey my_coldkey --name validator_hotkey
+   mtcli hdwallet create-hotkey --wallet my_wallet --coldkey my_coldkey --name miner_hotkey
 
-@subnet.command()
-@click.option('--name', required=True, help='Name of the subnet')
-@click.option('--validator', required=True, help='Name of the validator to use')
-@click.option('--base-dir', default='moderntensor', help='Base directory for storing keys')
-def create(name, validator, base_dir):
-    """Create a new subnet."""
-    try:
-        manager = AccountManager(base_dir)
-        manager.create_subnet(name, validator)
-        click.echo(f"Successfully created subnet: {name}")
-    except Exception as e:
-        click.echo(f"Error creating subnet: {str(e)}", err=True)
+4. UPDATE YOUR SCRIPTS:
+   OLD: account = Account.load_key(private_key)
+   NEW: 
+   from moderntensor.mt_aptos.keymanager.wallet_utils import WalletUtils
+   utils = WalletUtils()
+   account = utils.quick_load_account("my_wallet", "my_coldkey", "validator_hotkey")
+
+5. RUN MIGRATION WIZARD:
+   mtcli migration wizard
+
+📖 For more details, see the HD wallet documentation.
+"""
+    click.echo(guide_text)
+
+# Add HD wallet commands to the main CLI
+cli.add_command(hdwallet)
+
+# Add contract and old wallet CLI (for backwards compatibility)
+cli.add_command(contract)
+cli.add_command(wallet)
+
+# Add migration tools
+cli.add_command(migration)
 
 if __name__ == '__main__':
     cli() 

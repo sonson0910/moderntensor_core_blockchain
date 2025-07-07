@@ -13,8 +13,11 @@ from ..transactions import (
     EntryFunction,
     TransactionArgument,
     TransactionPayload,
-    SignedTransaction
+    SignedTransaction,
+    RawTransaction
 )
+from aptos_sdk.bcs import Serializer
+from aptos_sdk.account_address import AccountAddress
 
 from ..config.settings import settings, logger
 
@@ -288,13 +291,13 @@ async def send_coin(
     amount: int,
 ) -> str:
     """
-    Sends Aptos Coin (APT) to the specified recipient.
+    Sends APT (Aptos coin) to a recipient address.
 
     Args:
         client (RestClient): The Aptos REST client
         sender (Account): The sender's account
         recipient_address (str): The recipient's address
-        amount (int): Amount of APT to send in smallest unit (octa, 1 APT = 10^8 octas)
+        amount (int): Amount of APT to send in octas (1 APT = 10^8 octas)
 
     Returns:
         str: The transaction hash of the submitted transaction
@@ -305,24 +308,35 @@ async def send_coin(
     # Format recipient address
     if not recipient_address.startswith("0x"):
         recipient_address = f"0x{recipient_address}"
+    
+    # Convert address string to bytes and create AccountAddress object
+    recipient_bytes = bytes.fromhex(recipient_address[2:])  # Remove 0x prefix
+    recipient_addr = AccountAddress(recipient_bytes)
 
-    # Create transaction payload for coin transfer
-    payload = TransactionPayload(
-        EntryFunction.natural(
-            "0x1::coin",
-            "transfer",
-            [TransactionArgument.type_tag("0x1::aptos_coin::AptosCoin")],
-            [
-                TransactionArgument(recipient_address, TransactionArgument.ADDRESS),
-                TransactionArgument(amount, TransactionArgument.U64),
-            ]
-        )
+    # Create the entry function payload exactly like in the guide
+    entry_function = EntryFunction.natural(
+        "0x1::aptos_account",  # Module address and name  
+        "transfer",            # Function name
+        [],                    # Type arguments (empty for this function)
+        [
+            # Function arguments - using AccountAddress object
+            TransactionArgument(recipient_addr, Serializer.struct),  # Recipient address as AccountAddress
+            TransactionArgument(amount, Serializer.u64),             # Amount to transfer
+        ],
     )
 
     try:
-        # Submit transaction
-        logger.info(f"Sending {amount} octas from {sender.address().hex()} to {recipient_address}")
-        txn_hash = await client.submit_transaction(sender, payload)
+        # Submit transaction using the simple approach
+        logger.info(f"Sending {amount} octas from {str(sender.address())} to {recipient_address}")
+        
+        # Create signed transaction
+        signed_transaction = await client.create_bcs_signed_transaction(
+            sender,                              # Account with the private key
+            TransactionPayload(entry_function),  # The payload from our transaction
+        )
+        
+        # Submit the signed transaction
+        txn_hash = await client.submit_bcs_transaction(signed_transaction)
         
         # Wait for transaction confirmation
         await client.wait_for_transaction(txn_hash)
@@ -364,24 +378,32 @@ async def send_token(
         recipient_address = f"0x{recipient_address}"
     if not token_address.startswith("0x"):
         token_address = f"0x{token_address}"
+    
+    # Convert string address to AccountAddress object
+    recipient_addr_obj = AccountAddress.from_hex(recipient_address)
 
     # Create transaction payload for token transfer
     payload = TransactionPayload(
         EntryFunction.natural(
             "0x1::coin",
             "transfer",
-            [TransactionArgument.type_tag(f"{token_address}::{token_name}::{token_name}")],
+            [f"{token_address}::{token_name}::{token_name}"],  # Type arguments as string list
             [
-                TransactionArgument(recipient_address, TransactionArgument.ADDRESS),
-                TransactionArgument(amount, TransactionArgument.U64),
+                TransactionArgument(recipient_addr_obj, Serializer.struct),
+                TransactionArgument(amount, Serializer.u64),
             ]
         )
     )
 
     try:
         # Submit transaction
-        logger.info(f"Sending {amount} tokens from {sender.address().hex()} to {recipient_address}")
-        txn_hash = await client.submit_transaction(sender, payload)
+        logger.info(f"Sending {amount} tokens from {str(sender.address())} to {recipient_address}")
+        
+        # Create BCS transaction
+        signed_transaction = await client.create_bcs_signed_transaction(sender, payload)
+        
+        # Submit the signed transaction
+        txn_hash = await client.submit_bcs_transaction(signed_transaction)
         
         # Wait for transaction confirmation
         await client.wait_for_transaction(txn_hash)
@@ -417,23 +439,36 @@ async def submit_transaction(
         Exception: If the transaction submission fails
     """
     try:
-        # Get account sequences
-        sender_account = await client.account(account.address())
-        sequence_number = int(sender_account["sequence_number"])
-        
-        # Get chain ID
-        chain_id = await client.chain_id()
-        
-        # Create the raw transaction
-        raw_transaction = await client.create_bcs_transaction(
-            account, 
-            payload,
-            max_gas_amount=max_gas_amount,
-            gas_unit_price=gas_unit_price
-        )
+        # Create BCS signed transaction with optional gas parameters
+        if max_gas_amount is not None or gas_unit_price is not None:
+            # Get account info for current sequence number
+            account_data = await client.account(account.address())
+            sequence_number = int(account_data["sequence_number"])
+            
+            # Get chain ID
+            chain_id = await client.chain_id()
+            
+            # Create raw transaction with custom gas parameters
+            import time
+            
+            raw_transaction = RawTransaction(
+                sender=account.address(),
+                sequence_number=sequence_number,
+                payload=payload,
+                max_gas_amount=max_gas_amount or 2000,
+                gas_unit_price=gas_unit_price or 100,
+                expiration_timestamps_secs=int(time.time()) + 600,
+                chain_id=chain_id,
+            )
+            
+            # Sign the raw transaction
+            signed_transaction = await client.create_bcs_signed_transaction(account, payload)
+        else:
+            # Use default gas parameters
+            signed_transaction = await client.create_bcs_signed_transaction(account, payload)
         
         # Submit the transaction
-        txn_hash = await client.submit_bcs_transaction(raw_transaction)
+        txn_hash = await client.submit_bcs_transaction(signed_transaction)
         
         # Wait for transaction confirmation
         await client.wait_for_transaction(txn_hash)
@@ -493,9 +528,23 @@ async def get_account_transactions(
         address = f"0x{address}"
     
     try:
-        # Get account transactions
-        txns = await client.account_transactions(address, limit=limit)
-        return txns
+        # Get account transactions using direct HTTP call
+        import aiohttp
+        
+        async with aiohttp.ClientSession() as session:
+            url = f"{client.base_url}/accounts/{address}/transactions"
+            params = {"limit": limit}
+            
+            async with session.get(url, params=params) as response:
+                if response.status == 200:
+                    txns = await response.json()
+                    return txns
+                elif response.status == 404:
+                    logger.warning(f"Account {address} not found or no transactions")
+                    return []
+                else:
+                    logger.error(f"Failed to get transactions for {address}: HTTP {response.status}")
+                    return []
     except Exception as e:
         logger.error(f"Failed to get transactions for account {address}: {e}")
         return [] 

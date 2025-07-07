@@ -14,11 +14,11 @@ from rich.table import Table
 from rich.panel import Panel
 
 # Remove pycardano imports
-from mt_aptos.async_client import RestClient
-from mt_aptos.account import AccountAddress
+from moderntensor.mt_aptos.async_client import RestClient
+from moderntensor.mt_aptos.account import AccountAddress
 
-from mt_aptos.config.settings import settings, logger
-from mt_aptos.aptos import ModernTensorClient
+from moderntensor.mt_aptos.config.settings import settings, logger
+from moderntensor.mt_aptos.aptos import ModernTensorClient
 
 
 @click.group()
@@ -59,100 +59,129 @@ def query_account_cmd(address, node_url, network):
     async def query_account():
         try:
             # Determine node URL - initialize first
-            node_url = None
             if not node_url:
                 if network == "mainnet":
-                    node_url = "https://fullnode.mainnet.aptoslabs.com/v1"
+                    node_url_final = "https://fullnode.mainnet.aptoslabs.com/v1"
                 elif network == "testnet":
-                    node_url = "https://fullnode.testnet.aptoslabs.com/v1"
+                    node_url_final = "https://fullnode.testnet.aptoslabs.com/v1"
                 elif network == "devnet":
-                    node_url = "https://fullnode.devnet.aptoslabs.com/v1"
+                    node_url_final = "https://fullnode.devnet.aptoslabs.com/v1"
                 else:  # local
-                    node_url = "http://localhost:8080/v1"
+                    node_url_final = "http://localhost:8080/v1"
+            else:
+                node_url_final = node_url
             
-            # Create client
-            client = RestClient(node_url)
+            # Create client and get account info via direct API call
+            import aiohttp
             
-            # Get account resources
-            resources = await client.account_resources(address)
-            
-            # Get APT balance from CoinStore resource or FungibleAsset
-            apt_balance = None
-            
-            # Method 1: Try old CoinStore first
-            for resource in resources:
-                if resource["type"] == "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>":
-                    apt_balance = int(resource["data"]["coin"]["value"]) / 100_000_000
-                    break
-            
-            # Method 2: If no CoinStore found, try FungibleAsset
-            if apt_balance is None:
+            async with aiohttp.ClientSession() as session:
+                # Use view function to get APT balance (FungibleAssets way)
+                view_payload = {
+                    "function": "0x1::coin::balance",
+                    "type_arguments": ["0x1::aptos_coin::AptosCoin"],
+                    "arguments": [address]
+                }
+                
+                apt_balance = "0"
+                apt_balance_formatted = "0.00000000"
+                
                 try:
-                    import aiohttp
+                    async with session.post(f"{node_url_final}/view", json=view_payload) as view_response:
+                        if view_response.status == 200:
+                            balance_result = await view_response.json()
+                            if balance_result and len(balance_result) > 0:
+                                apt_balance = str(balance_result[0])
+                                apt_balance_formatted = f"{int(apt_balance) / 100000000:.8f}"
+                                console.print(f"[green]✅ Found APT balance via view function: {apt_balance} octas[/green]")
+                            else:
+                                console.print(f"[yellow]No APT balance found via view function[/yellow]")
+                        else:
+                            console.print(f"[red]View function failed with status {view_response.status}[/red]")
+                except Exception as view_error:
+                    console.print(f"[red]View function error: {view_error}[/red]")
+                
+                # Get basic account information
+                account_info = {}
+                try:
+                    async with session.get(f"{node_url_final}/v1/accounts/{address}") as account_response:
+                        if account_response.status == 200:
+                            account_info = await account_response.json()
+                        elif account_response.status == 404:
+                            console.print(f"[yellow]Account info not available (404), but balance exists[/yellow]")
+                            # Don't return early - we can still show balance
+                        else:
+                            console.print(f"[yellow]Account info unavailable (status {account_response.status})[/yellow]")
+                except Exception as account_error:
+                    console.print(f"[yellow]Account info error: {account_error}[/yellow]")
+                
+                # Get account resources (for debugging and additional info)
+                resources_data = []
+                try:
+                    async with session.get(f"{node_url_final}/v1/accounts/{address}/resources") as resources_response:
+                        if resources_response.status == 200:
+                            resources_data = await resources_response.json()
+                            console.print(f"[yellow]Debug: Found {len(resources_data)} resources for account[/yellow]")
+                        else:
+                            console.print(f"[yellow]Resources unavailable (status {resources_response.status})[/yellow]")
+                except Exception as resources_error:
+                    console.print(f"[yellow]Resources error: {resources_error}[/yellow]")
+                
+                # Get transaction count
+                tx_count = "Unknown"
+                try:
+                    async with session.get(f"{node_url_final}/v1/accounts/{address}/transactions?limit=1") as tx_response:
+                        if tx_response.status == 200:
+                            tx_data = await tx_response.json()
+                            tx_count = len(tx_data) if tx_data else 0
+                except:
+                    pass
+                
+                # Display account information
+                auth_key = account_info.get("authentication_key", "Unknown")
+                sequence_number = account_info.get("sequence_number", "Unknown")
+                
+                console.print(Panel(
+                    f"[bold]Address:[/bold] [blue]{address}[/blue]\n"
+                    f"[bold]APT Balance:[/bold] [green]{apt_balance_formatted} APT[/green] ([yellow]{apt_balance} octas[/yellow])\n"
+                    f"[bold]Sequence Number:[/bold] {sequence_number}\n"
+                    f"[bold]Auth Key:[/bold] {auth_key}\n"
+                    f"[bold]Transactions:[/bold] {tx_count}\n"
+                    f"[bold]Resources:[/bold] {len(resources_data)} found\n",
+                    title="Account Information",
+                    expand=False
+                ))
+                
+                # Check if account is funded
+                if int(apt_balance) > 0:
+                    console.print("✅ [bold green]Account is funded and ready to use![/bold green]")
+                else:
+                    console.print("❌ [bold red]Account has no APT balance[/bold red]")
+                    console.print(f"[yellow]To fund this account on {network}, use:[/yellow]")
+                    if network == "testnet":
+                        console.print(f"[cyan]aptos account fund --account {address} --amount 100000000[/cyan]")
+                    elif network == "devnet":
+                        console.print(f"[cyan]aptos account fund --account {address} --amount 100000000 --url https://fullnode.devnet.aptoslabs.com/v1[/cyan]")
+                    else:
+                        console.print(f"[cyan]For mainnet, you need to transfer APT from an exchange or another account.[/cyan]")
+                
+                # Display resource types if available
+                if resources_data and len(resources_data) > 0:
+                    console.print("\n[bold]Resource Types Found:[/bold]")
+                    from rich.table import Table
+                    table = Table()
+                    table.add_column("Resource Type", style="cyan")
                     
-                    async with aiohttp.ClientSession() as session:
-                        # Get owned objects
-                        view_payload = {
-                            "function": "0x1::object::object_addresses_owned_by",
-                            "type_arguments": [],
-                            "arguments": [address]
-                        }
-                        
-                        view_url = f"{node_url}/view"
-                        async with session.post(view_url, json=view_payload) as response:
-                            if response.status == 200:
-                                result = await response.json()
-                                if result and result[0]:
-                                    owned_objects = result[0]
-                                    
-                                    # Check each object for APT FungibleStore
-                                    for obj_addr in owned_objects:
-                                        store_url = f"{node_url}/accounts/{obj_addr}/resource/0x1::fungible_asset::FungibleStore"
-                                        async with session.get(store_url) as store_response:
-                                            if store_response.status == 200:
-                                                store_data = await store_response.json()
-                                                balance = store_data.get("data", {}).get("balance", "0")
-                                                metadata = store_data.get("data", {}).get("metadata", {}).get("inner", "")
-                                                
-                                                # Check if this is APT (metadata = 0xa)
-                                                if metadata == "0x000000000000000000000000000000000000000000000000000000000000000a" or metadata == "0xa":
-                                                    apt_balance = int(balance) / 100_000_000
-                                                    break
-                except Exception as e:
-                    pass  # Continue with apt_balance = None
-            
-            # Display account information
-            console.print(Panel(
-                f"[bold]Address:[/bold] [blue]{address}[/blue]\n"
-                f"[bold]Network:[/bold] [green]{network}[/green]\n"
-                f"[bold]APT Balance:[/bold] {apt_balance or 'Not found'} APT\n"
-                f"[bold]Resources:[/bold] {len(resources)} resource types found",
-                title="Account Information",
-                expand=False
-            ))
-            
-            # Display resources in a table
-            if resources:
-                table = Table(title="Account Resources")
-                table.add_column("Resource Type", style="cyan")
-                table.add_column("Data", style="green")
-                
-                # Limit to first 15 resources to avoid huge output
-                for resource in resources[:15]:
-                    resource_type = resource["type"]
-                    # Simplify data display to avoid overwhelming output
-                    data_preview = str(resource["data"])[:100] + "..." if len(str(resource["data"])) > 100 else str(resource["data"])
-                    table.add_row(resource_type, data_preview)
-                
-                if len(resources) > 15:
-                    console.print(f"[yellow]Note: Showing only 15 of {len(resources)} resources.[/yellow]")
-
-                console.print(table)
+                    for resource in resources_data[:10]:  # Show first 10
+                        resource_type = resource.get("type", "Unknown")
+                        table.add_row(resource_type)
+                    
+                    console.print(table)
+                    
+                    if len(resources_data) > 10:
+                        console.print(f"[yellow]... and {len(resources_data) - 10} more resources[/yellow]")
 
         except Exception as e:
             console.print(f"❌ [bold red]Error:[/bold red] {e}")
-            if "account not found" in str(e).lower():
-                console.print("[yellow]Account may not exist or has not been initialized.[/yellow]")
             logger.exception(e)
     
     asyncio.run(query_account())
@@ -449,61 +478,67 @@ def query_network_cmd(node_url, network):
     async def query_network():
         try:
             # Determine node URL - initialize first
-            node_url = None
             if not node_url:
                 if network == "mainnet":
-                    node_url = "https://fullnode.mainnet.aptoslabs.com/v1"
+                    node_url_final = "https://fullnode.mainnet.aptoslabs.com/v1"
                 elif network == "testnet":
-                    node_url = "https://fullnode.testnet.aptoslabs.com/v1"
+                    node_url_final = "https://fullnode.testnet.aptoslabs.com/v1"
                 elif network == "devnet":
-                    node_url = "https://fullnode.devnet.aptoslabs.com/v1"
+                    node_url_final = "https://fullnode.devnet.aptoslabs.com/v1"
                 else:  # local
-                    node_url = "http://localhost:8080/v1"
-            
-            # Create client
-            client = RestClient(node_url)
-            
-            # Get ledger information
-            ledger_info = await client.ledger_information()
-            
-            # Get blockchain timestamp
-            chain_id = ledger_info.get("chain_id", "Unknown")
-            ledger_version = ledger_info.get("ledger_version", "Unknown")
-            ledger_timestamp = ledger_info.get("ledger_timestamp", "Unknown")
-            
-            # Format timestamp if available
-            if ledger_timestamp and ledger_timestamp.isdigit():
-                from datetime import datetime
-                timestamp_seconds = int(ledger_timestamp) / 1_000_000  # Convert from microseconds
-                formatted_time = datetime.fromtimestamp(timestamp_seconds).strftime('%Y-%m-%d %H:%M:%S')
+                    node_url_final = "http://localhost:8080/v1"
             else:
-                formatted_time = "Unknown"
+                node_url_final = node_url
             
-            # Display network information
-            console.print(Panel(
-                f"[bold]Network:[/bold] [green]{network}[/green]\n"
-                f"[bold]Chain ID:[/bold] {chain_id}\n"
-                f"[bold]Ledger Version:[/bold] {ledger_version}\n"
-                f"[bold]Node URL:[/bold] {node_url}\n"
-                f"[bold]Last Updated:[/bold] {formatted_time}\n",
-                title="Aptos Network Status",
-                expand=False
-            ))
+            # Create client and get ledger info via direct API call
+            import aiohttp
             
-            # Try to get some health metrics if available
-            try:
-                response = await client.client.get("/v1/health")
-                health_data = await response.json()
-                
-                if isinstance(health_data, dict):
-                    console.print(Panel(
-                        "\n".join([f"[bold]{k}:[/bold] {v}" for k, v in health_data.items()]),
-                        title="Node Health Metrics",
-                        expand=False
-                    ))
-            except:
-                # Health endpoint may not be available, so just ignore errors
-                pass
+            async with aiohttp.ClientSession() as session:
+                # Get ledger information
+                async with session.get(f"{node_url_final}/") as response:
+                    if response.status == 200:
+                        ledger_info = await response.json()
+                        
+                        chain_id = ledger_info.get("chain_id", "Unknown")
+                        ledger_version = ledger_info.get("ledger_version", "Unknown")
+                        ledger_timestamp = ledger_info.get("ledger_timestamp", "Unknown")
+                        node_role = ledger_info.get("node_role", "Unknown")
+                        
+                        # Format timestamp if available
+                        if ledger_timestamp and str(ledger_timestamp).isdigit():
+                            from datetime import datetime
+                            timestamp_seconds = int(ledger_timestamp) / 1_000_000  # Convert from microseconds
+                            formatted_time = datetime.fromtimestamp(timestamp_seconds).strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            formatted_time = "Unknown"
+                        
+                        # Display network information
+                        console.print(Panel(
+                            f"[bold]Network:[/bold] [green]{network}[/green]\n"
+                            f"[bold]Chain ID:[/bold] {chain_id}\n"
+                            f"[bold]Ledger Version:[/bold] {ledger_version}\n"
+                            f"[bold]Node Role:[/bold] {node_role}\n"
+                            f"[bold]Node URL:[/bold] {node_url_final}\n"
+                            f"[bold]Last Updated:[/bold] {formatted_time}\n",
+                            title="Aptos Network Status",
+                            expand=False
+                        ))
+                        
+                        # Try to get node health
+                        try:
+                            async with session.get(f"{node_url_final}/-/healthy") as health_response:
+                                if health_response.status == 200:
+                                    health_text = await health_response.text()
+                                    console.print(Panel(
+                                        f"[bold green]✅ Node Health: {health_text}[/bold green]",
+                                        title="Node Health",
+                                        expand=False
+                                    ))
+                        except:
+                            # Health endpoint may not be available
+                            pass
+                    else:
+                        console.print(f"❌ [bold red]Error:[/bold red] Failed to connect to {node_url_final} (Status: {response.status})")
 
         except Exception as e:
             console.print(f"❌ [bold red]Error:[/bold red] {e}")

@@ -1,5 +1,6 @@
 # File: sdk/agent/miner_agent.py
 # Logic cho Miner để tự động lấy kết quả đồng thuận và cập nhật trạng thái on-chain.
+# Updated to use HD wallet system instead of old keymanager
 
 import asyncio
 import logging
@@ -28,7 +29,9 @@ from mt_aptos.transactions import EntryFunction, TransactionArgument, Transactio
 
 # Import config và utilities
 from mt_aptos.config.settings import settings
-from mt_aptos.keymanager.decryption_utils import decode_hotkey_account
+
+# Import HD wallet utilities instead of old keymanager
+from moderntensor.mt_aptos.keymanager.wallet_utils import WalletUtils
 
 # Lấy logger đã cấu hình
 logger = logging.getLogger(__name__)
@@ -41,6 +44,8 @@ class MinerAgent:
     2. Tương tác với Aptos smart contract để cập nhật trạng thái.
     3. Tính toán trạng thái mới (trust, reward, performance...).
     4. Gửi giao dịch self-update lên Aptos để cập nhật dữ liệu.
+    
+    Updated to use HD wallet system for account management.
     """
 
     def __init__(
@@ -50,6 +55,11 @@ class MinerAgent:
         miner_account: Optional[Account] = None,  # Aptos Account object
         aptos_node_url: Optional[str] = None,
         contract_address: Optional[str] = None,
+        # HD wallet parameters
+        wallet_name: Optional[str] = None,
+        coldkey_name: Optional[str] = None,
+        hotkey_name: Optional[str] = None,
+        wallet_password: Optional[str] = None,
     ):
         """
         Khởi tạo Miner Agent cho Aptos.
@@ -57,9 +67,13 @@ class MinerAgent:
         Args:
             miner_uid_hex: UID hex của miner này (dạng string).
             config: Dictionary chứa các tham số cấu hình.
-            miner_account: Aptos Account object để ký giao dịch.
+            miner_account: Aptos Account object để ký giao dịch (optional if using HD wallet).
             aptos_node_url: URL của Aptos node.
             contract_address: Địa chỉ smart contract ModernTensor trên Aptos.
+            wallet_name: Name of HD wallet to use.
+            coldkey_name: Name of coldkey in HD wallet.
+            hotkey_name: Name of hotkey in HD wallet.
+            wallet_password: Password for HD wallet.
 
         Raises:
             ValueError: Nếu miner_uid_hex không hợp lệ.
@@ -78,8 +92,30 @@ class MinerAgent:
             ) from e
 
         self.config = config or {}
-        self.miner_account = miner_account
         uid_prefix = f"[Init:{self.miner_uid_hex[:8]}...]"
+
+        # --- Load miner account from HD wallet or use provided account ---
+        if miner_account:
+            self.miner_account = miner_account
+            logger.info(f"{uid_prefix} Using provided miner account: {self.miner_account.address()}")
+        elif wallet_name and coldkey_name and hotkey_name:
+            logger.debug(f"{uid_prefix} Loading miner account from HD wallet...")
+            try:
+                utils = WalletUtils()
+                self.miner_account = utils.quick_load_account(
+                    wallet_name, coldkey_name, hotkey_name, wallet_password
+                )
+                if self.miner_account:
+                    logger.info(f"{uid_prefix} Loaded miner account from HD wallet: {wallet_name}.{coldkey_name}.{hotkey_name}")
+                    logger.info(f"{uid_prefix} Miner account address: {self.miner_account.address()}")
+                else:
+                    raise RuntimeError("Failed to load miner account from HD wallet")
+            except Exception as e:
+                logger.exception(f"{uid_prefix} Failed to load miner account from HD wallet")
+                raise RuntimeError(f"Failed to load miner account from HD wallet: {e}") from e
+        else:
+            logger.warning(f"{uid_prefix} No miner account provided. Some operations may fail.")
+            self.miner_account = None
 
         # --- Khởi tạo Aptos Client và Config ---
         logger.debug(f"{uid_prefix} Initializing Aptos client...")
@@ -119,8 +155,46 @@ class MinerAgent:
         logger.info(f"{uid_prefix} MinerAgent initialized.")
         logger.info(f"{uid_prefix} Miner UID: {self.miner_uid_hex}")
         logger.info(f"{uid_prefix} Contract Address: {self.contract_address}")
-        if self.miner_account:
-            logger.info(f"{uid_prefix} Miner Account: {self.miner_account.address()}")
+
+    @classmethod
+    def from_hd_wallet(
+        cls,
+        miner_uid_hex: str,
+        wallet_name: str,
+        coldkey_name: str,
+        hotkey_name: str,
+        wallet_password: str,
+        config: Optional[Dict[str, Any]] = None,
+        aptos_node_url: Optional[str] = None,
+        contract_address: Optional[str] = None,
+    ):
+        """
+        Create MinerAgent using HD wallet credentials.
+        
+        Args:
+            miner_uid_hex: UID hex của miner này.
+            wallet_name: Name of HD wallet.
+            coldkey_name: Name of coldkey in HD wallet.
+            hotkey_name: Name of hotkey in HD wallet.
+            wallet_password: Password for HD wallet.
+            config: Dictionary chứa các tham số cấu hình.
+            aptos_node_url: URL của Aptos node.
+            contract_address: Địa chỉ smart contract ModernTensor trên Aptos.
+            
+        Returns:
+            MinerAgent instance.
+        """
+        return cls(
+            miner_uid_hex=miner_uid_hex,
+            config=config,
+            miner_account=None,
+            aptos_node_url=aptos_node_url,
+            contract_address=contract_address,
+            wallet_name=wallet_name,
+            coldkey_name=coldkey_name,
+            hotkey_name=hotkey_name,
+            wallet_password=wallet_password,
+        )
 
     def _load_local_history(self) -> List[float]:
         """Tải danh sách lịch sử hiệu suất từ file cục bộ."""
