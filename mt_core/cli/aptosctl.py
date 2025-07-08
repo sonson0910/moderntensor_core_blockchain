@@ -30,7 +30,7 @@ def wizard(base_dir):
     """Run interactive migration wizard to migrate from old keymanager."""
     try:
         # Import migration helper
-        from moderntensor.mt_aptos.keymanager.migration_helper import MigrationHelper
+        from moderntensor_aptos.mt_core.keymanager.migration_helper import MigrationHelper
         
         migration_helper = MigrationHelper(base_dir)
         migration_helper.interactive_migration_wizard()

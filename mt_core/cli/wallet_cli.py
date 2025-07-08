@@ -1,8 +1,8 @@
 # file: sdk/cli/wallet_cli.py
 """
-Command-line interface for Aptos wallet management.
+Command-line interface for Core blockchain wallet management.
 
-This module provides CLI commands to create, manage, and use Aptos wallets.
+This module provides CLI commands to create, manage, and use Core blockchain wallets.
 It allows users to generate new accounts, view addresses, and perform wallet-related tasks.
 """
 
@@ -14,42 +14,27 @@ from rich.table import Table
 import asyncio
 from typing import Dict, Any
 
-from moderntensor.mt_aptos.account import Account, AccountAddress
-from moderntensor.mt_aptos.bcs import Serializer
-from moderntensor.mt_aptos.transactions import EntryFunction, TransactionArgument
-from moderntensor.mt_aptos.client import RestClient
-
-from moderntensor.mt_aptos.keymanager.wallet_manager import WalletManager
-from moderntensor.mt_aptos.keymanager.decryption_utils import decode_hotkey_skey
-from moderntensor.mt_aptos.config.settings import settings, logger
+from moderntensor_aptos.mt_core.account import Account
+from moderntensor_aptos.mt_core.async_client import ModernTensorCoreClient
+from moderntensor_aptos.mt_core.keymanager.wallet_manager import WalletManager
+from moderntensor_aptos.mt_core.keymanager.decryption_utils import decode_hotkey_account
+from moderntensor_aptos.mt_core.config.settings import settings, logger
 
 # Network selection parameters
 NETWORK_CHOICES = ["mainnet", "testnet", "devnet", "local"]
-DEFAULT_NETWORK = settings.APTOS_NETWORK
-
-# from mt_aptos.utils.cardano_utils import get_current_slot # Replace with Aptos utility if needed
+DEFAULT_NETWORK = getattr(settings, "CORE_NETWORK", "testnet")
 
 
 @click.group()
-def aptosctl():
+def wallet_cli():
     """
-    🗳️ Aptos Control Tool - A command line interface for managing Aptos accounts and operations. 🗳️
-    """
-    pass
-
-
-@aptosctl.group()
-def wallet():
-    """
-    🏦 Wallet management commands.
+    🏦 Wallet management commands for Core blockchain.
     """
     pass
 
 
-@wallet.command("create")
-@click.option(
-    "--name", required=True, help="Name for the new wallet (coldkey)."
-)
+@wallet_cli.command("create")
+@click.option("--name", required=True, help="Name for the new wallet (coldkey).")
 @click.option(
     "--password",
     prompt=True,
@@ -60,8 +45,8 @@ def wallet():
 @click.option(
     "--network",
     type=click.Choice(NETWORK_CHOICES),
-    default=lambda: settings.APTOS_NETWORK,
-    help="Select Aptos network.",
+    default=DEFAULT_NETWORK,
+    help="Select Core blockchain network.",
 )
 @click.option(
     "--show-mnemonic",
@@ -71,7 +56,7 @@ def wallet():
 )
 @click.option(
     "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
+    default=lambda: getattr(settings, "HOTKEY_BASE_DIR", "./wallets"),
     show_default=True,
     help="Base directory to store coldkey.",
 )
@@ -88,16 +73,18 @@ def create_cmd(name, password, network, show_mnemonic, base_dir):
     try:
         wm = WalletManager(network=network, base_dir=base_dir)
         mnemonic = wm.create_coldkey(name, password)
-        
+
         if mnemonic:
             console.print(
                 f":white_check_mark: [bold green]Success![/bold green] Wallet created with name: [cyan]{name}[/cyan]"
             )
             console.print("📁 Wallet files stored in the following location:")
             console.print(f"  [dim]{os.path.join(base_dir, name)}[/dim]")
-            
+
             if show_mnemonic:
-                console.print("\n[bold yellow]⚠️ BACKUP THIS MNEMONIC PHRASE! ⚠️[/bold yellow]")
+                console.print(
+                    "\n[bold yellow]⚠️ BACKUP THIS MNEMONIC PHRASE! ⚠️[/bold yellow]"
+                )
                 console.print(
                     "[yellow]Store it safely offline. Anyone with this mnemonic can access your funds.[/yellow]"
                 )
@@ -118,7 +105,7 @@ def create_cmd(name, password, network, show_mnemonic, base_dir):
         logger.exception(e)
 
 
-@wallet.command("add-hotkey")
+@wallet_cli.command("add-hotkey")
 @click.option(
     "--coldkey",
     required=True,
@@ -138,12 +125,12 @@ def create_cmd(name, password, network, show_mnemonic, base_dir):
 @click.option(
     "--network",
     type=click.Choice(NETWORK_CHOICES),
-    default=lambda: settings.APTOS_NETWORK,
-    help="Select the Aptos network (testnet/mainnet).",
+    default=DEFAULT_NETWORK,
+    help="Select the Core blockchain network.",
 )
 @click.option(
     "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
+    default=lambda: getattr(settings, "HOTKEY_BASE_DIR", "./wallets"),
     show_default=True,
     help="Base directory where wallet files are stored.",
 )
@@ -160,7 +147,7 @@ def add_hotkey_cmd(coldkey, hotkey, password, network, base_dir):
     try:
         wm = WalletManager(network=network, base_dir=base_dir)
         wm.add_hotkey(coldkey, hotkey, password)
-        
+
         console.print(
             f":white_check_mark: [bold green]Success![/bold green] Hotkey '{hotkey}' added to coldkey '{coldkey}'"
         )
@@ -169,13 +156,13 @@ def add_hotkey_cmd(coldkey, hotkey, password, network, base_dir):
         logger.exception(e)
 
 
-@wallet.command("info")
+@wallet_cli.command("info")
 @click.option(
     "--name", required=True, help="Name of the wallet to display information for."
 )
 @click.option(
     "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
+    default=lambda: getattr(settings, "HOTKEY_BASE_DIR", "./wallets"),
     show_default=True,
     help="Base directory where wallet files are stored.",
 )
@@ -186,131 +173,23 @@ def info_cmd(name, base_dir):
     This command shows the address and other details for the specified wallet.
     """
     console = Console()
-    
+
     try:
         wm = WalletManager(base_dir=base_dir)
         info = wm.get_wallet_info(name)
-        
+
         table = Table(title=f"Wallet Information: {name}")
         table.add_column("Property", style="cyan")
         table.add_column("Value", style="green")
-        
+
         for key, value in info.items():
             table.add_row(key, str(value))
-        
+
         console.print(table)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         logger.exception(e)
 
 
-@aptosctl.group()
-def validator():
-    """
-    ⚡ Validator management commands.
-    """
-    pass
-
-
-@validator.command("register")
-@click.option(
-    "--name", required=True, help="Name for the new validator."
-)
-@click.option(
-    "--coldkey", required=True, help="Name of the coldkey to use."
-)
-@click.option(
-    "--password",
-    prompt=True,
-    hide_input=True,
-    help="Password for the coldkey.",
-)
-@click.option(
-    "--network",
-    type=click.Choice(NETWORK_CHOICES),
-    default=lambda: settings.APTOS_NETWORK,
-    help="Select Aptos network.",
-)
-@click.option(
-    "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
-    show_default=True,
-    help="Base directory where wallet files are stored.",
-)
-def register_validator_cmd(name, coldkey, password, network, base_dir):
-    """
-    ⚡ Register a new validator.
-
-    This command registers a new validator using the specified coldkey.
-    """
-    console = Console()
-    console.print("⏳ Registering validator...")
-
-    try:
-        wm = WalletManager(network=network, base_dir=base_dir)
-        wm.register_validator(name, coldkey, password)
-        
-        console.print(
-            f":white_check_mark: [bold green]Success![/bold green] Validator '{name}' registered successfully"
-        )
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-        logger.exception(e)
-
-
-@aptosctl.group()
-def subnet():
-    """
-    🌐 Subnet management commands.
-    """
-    pass
-
-
-@subnet.command("create")
-@click.option(
-    "--name", required=True, help="Name for the new subnet."
-)
-@click.option(
-    "--validator", required=True, help="Name of the validator to use."
-)
-@click.option(
-    "--password",
-    prompt=True,
-    hide_input=True,
-    help="Password for the validator's coldkey.",
-)
-@click.option(
-    "--network",
-    type=click.Choice(NETWORK_CHOICES),
-    default=lambda: settings.APTOS_NETWORK,
-    help="Select Aptos network.",
-)
-@click.option(
-    "--base-dir",
-    default=lambda: settings.HOTKEY_BASE_DIR,
-    show_default=True,
-    help="Base directory where wallet files are stored.",
-)
-def create_subnet_cmd(name, validator, password, network, base_dir):
-    """
-    🌐 Create a new subnet.
-
-    This command creates a new subnet using the specified validator.
-    """
-    console = Console()
-    console.print("⏳ Creating subnet...")
-
-    try:
-        wm = WalletManager(network=network, base_dir=base_dir)
-        wm.create_subnet(name, validator, password)
-        
-        console.print(
-            f":white_check_mark: [bold green]Success![/bold green] Subnet '{name}' created successfully"
-        )
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-        logger.exception(e)
-
-
-if __name__ == '__main__':
-    aptosctl()
+# Alias for backward compatibility
+wallet = wallet_cli

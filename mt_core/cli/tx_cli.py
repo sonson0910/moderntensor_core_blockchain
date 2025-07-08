@@ -8,18 +8,10 @@ import asyncio
 from rich.console import Console
 from rich.table import Table
 
-from moderntensor.mt_aptos.account import Account
-from moderntensor.mt_aptos.async_client import RestClient
-
-from moderntensor.mt_aptos.config.settings import settings, logger
-from moderntensor.mt_aptos.keymanager.wallet_utils import WalletUtils
-from moderntensor.mt_aptos.aptos import (
-    send_coin, 
-    send_token, 
-    submit_transaction,
-    get_transaction_details, 
-    get_account_transactions
-)
+from moderntensor_aptos.mt_core.account import Account
+from moderntensor_aptos.mt_core.async_client import ModernTensorCoreClient
+from moderntensor_aptos.mt_core.config.settings import settings, logger
+from moderntensor_aptos.mt_core.keymanager.wallet_manager import WalletManager
 
 
 # ------------------------------------------------------------------------------
@@ -28,7 +20,7 @@ from moderntensor.mt_aptos.aptos import (
 @click.group()
 def tx_cli():
     """
-    💸 Commands for creating and sending transactions on Aptos. 💸
+    💸 Commands for creating and sending transactions on Core blockchain. 💸
     """
     pass
 
@@ -36,52 +28,54 @@ def tx_cli():
 # Helper function to load account from disk or HD wallet
 def _load_account(account_name: str, password: str, base_dir: str) -> Optional[Account]:
     console = Console()
-    
-    # Check if account_name is in HD wallet format (wallet.coldkey or wallet.coldkey.hotkey)
-    if '.' in account_name:
-        parts = account_name.split('.')
+
+    # Check if account_name is in HD wallet format
+    if "." in account_name:
+        parts = account_name.split(".")
         if len(parts) == 2:
-            # Format: wallet.coldkey
             wallet_name, coldkey_name = parts
             hotkey_name = None
         elif len(parts) == 3:
-            # Format: wallet.coldkey.hotkey
             wallet_name, coldkey_name, hotkey_name = parts
         else:
-            console.print(f"[bold red]Error:[/bold red] Invalid account format. Use 'wallet.coldkey' or 'wallet.coldkey.hotkey'")
+            console.print(
+                f"[bold red]Error:[/bold red] Invalid account format. Use 'wallet.coldkey' or 'wallet.coldkey.hotkey'"
+            )
             return None
-        
+
         # Load from HD wallet
         try:
-            wallet_utils = WalletUtils()
-            account = wallet_utils.quick_load_account(wallet_name, coldkey_name, hotkey_name, password)
+            wm = WalletManager(base_dir=base_dir)
+            account = wm.load_account(wallet_name, coldkey_name, hotkey_name, password)
             if account:
-                address = str(account.address())
-                if not address.startswith("0x"):
-                    address = f"0x{address}"
-                console.print(f"✅ HD Wallet account loaded: [blue]{address}[/blue]")
+                console.print(
+                    f"✅ HD Wallet account loaded: [blue]{account.address}[/blue]"
+                )
             return account
         except Exception as e:
             console.print(f"[bold red]Error loading HD wallet account:[/bold red] {e}")
             logger.exception(f"Error loading HD wallet account {account_name}")
             return None
-    
+
     # Traditional JSON account file loading
     try:
         account_path = os.path.join(base_dir, f"{account_name}.json")
         if not os.path.exists(account_path):
-            console.print(f"[bold red]Error:[/bold red] Account file {account_path} not found")
-            console.print(f"[bold yellow]Tip:[/bold yellow] Use HD wallet format: 'wallet.coldkey' or 'wallet.coldkey.hotkey'")
+            console.print(
+                f"[bold red]Error:[/bold red] Account file {account_path} not found"
+            )
+            console.print(
+                f"[bold yellow]Tip:[/bold yellow] Use HD wallet format: 'wallet.coldkey' or 'wallet.coldkey.hotkey'"
+            )
             return None
-            
-        # In a real implementation, you would decrypt the account file with the password
-        # For now, we'll just load the account from disk
+
         with open(account_path, "r") as f:
             account_data = json.load(f)
-            # This is simplified - in a real implementation, you'd need to decrypt private keys
-            private_key_bytes = bytes.fromhex(account_data["private_key"])
-            account = Account.load(private_key_bytes)
-            console.print(f"✅ Traditional account loaded: [blue]{str(account.address())}[/blue]")
+            private_key_hex = account_data["private_key"]
+            account = Account.from_key(private_key_hex)
+            console.print(
+                f"✅ Traditional account loaded: [blue]{account.address}[/blue]"
+            )
             return account
     except Exception as e:
         console.print(f"[bold red]Error loading traditional account:[/bold red] {e}")
@@ -89,58 +83,60 @@ def _load_account(account_name: str, password: str, base_dir: str) -> Optional[A
         return None
 
 
-# Helper function to get RestClient
-def _get_client(network: str) -> RestClient:
+# Helper function to get Core Client
+def _get_client(network: str) -> ModernTensorCoreClient:
     if network == "mainnet":
-        return RestClient("https://fullnode.mainnet.aptoslabs.com/v1")
+        return ModernTensorCoreClient("https://rpc.coredao.org")
     elif network == "testnet":
-        return RestClient("https://fullnode.testnet.aptoslabs.com/v1")
+        return ModernTensorCoreClient("https://rpc.test.btcs.network")
     elif network == "devnet":
-        return RestClient("https://fullnode.devnet.aptoslabs.com/v1")
+        return ModernTensorCoreClient("https://rpc.dev.btcs.network")
     else:
-        # Default to local node
-        return RestClient("http://localhost:8080/v1")
+        return ModernTensorCoreClient("https://rpc.test.btcs.network")
 
 
 # ------------------------------------------------------------------------------
 # SEND TRANSACTION COMMAND
 # ------------------------------------------------------------------------------
 @tx_cli.command("send")
-@click.option("--account", required=True, help="Sender account name (JSON file or HD wallet format: wallet.coldkey or wallet.coldkey.hotkey).")
-@click.option("--password", prompt=True, hide_input=True, help="Sender account password.")
-@click.option("--to", required=True, help="Recipient address.")
-@click.option("--amount", required=True, type=int, help="Amount to send in octas (1 APT = 10^8 octas).")
 @click.option(
-    "--token", 
-    default="apt", 
-    help="Token to send. Use 'apt' for native Aptos coin or 'token_address::token_name::token_name' for other tokens."
+    "--account",
+    required=True,
+    help="Sender account name (JSON file or HD wallet format: wallet.coldkey or wallet.coldkey.hotkey).",
+)
+@click.option(
+    "--password", prompt=True, hide_input=True, help="Sender account password."
+)
+@click.option("--to", required=True, help="Recipient address.")
+@click.option(
+    "--amount",
+    required=True,
+    type=int,
+    help="Amount to send in wei (1 CORE = 10^18 wei).",
 )
 @click.option(
     "--network",
-    default=lambda: settings.APTOS_NETWORK,
+    default="testnet",
     type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
-    help="Select Aptos network.",
+    help="Select Core blockchain network.",
 )
 @click.option(
     "--base-dir",
-    default=lambda: settings.ACCOUNT_BASE_DIR,
+    default="./wallets",
     help="Base directory where account files reside.",
 )
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-def send_cmd(account, password, to, amount, token, network, base_dir, yes):
+def send_cmd(account, password, to, amount, network, base_dir, yes):
     """
-    ➡️ Send APT or other tokens to an address.
-    
+    ➡️ Send CORE tokens to an address.
+
     Examples:
     \b
-    • Send APT using HD wallet:
-      mtcli tx-cli send --account wallet.coldkey --to 0x123... --amount 1000000
-    
-    • Send APT using hotkey:
-      mtcli tx-cli send --account wallet.coldkey.hotkey --to 0x123... --amount 1000000
-    
-    • Send using traditional account:
-      mtcli tx-cli send --account my_account --to 0x123... --amount 1000000
+    • Send CORE using HD wallet:
+      mtcore tx send --account wallet.coldkey --to 0x123... --amount 1000000000000000000
+
+    • Send CORE using hotkey:
+      mtcore tx send --account wallet.coldkey.hotkey --to 0x123... --amount 1000000000000000000
     """
     console = Console()
     account_obj = _load_account(account, password, base_dir)
@@ -155,46 +151,29 @@ def send_cmd(account, password, to, amount, token, network, base_dir, yes):
 
     # Display transaction info
     console.print(f"🚀 Preparing transaction...")
-    console.print(f"  Sender: [blue]{str(account_obj.address())}[/blue]")
-    console.print(f"  Amount: [yellow]{amount:,}[/yellow] octas ({amount / 100_000_000:.8f} APT)")
+    console.print(f"  Sender: [blue]{account_obj.address}[/blue]")
+    console.print(
+        f"  Amount: [yellow]{amount:,}[/yellow] wei ({amount / 10**18:.8f} CORE)"
+    )
     console.print(f"  To: [green]{to}[/green]")
     console.print(f"  Network: [yellow]{network.upper()}[/yellow]")
-    
+
     if not yes:
         click.confirm("Do you want to proceed with this transaction?", abort=True)
-    
+
     try:
-        if token.lower() == "apt":
-            console.print("⏳ Sending APT...")
-            tx_hash = asyncio.run(send_coin(
-                client=client,
-                sender=account_obj,
-                recipient_address=to,
-                amount=amount
-            ))
-        else:
-            console.print(f"⏳ Sending token {token}...")
-            # Parse token info from format: address::module::name
-            token_parts = token.split("::")
-            if len(token_parts) != 3:
-                console.print("[bold red]Error:[/bold red] Invalid token format. Use 'address::module::name'")
-                return
-            
-            token_address, token_module, token_name = token_parts
-            
-            tx_hash = asyncio.run(send_token(
-                client=client,
-                sender=account_obj,
-                recipient_address=to,
-                token_address=token_address,
-                token_name=token_name, 
-                amount=amount
-            ))
-        
-        console.print(f":heavy_check_mark: [bold green]Transaction submitted![/bold green]")
+        console.print("⏳ Sending CORE...")
+        tx_hash = asyncio.run(
+            client.send_transaction(
+                from_account=account_obj, to_address=to, amount=amount
+            )
+        )
+
+        console.print(
+            f":heavy_check_mark: [bold green]Transaction submitted![/bold green]"
+        )
         console.print(f"  Transaction hash: [bold blue]{tx_hash}[/bold blue]")
-        console.print(f"  Explorer: [blue]https://explorer.aptoslabs.com/txn/{tx_hash}?network={network}[/blue]")
-        
+
     except Exception as e:
         console.print(f"[bold red]Error sending transaction:[/bold red] {e}")
         logger.exception("Send command failed")
@@ -217,59 +196,71 @@ def get_tx_cmd(hash, network):
     """
     console = Console()
     client = _get_client(network)
-    
+
     # Format hash
     if not hash.startswith("0x"):
         hash = f"0x{hash}"
-    
+
     console.print(f"⏳ Looking up transaction [blue]{hash}[/blue]...")
-    
+
     try:
-        tx_details = asyncio.run(get_transaction_details(client=client, txn_hash=hash))
-        
+        tx_details = asyncio.run(client.get_transaction_details(txn_hash=hash))
+
         if "error" in tx_details:
             console.print(f"[bold red]Error:[/bold red] {tx_details['error']}")
             return
-            
+
         # Display transaction details in a nice table
         table = Table(title=f"Transaction {hash}", border_style="blue")
         table.add_column("Field", style="cyan")
         table.add_column("Value", style="green")
-        
+
         # Add basic transaction info
         table.add_row("Version", str(tx_details.get("version", "N/A")))
-        table.add_row("Status", tx_details.get("success", False) and "[green]Success[/green]" or "[red]Failed[/red]")
+        table.add_row(
+            "Status",
+            tx_details.get("success", False)
+            and "[green]Success[/green]"
+            or "[red]Failed[/red]",
+        )
         table.add_row("Type", tx_details.get("type", "N/A"))
         table.add_row("Timestamp", tx_details.get("timestamp", "N/A"))
         table.add_row("Sender", tx_details.get("sender", "N/A"))
-        
+
         # Add gas info
         table.add_row("Gas Used", str(tx_details.get("gas_used", "N/A")))
         table.add_row("Gas Unit Price", str(tx_details.get("gas_unit_price", "N/A")))
         table.add_row("Max Gas", str(tx_details.get("max_gas_amount", "N/A")))
-        
+
         console.print(table)
-        
+
         # If it's a function call, show details
-        if "payload" in tx_details and tx_details["payload"].get("type") == "entry_function_payload":
+        if (
+            "payload" in tx_details
+            and tx_details["payload"].get("type") == "entry_function_payload"
+        ):
             payload = tx_details["payload"]
             function = payload.get("function", "N/A")
-            console.print(f"\n[bold]Function called:[/bold] [yellow]{function}[/yellow]")
-            
+            console.print(
+                f"\n[bold]Function called:[/bold] [yellow]{function}[/yellow]"
+            )
+
             if "arguments" in payload and payload["arguments"]:
                 console.print("\n[bold]Arguments:[/bold]")
                 for i, arg in enumerate(payload["arguments"]):
                     console.print(f"  {i+1}. [cyan]{arg}[/cyan]")
-                    
+
         # If there are events, show them
         if "events" in tx_details and tx_details["events"]:
             console.print("\n[bold]Events:[/bold]")
             for i, event in enumerate(tx_details["events"]):
-                console.print(f"\n  [bold cyan]Event {i+1}:[/bold cyan] {event.get('type', 'Unknown')}")
+                console.print(
+                    f"\n  [bold cyan]Event {i+1}:[/bold cyan] {event.get('type', 'Unknown')}"
+                )
                 if "data" in event:
                     for key, value in event["data"].items():
                         console.print(f"    [green]{key}:[/green] {value}")
-        
+
     except Exception as e:
         console.print(f"[bold red]Error retrieving transaction:[/bold red] {e}")
         logger.exception("Get transaction command failed")
@@ -279,8 +270,12 @@ def get_tx_cmd(hash, network):
 # LIST TRANSACTIONS COMMAND
 # ------------------------------------------------------------------------------
 @tx_cli.command("list")
-@click.option("--address", required=True, help="Account address to list transactions for.")
-@click.option("--limit", default=10, type=int, help="Maximum number of transactions to show.")
+@click.option(
+    "--address", required=True, help="Account address to list transactions for."
+)
+@click.option(
+    "--limit", default=10, type=int, help="Maximum number of transactions to show."
+)
 @click.option(
     "--network",
     default=lambda: settings.APTOS_NETWORK,
@@ -293,24 +288,22 @@ def list_tx_cmd(address, limit, network):
     """
     console = Console()
     client = _get_client(network)
-    
+
     # Format address
     if not address.startswith("0x"):
         address = f"0x{address}"
-    
+
     console.print(f"⏳ Fetching transactions for [blue]{address}[/blue]...")
-    
+
     try:
-        transactions = asyncio.run(get_account_transactions(
-            client=client,
-            address=address,
-            limit=limit
-        ))
-        
+        transactions = asyncio.run(
+            client.get_account_transactions(address=address, limit=limit)
+        )
+
         if not transactions:
             console.print(f"No transactions found for address {address}")
             return
-            
+
         # Display transactions in a table
         table = Table(title=f"Transactions for {address}", border_style="blue")
         table.add_column("Version", style="cyan")
@@ -318,18 +311,22 @@ def list_tx_cmd(address, limit, network):
         table.add_column("Timestamp", style="dim")
         table.add_column("Status", style="green")
         table.add_column("Hash", style="blue")
-        
+
         for tx in transactions:
-            status = tx.get("success", False) and "[green]Success[/green]" or "[red]Failed[/red]"
+            status = (
+                tx.get("success", False)
+                and "[green]Success[/green]"
+                or "[red]Failed[/red]"
+            )
             hash = tx.get("hash", "N/A")
             tx_type = tx.get("type", "N/A")
             version = str(tx.get("version", "N/A"))
             timestamp = tx.get("timestamp", "N/A")
-            
+
             table.add_row(version, tx_type, timestamp, status, hash)
-            
+
         console.print(table)
-        
+
     except Exception as e:
         console.print(f"[bold red]Error listing transactions:[/bold red] {e}")
         logger.exception("List transactions command failed")
