@@ -1,0 +1,8 @@
+{
+    "myaptos": {
+        "address": "0x49efdb1b13ba49c9624ab17ac21cfa9d2b891871727e39a309457b63f42518b2",
+        "ciphertext": "65701a68ac980d8002685b9ef758133307d67ae60c0ad7a5de40038d1f775e5272cf774bf1f14718f4ac918accd5a93a",
+        "salt": "36f51ea028a03cf26363e18fdc956276",
+        "nonce": "71cc4c4b5ba0f881065749eb"
+    }
+}

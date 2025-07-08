@@ -6,7 +6,7 @@
 [project]
 name = "moderntensor"
 version = "0.2.0"
-description = "A decentralized neural network training platform on Aptos blockchain"
+description = "A decentralized neural network training platform on Core blockchain with Bitcoin staking"
 readme = "README.md"
 # Use table format required by setuptools 68.0.0
 license = { text = "MIT" }
@@ -15,7 +15,7 @@ license-files = []
 authors = [
   { name = "ModernTensor Team", email = "info@moderntensor.net" }
 ]
-keywords = ["aptos", "blockchain", "neural-network", "decentralized"]
+keywords = ["core", "blockchain", "neural-network", "decentralized", "bitcoin", "staking", "ai"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
@@ -23,8 +23,16 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-  # Aptos blockchain SDK
-  "aptos-sdk>=0.10.0",
+  # Core blockchain SDK and Web3 tools
+  "web3>=6.0.0",
+  "eth-account>=0.8.0",
+  "eth-utils>=2.0.0",
+  "eth-typing>=3.0.0",
+  "py-evm>=0.6.0",
+  
+  # Bitcoin staking integration (for Core's dual staking)
+  "bitcoin>=1.1.42",
+  "bitcoinlib>=0.12.0",
   
   # Core utilities and crypto
   "bip_utils>=2.9.3", 
@@ -62,6 +70,10 @@ dependencies = [
   # Performance and serialization
   "orjson>=3.9.0",
   "marshmallow>=3.19.0",
+  
+  # Solidity development tools
+  "py-solc-x>=1.12.0",
+  "solcx>=1.12.0",
 ]
 
 [project.urls]
@@ -69,11 +81,11 @@ homepage = "https://github.com/sonson0910"
 
 # Scripts (entry_points) - replacement for 'console_scripts' in setup.py
 [project.scripts]
-moderntensor = "mt_aptos.runner:main"
+moderntensor = "mt_core.runner:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["mt_aptos*"]
+include = ["mt_core*"]
 
 [project.optional-dependencies]
 dev = [
@@ -97,4 +109,4 @@ build-backend = "hatchling.build"
 
 # Add Hatch build configuration to specify package directory
 [tool.hatch.build.targets.wheel]
-packages = ["mt_aptos"]
+packages = ["mt_core"]

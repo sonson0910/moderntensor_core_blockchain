@@ -1,0 +1,53 @@
+{
+  "name": "moderntensor-core-contracts",
+  "version": "1.0.0",
+  "description": "ModernTensor smart contracts for Core blockchain",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:local": "hardhat deploy --network hardhat",
+    "deploy:testnet": "hardhat deploy --network core_testnet",
+    "deploy:mainnet": "hardhat deploy --network core_mainnet",
+    "verify:testnet": "hardhat etherscan-verify --network core_testnet",
+    "verify:mainnet": "hardhat etherscan-verify --network core_mainnet",
+    "node": "hardhat node",
+    "clean": "hardhat clean",
+    "coverage": "hardhat coverage",
+    "size": "hardhat size-contracts",
+    "flatten": "hardhat flatten",
+    "gas-report": "REPORT_GAS=true hardhat test"
+  },
+  "keywords": [
+    "moderntensor",
+    "core",
+    "blockchain",
+    "ai",
+    "defi",
+    "bitcoin",
+    "staking"
+  ],
+  "author": "ModernTensor Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "@nomiclabs/hardhat-etherscan": "^3.1.7",
+    "@nomiclabs/hardhat-waffle": "^2.0.6",
+    "@openzeppelin/contracts": "^4.9.0",
+    "@typechain/ethers-v5": "^10.2.1",
+    "@typechain/hardhat": "^6.1.6",
+    "chai": "^4.3.7",
+    "dotenv": "^16.0.3",
+    "ethereum-waffle": "^4.0.10",
+    "ethers": "^5.7.2",
+    "hardhat": "^2.17.0",
+    "hardhat-deploy": "^0.11.34",
+    "hardhat-gas-reporter": "^1.0.9",
+    "hardhat-contract-sizer": "^2.10.0",
+    "solidity-coverage": "^0.8.2",
+    "typechain": "^8.2.0"
+  },
+  "dependencies": {
+    "web3": "^4.0.0"
+  }
+} 

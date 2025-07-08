@@ -1,0 +1,759 @@
+{
+  "version": "3.4",
+  "log": [
+    {
+      "@openzeppelin/contracts/access/Ownable.sol:Ownable": {
+        "src": "@openzeppelin/contracts/access/Ownable.sol:20",
+        "inherit": [
+          "@openzeppelin/contracts/utils/Context.sol:Context"
+        ],
+        "libraries": [],
+        "methods": [
+          "owner()",
+          "renounceOwnership()",
+          "transferOwnership(address)"
+        ],
+        "linkReferences": [],
+        "errors": [
+          {
+            "kind": "constructor",
+            "contract": "Ownable",
+            "src": "@openzeppelin/contracts/access/Ownable.sol:28"
+          }
+        ],
+        "layout": {
+          "storage": [
+            {
+              "label": "_owner",
+              "offset": 0,
+              "slot": "0",
+              "type": "t_address",
+              "contract": "Ownable",
+              "src": "@openzeppelin/contracts/access/Ownable.sol:21"
+            }
+          ],
+          "types": {
+            "t_address": {
+              "label": "address",
+              "numberOfBytes": "20"
+            }
+          },
+          "layoutVersion": "1.2",
+          "flat": true,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      },
+      "@openzeppelin/contracts/security/Pausable.sol:Pausable": {
+        "src": "@openzeppelin/contracts/security/Pausable.sol:17",
+        "inherit": [
+          "@openzeppelin/contracts/utils/Context.sol:Context"
+        ],
+        "libraries": [],
+        "methods": [
+          "paused()"
+        ],
+        "linkReferences": [],
+        "errors": [
+          {
+            "kind": "constructor",
+            "contract": "Pausable",
+            "src": "@openzeppelin/contracts/security/Pausable.sol:33"
+          }
+        ],
+        "layout": {
+          "storage": [
+            {
+              "label": "_paused",
+              "offset": 0,
+              "slot": "0",
+              "type": "t_bool",
+              "contract": "Pausable",
+              "src": "@openzeppelin/contracts/security/Pausable.sol:28"
+            }
+          ],
+          "types": {
+            "t_bool": {
+              "label": "bool",
+              "numberOfBytes": "1"
+            }
+          },
+          "layoutVersion": "1.2",
+          "flat": true,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      },
+      "@openzeppelin/contracts/security/ReentrancyGuard.sol:ReentrancyGuard": {
+        "src": "@openzeppelin/contracts/security/ReentrancyGuard.sol:22",
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [
+          {
+            "kind": "constructor",
+            "contract": "ReentrancyGuard",
+            "src": "@openzeppelin/contracts/security/ReentrancyGuard.sol:39"
+          }
+        ],
+        "layout": {
+          "storage": [
+            {
+              "label": "_status",
+              "offset": 0,
+              "slot": "0",
+              "type": "t_uint256",
+              "contract": "ReentrancyGuard",
+              "src": "@openzeppelin/contracts/security/ReentrancyGuard.sol:37"
+            }
+          ],
+          "types": {
+            "t_uint256": {
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          },
+          "layoutVersion": "1.2",
+          "flat": true,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      },
+      "@openzeppelin/contracts/token/ERC20/IERC20.sol:IERC20": {
+        "src": "@openzeppelin/contracts/token/ERC20/IERC20.sol:9",
+        "inherit": [],
+        "libraries": [],
+        "methods": [
+          "totalSupply()",
+          "balanceOf(address)",
+          "transfer(address,uint256)",
+          "allowance(address,address)",
+          "approve(address,uint256)",
+          "transferFrom(address,address,uint256)"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      },
+      "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol:IERC20Permit": {
+        "src": "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol:42",
+        "inherit": [],
+        "libraries": [],
+        "methods": [
+          "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+          "nonces(address)",
+          "DOMAIN_SEPARATOR()"
+        ],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      },
+      "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol:SafeERC20": {
+        "src": "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol:19",
+        "version": {
+          "withMetadata": "0bf6b0d74f581fdf94ed9a5fac0eff535bc519c71082aab0909626fc38f767cf",
+          "withoutMetadata": "a64c6cf9c6ba9368f5132c93a0196b3204a7963dbb4dd05dfddb4ab23126b8db",
+          "linkedWithoutMetadata": "a64c6cf9c6ba9368f5132c93a0196b3204a7963dbb4dd05dfddb4ab23126b8db"
+        },
+        "inherit": [],
+        "libraries": [
+          "@openzeppelin/contracts/utils/Address.sol:Address"
+        ],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      },
+      "@openzeppelin/contracts/utils/Address.sol:Address": {
+        "src": "@openzeppelin/contracts/utils/Address.sol:9",
+        "version": {
+          "withMetadata": "60738137eda170e6ab4db5939b85b7f3f79c9777b62648ef1c22985b82d3341e",
+          "withoutMetadata": "a64c6cf9c6ba9368f5132c93a0196b3204a7963dbb4dd05dfddb4ab23126b8db",
+          "linkedWithoutMetadata": "a64c6cf9c6ba9368f5132c93a0196b3204a7963dbb4dd05dfddb4ab23126b8db"
+        },
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [
+          {
+            "kind": "delegatecall",
+            "src": "@openzeppelin/contracts/utils/Address.sol:185"
+          },
+          {
+            "kind": "delegatecall",
+            "src": "@openzeppelin/contracts/utils/Address.sol:185"
+          }
+        ],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      },
+      "@openzeppelin/contracts/utils/Context.sol:Context": {
+        "src": "@openzeppelin/contracts/utils/Context.sol:16",
+        "inherit": [],
+        "libraries": [],
+        "methods": [],
+        "linkReferences": [],
+        "errors": [],
+        "layout": {
+          "storage": [],
+          "types": {},
+          "layoutVersion": "1.2",
+          "flat": false,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      },
+      "contracts/ModernTensor.sol:ModernTensor": {
+        "src": "contracts/ModernTensor.sol:15",
+        "version": {
+          "withMetadata": "e70af46bdd56472b4d939e812df8be332bb1fba7373e5ae0ea431b84d26ae1d4",
+          "withoutMetadata": "e70af46bdd56472b4d939e812df8be332bb1fba7373e5ae0ea431b84d26ae1d4",
+          "linkedWithoutMetadata": "e70af46bdd56472b4d939e812df8be332bb1fba7373e5ae0ea431b84d26ae1d4"
+        },
+        "inherit": [
+          "@openzeppelin/contracts/security/Pausable.sol:Pausable",
+          "@openzeppelin/contracts/security/ReentrancyGuard.sol:ReentrancyGuard",
+          "@openzeppelin/contracts/access/Ownable.sol:Ownable",
+          "@openzeppelin/contracts/utils/Context.sol:Context"
+        ],
+        "libraries": [
+          "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol:SafeERC20"
+        ],
+        "methods": [
+          "(address)",
+          "createSubnet(uint64,string,string,uint256,uint256,uint256,uint256,uint256,uint256)",
+          "registerMiner(bytes32,uint64,uint256,string)",
+          "registerValidator(bytes32,uint64,uint256,string)",
+          "stakeBitcoin(bytes32,uint256,uint256)",
+          "calculateStakingTier(address)",
+          "distributeRewards(address,uint256)",
+          "updateMinerScores(address,uint256,uint256)",
+          "updateValidatorScores(address,uint256,uint256)",
+          "setMinerStatus(address,uint8)",
+          "setValidatorStatus(address,uint8)",
+          "getMinerInfo(address)",
+          "getValidatorInfo(address)",
+          "getSubnetInfo(uint64)",
+          "getAllMiners()",
+          "getAllValidators()",
+          "getAllSubnets()",
+          "getStakingTiers()",
+          "pause()",
+          "unpause()",
+          "emergencyWithdraw(address,uint256)"
+        ],
+        "linkReferences": [],
+        "errors": [
+          {
+            "kind": "constructor",
+            "contract": "ModernTensor",
+            "src": "contracts/ModernTensor.sol:164"
+          }
+        ],
+        "layout": {
+          "storage": [
+            {
+              "label": "_owner",
+              "offset": 0,
+              "slot": "0",
+              "type": "t_address",
+              "contract": "Ownable",
+              "src": "@openzeppelin/contracts/access/Ownable.sol:21"
+            },
+            {
+              "label": "_status",
+              "offset": 0,
+              "slot": "1",
+              "type": "t_uint256",
+              "contract": "ReentrancyGuard",
+              "src": "@openzeppelin/contracts/security/ReentrancyGuard.sol:37"
+            },
+            {
+              "label": "_paused",
+              "offset": 0,
+              "slot": "2",
+              "type": "t_bool",
+              "contract": "Pausable",
+              "src": "@openzeppelin/contracts/security/Pausable.sol:28"
+            },
+            {
+              "label": "coreToken",
+              "offset": 1,
+              "slot": "2",
+              "type": "t_contract(IERC20)363",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:28"
+            },
+            {
+              "label": "miners",
+              "offset": 0,
+              "slot": "3",
+              "type": "t_mapping(t_address,t_struct(MinerInfo)1201_storage)",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:87"
+            },
+            {
+              "label": "validators",
+              "offset": 0,
+              "slot": "4",
+              "type": "t_mapping(t_address,t_struct(ValidatorInfo)1228_storage)",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:88"
+            },
+            {
+              "label": "subnets",
+              "offset": 0,
+              "slot": "5",
+              "type": "t_mapping(t_uint64,t_struct(SubnetInfo)1251_storage)",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:89"
+            },
+            {
+              "label": "minerAddresses",
+              "offset": 0,
+              "slot": "6",
+              "type": "t_array(t_address)dyn_storage",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:92"
+            },
+            {
+              "label": "validatorAddresses",
+              "offset": 0,
+              "slot": "7",
+              "type": "t_array(t_address)dyn_storage",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:93"
+            },
+            {
+              "label": "subnetIds",
+              "offset": 0,
+              "slot": "8",
+              "type": "t_array(t_uint64)dyn_storage",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:94"
+            },
+            {
+              "label": "stakingTiers",
+              "offset": 0,
+              "slot": "9",
+              "type": "t_array(t_struct(StakingTier)1258_storage)dyn_storage",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:97"
+            },
+            {
+              "label": "bitcoinTxHashes",
+              "offset": 0,
+              "slot": "10",
+              "type": "t_mapping(t_address,t_bytes32)",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:100"
+            },
+            {
+              "label": "bitcoinStakeAmounts",
+              "offset": 0,
+              "slot": "11",
+              "type": "t_mapping(t_bytes32,t_uint256)",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:101"
+            },
+            {
+              "label": "bitcoinLockTimes",
+              "offset": 0,
+              "slot": "12",
+              "type": "t_mapping(t_bytes32,t_uint256)",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:102"
+            },
+            {
+              "label": "totalMiners",
+              "offset": 0,
+              "slot": "13",
+              "type": "t_uint256",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:105"
+            },
+            {
+              "label": "totalValidators",
+              "offset": 0,
+              "slot": "14",
+              "type": "t_uint256",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:106"
+            },
+            {
+              "label": "totalSubnets",
+              "offset": 0,
+              "slot": "15",
+              "type": "t_uint64",
+              "contract": "ModernTensor",
+              "src": "contracts/ModernTensor.sol:107"
+            }
+          ],
+          "types": {
+            "t_address": {
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "t_array(t_address)dyn_storage": {
+              "label": "address[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_struct(StakingTier)1258_storage)dyn_storage": {
+              "label": "struct ModernTensor.StakingTier[]",
+              "numberOfBytes": "32"
+            },
+            "t_array(t_uint64)dyn_storage": {
+              "label": "uint64[]",
+              "numberOfBytes": "32"
+            },
+            "t_bool": {
+              "label": "bool",
+              "numberOfBytes": "1"
+            },
+            "t_bytes32": {
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "t_contract(IERC20)363": {
+              "label": "contract IERC20",
+              "numberOfBytes": "20"
+            },
+            "t_mapping(t_address,t_bytes32)": {
+              "label": "mapping(address => bytes32)",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_address,t_struct(MinerInfo)1201_storage)": {
+              "label": "mapping(address => struct ModernTensor.MinerInfo)",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_address,t_struct(ValidatorInfo)1228_storage)": {
+              "label": "mapping(address => struct ModernTensor.ValidatorInfo)",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_bytes32,t_uint256)": {
+              "label": "mapping(bytes32 => uint256)",
+              "numberOfBytes": "32"
+            },
+            "t_mapping(t_uint64,t_struct(SubnetInfo)1251_storage)": {
+              "label": "mapping(uint64 => struct ModernTensor.SubnetInfo)",
+              "numberOfBytes": "32"
+            },
+            "t_string_storage": {
+              "label": "string",
+              "numberOfBytes": "32"
+            },
+            "t_struct(MinerInfo)1201_storage": {
+              "label": "struct ModernTensor.MinerInfo",
+              "members": [
+                {
+                  "label": "uid",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "subnetUid",
+                  "type": "t_uint64",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "stake",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "bitcoinStake",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "lastPerformance",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "4"
+                },
+                {
+                  "label": "trustScore",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "5"
+                },
+                {
+                  "label": "accumulatedRewards",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "6"
+                },
+                {
+                  "label": "lastUpdateTimestamp",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "7"
+                },
+                {
+                  "label": "registrationTimestamp",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "8"
+                },
+                {
+                  "label": "status",
+                  "type": "t_uint8",
+                  "offset": 0,
+                  "slot": "9"
+                },
+                {
+                  "label": "performanceHistoryHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "10"
+                },
+                {
+                  "label": "apiEndpoint",
+                  "type": "t_string_storage",
+                  "offset": 0,
+                  "slot": "11"
+                },
+                {
+                  "label": "owner",
+                  "type": "t_address",
+                  "offset": 0,
+                  "slot": "12"
+                }
+              ],
+              "numberOfBytes": "416"
+            },
+            "t_struct(StakingTier)1258_storage": {
+              "label": "struct ModernTensor.StakingTier",
+              "members": [
+                {
+                  "label": "minCoreRatio",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "multiplier",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "name",
+                  "type": "t_string_storage",
+                  "offset": 0,
+                  "slot": "2"
+                }
+              ],
+              "numberOfBytes": "96"
+            },
+            "t_struct(SubnetInfo)1251_storage": {
+              "label": "struct ModernTensor.SubnetInfo",
+              "members": [
+                {
+                  "label": "uid",
+                  "type": "t_uint64",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "name",
+                  "type": "t_string_storage",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "description",
+                  "type": "t_string_storage",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "maxMiners",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "maxValidators",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "4"
+                },
+                {
+                  "label": "immunityPeriod",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "5"
+                },
+                {
+                  "label": "minMinerStake",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "6"
+                },
+                {
+                  "label": "minValidatorStake",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "7"
+                },
+                {
+                  "label": "registrationCost",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "8"
+                },
+                {
+                  "label": "owner",
+                  "type": "t_address",
+                  "offset": 0,
+                  "slot": "9"
+                },
+                {
+                  "label": "creationTimestamp",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "10"
+                }
+              ],
+              "numberOfBytes": "352"
+            },
+            "t_struct(ValidatorInfo)1228_storage": {
+              "label": "struct ModernTensor.ValidatorInfo",
+              "members": [
+                {
+                  "label": "uid",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "0"
+                },
+                {
+                  "label": "subnetUid",
+                  "type": "t_uint64",
+                  "offset": 0,
+                  "slot": "1"
+                },
+                {
+                  "label": "stake",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "2"
+                },
+                {
+                  "label": "bitcoinStake",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "3"
+                },
+                {
+                  "label": "lastPerformance",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "4"
+                },
+                {
+                  "label": "trustScore",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "5"
+                },
+                {
+                  "label": "accumulatedRewards",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "6"
+                },
+                {
+                  "label": "lastUpdateTimestamp",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "7"
+                },
+                {
+                  "label": "registrationTimestamp",
+                  "type": "t_uint256",
+                  "offset": 0,
+                  "slot": "8"
+                },
+                {
+                  "label": "status",
+                  "type": "t_uint8",
+                  "offset": 0,
+                  "slot": "9"
+                },
+                {
+                  "label": "performanceHistoryHash",
+                  "type": "t_bytes32",
+                  "offset": 0,
+                  "slot": "10"
+                },
+                {
+                  "label": "apiEndpoint",
+                  "type": "t_string_storage",
+                  "offset": 0,
+                  "slot": "11"
+                },
+                {
+                  "label": "owner",
+                  "type": "t_address",
+                  "offset": 0,
+                  "slot": "12"
+                }
+              ],
+              "numberOfBytes": "416"
+            },
+            "t_uint256": {
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "t_uint64": {
+              "label": "uint64",
+              "numberOfBytes": "8"
+            },
+            "t_uint8": {
+              "label": "uint8",
+              "numberOfBytes": "1"
+            }
+          },
+          "layoutVersion": "1.2",
+          "flat": true,
+          "namespaces": {}
+        },
+        "solcVersion": "0.8.19"
+      }
+    }
+  ]
+}

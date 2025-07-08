@@ -1,8 +1,16 @@
-# ModernTensor Aptos SDK Requirements
-# Core dependencies for the Aptos-based SDK
+# ModernTensor Core SDK Requirements
+# Core dependencies for the Core blockchain-based SDK
 
-# Aptos SDK và blockchain tools
-aptos-sdk>=0.10.0
+# Core blockchain SDK and Web3 tools
+web3>=6.0.0
+eth-account>=0.8.0
+eth-utils>=2.0.0
+eth-typing>=3.0.0
+py-evm>=0.6.0
+
+# Bitcoin staking integration (for Core's dual staking)
+bitcoin>=1.1.42
+bitcoinlib>=0.12.0
 
 # Core Python libraries
 numpy>=1.24.0
@@ -52,3 +60,8 @@ pytest-cov>=4.1.0
 black>=23.0.0
 isort>=5.12.0
 flake8>=6.0.0
+
+# Solidity development tools
+py-solc-x>=1.12.0
+solcx>=1.12.0
+brownie-eth>=1.19.0
