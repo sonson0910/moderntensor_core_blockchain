@@ -1,7 +1,3 @@
-Dưới đây là phiên bản được format lại rõ ràng và thân thiện với GitHub Markdown cho `README.md`:
-
----
-
 # Moderntensor Token Project on Core DAO
 
 ## Overview
