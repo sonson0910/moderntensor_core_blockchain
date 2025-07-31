@@ -1,4 +1,4 @@
-# Moderntensor Token Project on Core DAO
+# Moderntensor Tokenomic
 
 ## Overview
 
