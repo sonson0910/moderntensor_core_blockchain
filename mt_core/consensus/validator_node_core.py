@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Any
 from web3 import Web3
 from eth_account import Account
 
-from ..config.settings import settings
+from ..config.config_loader import get_config
 from ..core.datatypes import (
     ValidatorInfo,
     MinerInfo,
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DEFAULT_BATCH_WAIT_TIME = 30.0
-DEFAULT_CONSENSUS_TIMEOUT = 120
+DEFAULT_CONSENSUS_TIMEOUT = 60  # Reduced for 3.5 minute cycles
 DEFAULT_RESULT_TIMEOUT = 60.0
 HTTP_TIMEOUT = 10.0
 MAX_RETRIES = 3
@@ -67,6 +67,7 @@ class ValidatorNodeCore:
         state_file: str = "validator_state.json",
         consensus_mode: str = "continuous",
         batch_wait_time: float = DEFAULT_BATCH_WAIT_TIME,
+        api_port: Optional[int] = None,
     ):
         """
         Initialize ValidatorNode core components.
@@ -79,6 +80,7 @@ class ValidatorNodeCore:
             state_file: Path to state persistence file
             consensus_mode: "continuous" or "sequential"
             batch_wait_time: Wait time between batches
+            api_port: Port for API server (optional)
         """
         # Core identifiers
         self.info = validator_info
@@ -94,7 +96,14 @@ class ValidatorNodeCore:
         self.state_file = state_file
         self.consensus_mode = consensus_mode
         self.batch_wait_time = batch_wait_time
-        self.settings = settings
+        self.api_port = api_port  # Store API port for network module
+        self.config = get_config()
+        self.settings = self.config.consensus  # Access consensus settings directly
+
+        # Debug logging to verify api_port is properly set
+        logger.info(
+            f"{self.uid_prefix} ValidatorNodeCore initialized with api_port: {self.api_port}"
+        )
 
         # Metrics and monitoring
         self.metrics = get_metrics_manager()
@@ -102,15 +111,16 @@ class ValidatorNodeCore:
 
         # State management
         self._current_cycle = self._load_last_cycle()
-        self.slot_length = self.settings.CONSENSUS_CYCLE_LENGTH
+        self.slot_length = self.settings.cycle_length
         self.miners_selected_for_cycle = set()
 
         # Slot-based consensus configuration
         self.slot_config = SlotConfig(
-            slot_duration_minutes=settings.SLOT_DURATION_MINUTES,
-            task_assignment_minutes=settings.TASK_ASSIGNMENT_MINUTES,
-            task_execution_minutes=settings.TASK_EXECUTION_MINUTES,
-            consensus_minutes=settings.CONSENSUS_MINUTES,
+            slot_duration_minutes=self.settings.slot_duration_minutes,
+            task_assignment_minutes=self.settings.task_assignment_minutes,
+            task_execution_minutes=self.settings.task_execution_minutes,
+            consensus_minutes=self.settings.consensus_minutes,
+            metagraph_update_seconds=self.settings.metagraph_update_seconds,
         )
         self.current_slot_phase = SlotPhase.TASK_ASSIGNMENT
         self.slot_phase_start_time = time.time()
@@ -136,10 +146,16 @@ class ValidatorNodeCore:
         self.cycle_scores = defaultdict(list)
         self.validator_scores = defaultdict(list)
         self.slot_scores = defaultdict(list)  # For slot-based scoring
+        self.slot_aggregated_scores = (
+            {}
+        )  # slot -> {miner_uid: {validator_uid: avg_score}}
         self.consensus_results_cache = OrderedDict()
         self.consensus_results_cache_lock = asyncio.Lock()
         self.received_validator_scores = {}
         self.received_scores_lock = asyncio.Lock()
+
+        # Task tracking for continuous assignment
+        self.active_task_assignments = {}  # task_id -> assignment info
 
         # Health and monitoring
         self.health_server = None
@@ -304,19 +320,15 @@ class ValidatorNodeCore:
         previous_validators_info = self.validators_info.copy()
 
         try:
-            # Import Core blockchain client
-            from ..core_client.contract_client import ModernTensorCoreClient
+            # Import Core blockchain client - use CoreMetagraphClient which works correctly
+            from ..metagraph.core_metagraph_adapter import CoreMetagraphClient
 
             # Initialize Core client if not already done
             if (
                 not hasattr(self, "core_contract_client")
                 or not self.core_contract_client
             ):
-                self.core_contract_client = ModernTensorCoreClient(
-                    w3=self.client,
-                    contract_address=self.contract_address,
-                    account=self.account if hasattr(self, "account") else None,
-                )
+                self.core_contract_client = CoreMetagraphClient()
 
             # Fetch miners and validators data from Core blockchain
             miners_addresses = self.core_contract_client.get_all_miners()
@@ -355,9 +367,7 @@ class ValidatorNodeCore:
             )
 
             # Process the data
-            max_history_len = getattr(
-                settings, "CONSENSUS_MAX_PERFORMANCE_HISTORY_LEN", 10
-            )
+            max_history_len = getattr(self.settings, "max_performance_history_len", 10)
 
             # Process miners and validators
             temp_miners_info = self._process_miners_data(
@@ -381,6 +391,37 @@ class ValidatorNodeCore:
                 f"{len(self.miners_info)} miners, {len(self.validators_info)} validators"
             )
 
+            # Debug: Log loaded validator details for troubleshooting
+            logger.debug(f"{self.uid_prefix} Debug - Loaded validators:")
+            for validator_uid, validator_info in self.validators_info.items():
+                logger.debug(f"{self.uid_prefix} Debug - Validator {validator_uid}:")
+                logger.debug(f"  - Type: {type(validator_info)}")
+                logger.debug(f"  - UID: {getattr(validator_info, 'uid', 'N/A')}")
+                logger.debug(
+                    f"  - Address: {getattr(validator_info, 'address', 'N/A')}"
+                )
+                logger.debug(
+                    f"  - API Endpoint: {getattr(validator_info, 'api_endpoint', 'N/A')}"
+                )
+                logger.debug(
+                    f"  - Status: {getattr(validator_info, 'status', 'N/A')} (type: {type(getattr(validator_info, 'status', None))})"
+                )
+                logger.debug(f"  - Stake: {getattr(validator_info, 'stake', 'N/A')}")
+
+            # Debug: Log loaded miner details
+            logger.debug(f"{self.uid_prefix} Debug - Loaded miners:")
+            for miner_uid, miner_info in self.miners_info.items():
+                logger.debug(f"{self.uid_prefix} Debug - Miner {miner_uid}:")
+                logger.debug(f"  - Type: {type(miner_info)}")
+                logger.debug(f"  - UID: {getattr(miner_info, 'uid', 'N/A')}")
+                logger.debug(f"  - Address: {getattr(miner_info, 'address', 'N/A')}")
+                logger.debug(
+                    f"  - API Endpoint: {getattr(miner_info, 'api_endpoint', 'N/A')}"
+                )
+                logger.debug(
+                    f"  - Status: {getattr(miner_info, 'status', 'N/A')} (type: {type(getattr(miner_info, 'status', None))})"
+                )
+
         except Exception as e:
             logger.error(
                 f"{self.uid_prefix} Critical error during Core blockchain data loading: {e}"
@@ -402,17 +443,34 @@ class ValidatorNodeCore:
                 if not uid_hex:
                     continue
 
+                # Convert dict to object-like access
+                performance_history_hash = miner_data.get(
+                    "performance_history_hash", ""
+                )
+
                 # Verify performance history
                 verified_history = self._verify_performance_history(
-                    miner_data.performance_history_hash,
+                    performance_history_hash,
                     previous_miners_info.get(uid_hex),
                     max_history_len,
                     uid_hex,
                 )
 
-                # Update with verified history
-                miner_data.performance_history = verified_history
-                temp_miners_info[uid_hex] = miner_data
+                # Create MinerInfo object with verified history
+                from ..core.datatypes import MinerInfo
+
+                miner_info = MinerInfo(
+                    uid=miner_data.get("uid", ""),
+                    address=miner_data.get("address", ""),
+                    api_endpoint=miner_data.get("api_endpoint", ""),
+                    trust_score=miner_data.get("scaled_trust_score", 0.0),
+                    stake=miner_data.get("stake", 0.0),
+                    status=miner_data.get("status", 0),
+                    performance_history=verified_history,
+                    subnet_uid=miner_data.get("subnet_uid", 0),
+                    registration_time=miner_data.get("registration_time", 0),
+                )
+                temp_miners_info[uid_hex] = miner_info
 
             except Exception as e:
                 logger.warning(
@@ -435,23 +493,39 @@ class ValidatorNodeCore:
                 if not uid_hex:
                     continue
 
+                # Convert dict to object-like access
+                performance_history_hash = validator_data.get(
+                    "performance_history_hash", ""
+                )
+                api_endpoint = validator_data.get("api_endpoint", "")
+
                 # Verify performance history
                 verified_history = self._verify_performance_history(
-                    validator_data.performance_history_hash,
+                    performance_history_hash,
                     previous_validators_info.get(uid_hex),
                     max_history_len,
                     uid_hex,
                 )
 
                 # Sanitize API endpoint
-                clean_endpoint = self._sanitize_api_endpoint(
-                    validator_data.api_endpoint, uid_hex
-                )
+                clean_endpoint = self._sanitize_api_endpoint(api_endpoint, uid_hex)
 
-                # Update with verified data
-                validator_data.performance_history = verified_history
-                validator_data.api_endpoint = clean_endpoint
-                temp_validators_info[uid_hex] = validator_data
+                # Create ValidatorInfo object with verified data
+                from ..core.datatypes import ValidatorInfo
+
+                validator_info = ValidatorInfo(
+                    uid=validator_data.get("uid", ""),
+                    address=validator_data.get("address", ""),
+                    api_endpoint=clean_endpoint,
+                    last_performance=validator_data.get("scaled_last_performance", 0.0),
+                    trust_score=validator_data.get("scaled_trust_score", 0.0),
+                    stake=validator_data.get("stake", 0.0),
+                    status=validator_data.get("status", 0),
+                    performance_history=verified_history,
+                    subnet_uid=validator_data.get("subnet_uid", 0),
+                    registration_time=validator_data.get("registration_time", 0),
+                )
+                temp_validators_info[uid_hex] = validator_info
 
             except Exception as e:
                 logger.warning(
@@ -521,7 +595,18 @@ class ValidatorNodeCore:
 
         if self_uid_hex in self.validators_info:
             loaded_info = self.validators_info[self_uid_hex]
-            self.info.api_endpoint = loaded_info.api_endpoint
+
+            # CRITICAL FIX: Only update api_endpoint if we don't have explicit api_port
+            if not hasattr(self, "api_port") or self.api_port is None:
+                self.info.api_endpoint = loaded_info.api_endpoint
+                logger.debug(
+                    f"{self.uid_prefix} Updated api_endpoint from blockchain: {loaded_info.api_endpoint}"
+                )
+            else:
+                logger.info(
+                    f"{self.uid_prefix} Preserving configured api_port {self.api_port}, ignoring blockchain api_endpoint {loaded_info.api_endpoint}"
+                )
+
             self.info.trust_score = loaded_info.trust_score
             self.info.weight = loaded_info.weight
             self.info.stake = loaded_info.stake
@@ -559,3 +644,107 @@ class ValidatorNodeCore:
             logger.info(f"{self.uid_prefix} Resources cleaned up successfully")
         except Exception as e:
             logger.warning(f"{self.uid_prefix} Error during resource cleanup: {e}")
+
+    async def update_metagraph_with_consensus(self):
+        """
+        Update metagraph with consensus results for the current slot.
+
+        This method is called during METAGRAPH_UPDATE phase to finalize
+        consensus scores and update the on-chain state.
+        """
+        try:
+            current_slot = self.get_current_blockchain_slot()
+
+            logger.info(
+                f"{self.uid_prefix} Updating metagraph with consensus for slot {current_slot}"
+            )
+
+            # Ensure aggregation has been done - fallback if needed
+            if current_slot not in self.slot_aggregated_scores and hasattr(
+                self, "consensus"
+            ):
+                logger.warning(
+                    f"{self.uid_prefix} slot_aggregated_scores empty for slot {current_slot}, "
+                    "triggering emergency aggregation"
+                )
+                await self.consensus._emergency_aggregate_scores(current_slot)
+
+            # Get aggregated scores for this slot
+            slot_scores = self.slot_aggregated_scores.get(current_slot, {})
+
+            if slot_scores:
+                logger.info(
+                    f"{self.uid_prefix} Found {len(slot_scores)} miner score aggregations for slot {current_slot}"
+                )
+
+                # Calculate final consensus scores by averaging across validators
+                final_consensus_scores = {}
+                for miner_uid, validator_scores in slot_scores.items():
+                    if validator_scores:
+                        # Average scores from all validators for this miner
+                        avg_score = sum(validator_scores.values()) / len(
+                            validator_scores
+                        )
+                        final_consensus_scores[miner_uid] = avg_score
+
+                        logger.debug(
+                            f"{self.uid_prefix} Final consensus score for Miner {miner_uid[:8]}...: "
+                            f"{avg_score:.4f} (from {len(validator_scores)} validators)"
+                        )
+
+                # Update smart contract with final consensus scores
+                if final_consensus_scores and hasattr(self, "consensus"):
+                    try:
+                        await self.consensus.submit_consensus_to_blockchain(
+                            final_consensus_scores
+                        )
+                        logger.info(
+                            f"{self.uid_prefix} Successfully updated smart contract with {len(final_consensus_scores)} consensus scores"
+                        )
+                    except Exception as contract_error:
+                        logger.error(
+                            f"{self.uid_prefix} Failed to update smart contract: {contract_error}"
+                        )
+
+                # Clear processed scores to free memory
+                if current_slot in self.slot_aggregated_scores:
+                    del self.slot_aggregated_scores[current_slot]
+
+                logger.info(
+                    f"{self.uid_prefix} Metagraph update completed for slot {current_slot}"
+                )
+            else:
+                logger.debug(
+                    f"{self.uid_prefix} No consensus scores to update for slot {current_slot}"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"{self.uid_prefix} Error updating metagraph with consensus: {e}"
+            )
+
+    def save_state(self):
+        """
+        Save validator state to persistent storage.
+        This method saves the current validator state to a JSON file.
+        """
+        try:
+            state_data = {
+                "current_cycle": self._current_cycle,
+                "last_metagraph_update": getattr(self, "last_metagraph_update", 0),
+                "validators_info_count": (
+                    len(self.validators_info) if self.validators_info else 0
+                ),
+                "miners_info_count": len(self.miners_info) if self.miners_info else 0,
+                "consensus_mode": self.consensus_mode,
+                "slot_aggregated_scores_count": len(self.slot_aggregated_scores),
+                "timestamp": time.time(),
+            }
+
+            with open(self.state_file, "w") as f:
+                json.dump(state_data, f, indent=2)
+
+            logger.debug(f"{self.uid_prefix} State saved to {self.state_file}")
+
+        except Exception as e:
+            logger.warning(f"{self.uid_prefix} Failed to save state: {e}")

@@ -187,6 +187,23 @@ def score_results_logic(
             )
             continue
 
+        # Handle timeout case: empty results list means task was sent but no response received
+        if not results:
+            logger.warning(
+                f"No results received for task {task_id} from miner {assignment.miner_uid} (timeout). Assigning 0 score."
+            )
+            val_score = ValidatorScore(
+                task_id=task_id,
+                miner_uid=assignment.miner_uid,
+                validator_uid=validator_uid,
+                score=0.0,  # 0 điểm cho timeout
+            )
+            validator_scores[task_id].append(val_score)
+            logger.info(
+                f"  Assigned 0.0000 score to miner {assignment.miner_uid} for task {task_id} (timeout)"
+            )
+            continue
+
         # Chỉ chấm điểm kết quả đầu tiên hợp lệ từ đúng miner? Hay chấm tất cả?
         # Tạm thời chấm kết quả đầu tiên từ đúng miner
         valid_result_found = False
@@ -236,11 +253,19 @@ def score_results_logic(
 
         if not valid_result_found:
             logger.warning(
-                f"No valid result found from expected miner {assignment.miner_uid} for task {task_id}. No score generated."
+                f"No valid result found from expected miner {assignment.miner_uid} for task {task_id}. Assigning 0 score for timeout/no response."
             )
-            # Có thể tạo điểm 0 cho miner nếu không có kết quả hợp lệ?
-            # val_score = ValidatorScore(...)
-            # validator_scores[task_id].append(val_score)
+            # Tạo điểm 0 cho miner timeout/không response
+            val_score = ValidatorScore(
+                task_id=task_id,
+                miner_uid=assignment.miner_uid,
+                validator_uid=validator_uid,
+                score=0.0,  # 0 điểm cho timeout
+            )
+            validator_scores[task_id].append(val_score)
+            logger.info(
+                f"  Assigned 0.0000 score to miner {assignment.miner_uid} for task {task_id} (timeout/no response)"
+            )
 
     logger.info(
         f"Finished scoring. Generated scores for {len(validator_scores)} tasks."

@@ -73,8 +73,9 @@ from moderntensor.mt_core.config.settings import Settings
 # Cấu hình cho Core testnet
 settings = Settings(
     CORE_NODE_URL="https://rpc.test.btcs.network",
-    CORE_CONTRACT_ADDRESS="0x...",  # ModernTensor contract
-    CORE_TOKEN_ADDRESS="0x...",     # CORE token
+    CORE_CONTRACT_ADDRESS="0x3dACb0Ac7A913Fa94f383f7d6CF0a7BC2b5498DD",  # ModernTensorAI_Optimized Ultra-Low Stake
+    CORE_TOKEN_ADDRESS="0x7B74e4868c8C500D6143CEa53a5d2F94e94c7637",     # Mock CORE token (ultra-low testnet)
+    BTC_TOKEN_ADDRESS="0x44Ed1441D79FfCb76b7D6644dBa930309E0E6F31",      # Mock BTC token (ultra-low testnet)
     BITCOIN_STAKING_ENABLED=True,
     DUAL_STAKING_ENABLED=True
 )

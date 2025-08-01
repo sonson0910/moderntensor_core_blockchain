@@ -1,0 +1,83 @@
+# Consensus Configuration
+consensus:
+  # Cycle timing
+  cycle_length: 600  # seconds (10 minutes)
+  
+  # Slot timing (for compatibility)
+  slot_duration_minutes: 3.5  # 1+1+1+0.5 = 3.5 phút
+  task_assignment_minutes: 1
+  task_execution_minutes: 1
+  consensus_minutes: 1
+  metagraph_update_seconds: 30  # 30 giây cho metagraph update
+  
+  # Slot configuration
+  slot:
+    duration_minutes: 3.5  # 1+1+1+0.5 = 3.5 phút
+    task_assignment_minutes: 1  
+    task_execution_minutes: 1
+    consensus_minutes: 1
+  
+  # Mini-batch configuration
+  mini_batch:
+    enabled: true
+    size: 5  # miners per batch
+    wait_timeout: 30  # seconds
+    interval: 5  # seconds between batches
+  
+  # Timeouts
+  timeouts:
+    score_wait: 180  # seconds
+    p2p_timeout: 5  # seconds
+    network_timeout: 10  # seconds
+    commit_delay: 1.5  # seconds
+  
+  # Selection parameters
+  selection:
+    miners_per_cycle: 5
+    beta_fairness: 0.2  # fairness bonus coefficient
+    max_time_bonus: 10  # cycles
+
+  # Continuous task assignment settings
+  CONSENSUS_NUM_MINERS_TO_SELECT: 10
+  CONSENSUS_MINIBATCH_SIZE: 2
+  CONSENSUS_BATCH_TIMEOUT: 30.0
+  
+  # Trust score parameters
+  trust:
+    delta_decay: 0.01  # decay constant
+    alpha_base: 0.1   # base learning rate
+    k_alpha: 1.0      # learning rate adjustment
+  
+  # Performance calculation
+  performance:
+    max_history_length: 100
+    theta1: 0.1  # Q_task weight (unused)
+    theta2: 0.6  # Quality metric weight
+    theta3: 0.3  # Penalty term weight
+    penalty_threshold: 0.05
+    penalty_k: 10.0
+    penalty_p: 1.0
+  
+  # Weight calculation
+  weights:
+    delta_w: 0.05      # weight decay for miners
+    lambda_balance: 0.5 # stake vs performance balance for validators
+    stake_log_base: 2.718  # e (natural log)
+    time_log_base: 10
+  
+  # Validator requirements
+  validators:
+    min_for_consensus: 2
+    required_percentage: 0.6
+
+# Fraud Detection
+fraud_detection:
+  datum_comparison_tolerance: 0.00001
+  penalty_eta: 0.1  # penalty coefficient
+  jailed_severity_threshold: 0.2
+  max_slash_rate: 0.05  # 5% max stake slash
+
+# DAO Governance
+dao:
+  kg_time_bonus: 1.0  # time bonus coefficient
+  total_time_reference: 31536000  # 1 year in seconds 

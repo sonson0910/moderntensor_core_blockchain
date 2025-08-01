@@ -1,0 +1,24 @@
+{
+  "network": "unknown",
+  "chainId": 1115,
+  "contract": {
+    "name": "ModernTensorAI_v2_Bittensor",
+    "address": "0xaef80dF33B6F9d0c9Fa9BA6F960eb8227fF182f8",
+    "transactionHash": "0x8739a6fd3c05c75dc8937431bdaa314cfe4e3492272db34a28dbfb8d56f74c86",
+    "blockNumber": 32372151,
+    "gasUsed": "2850847"
+  },
+  "tokens": {
+    "coreToken": "0x11d61aB2fD3fAfc556C9ec90F845B54F2378EE13",
+    "btcToken": "0x479dc8f7bE79534A17FfE08facC42Ab2D945BAb8"
+  },
+  "parameters": {
+    "minMinerStake": "50000000000000000",
+    "minValidatorStake": "80000000000000000"
+  },
+  "deployer": {
+    "address": "0xdde6737eDe1ce1fde47209E2eE8fE80E9efF5C33",
+    "balance": "598842240000000000"
+  },
+  "timestamp": "2025-07-29T11:03:14.927Z"
+}

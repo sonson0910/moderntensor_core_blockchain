@@ -1,0 +1,46 @@
+{
+  "miners": [
+    {
+      "address": "0x16102CA8BEF74fb6214AF352989b664BF0e50498",
+      "uid": "ff85b418a988cd2f00725ae1307eef7d272a79c6bfd8c516b8cd82859ff406a7",
+      "subnet_uid": 0,
+      "stake": 0.05,
+      "scaled_last_performance": 0,
+      "scaled_trust_score": 500000,
+      "accumulated_rewards": 0.0,
+      "last_update_time": 1753870571,
+      "performance_history_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "wallet_addr_hash": "de877742b796302d8d4b0e7e156ddf4e437fdadf54f4aa83054ce828085a39af",
+      "status": 1,
+      "registration_time": 1753870571,
+      "api_endpoint": "http://localhost:8101",
+      "active": true
+    }
+  ],
+  "validators": [
+    {
+      "address": "0x352516F491DFB3E6a55bFa9c58C551Ef10267dbB",
+      "uid": "bb1eead238e97f5f497f9f38de4c1e4466b0c2516de22fbf01a780350e5e80dc",
+      "subnet_uid": 0,
+      "stake": 0.08,
+      "scaled_last_performance": 0,
+      "scaled_trust_score": 1000000,
+      "accumulated_rewards": 0.0,
+      "last_update_time": 1753871180,
+      "performance_history_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "wallet_addr_hash": "a615f872568901d226771c395def668c48b2a381b5b255252bf7b1ac0d9919ea",
+      "status": 1,
+      "registration_time": 1753871180,
+      "api_endpoint": "http://localhost:8002",
+      "active": true
+    }
+  ],
+  "network_stats": {
+    "total_miners": 1,
+    "total_validators": 1,
+    "active_miners": 1,
+    "active_validators": 1,
+    "contract_address": "0x60d7b1A881b01D49371eaFfBE2833AE2bcd86441",
+    "network": "Core Testnet"
+  }
+}

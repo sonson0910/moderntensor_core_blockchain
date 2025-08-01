@@ -27,7 +27,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Constants
-EPOCH_START = 1751827027  # 1 hour before current time - slots will start from 0
+# Dynamic EPOCH_START - set to 1 hour before current time to ensure proper slot timing
+import time as time_module
+EPOCH_START = int(time_module.time()) - 3600  # 1 hour before current time
 EXPECTED_VALIDATORS = ['validator_1', 'validator_2', 'validator_3']
 MAJORITY_THRESHOLD = 2  # Need 2 out of 3 validators
 CONSENSUS_CHECK_INTERVAL = 5  # Check every 5 seconds

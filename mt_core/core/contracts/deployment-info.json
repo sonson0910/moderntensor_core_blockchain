@@ -1,0 +1,14 @@
+{
+  "network": "unknown",
+  "chainId": 1115,
+  "modernTensorAddress": "0x5f96BEA61E4ad2222c4B575fD6FFdCEd4DC04358",
+  "coreTokenAddress": "0x1361F20937a69aA841a37Ca943948463b8E6740C",
+  "deployerAddress": "0x25F3D6316017FDF7A4f4e54003b29212a198768f",
+  "deploymentTime": "2025-07-30T16:52:05.969Z",
+  "features": [
+    "UID Update Functions",
+    "Miner Self-Update",
+    "Validator Self-Update",
+    "Admin Update Controls"
+  ]
+}

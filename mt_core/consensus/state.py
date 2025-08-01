@@ -1,26 +1,41 @@
-# sdk/consensus/state.py
+# DEPRECATED - USE state_refactored.py INSTEAD
 """
-Contains logic for consensus calculations, validator penalty checks,
-and preparing/committing state updates to the blockchain.
+⚠️  DEPRECATION WARNING ⚠️
+This file has been DEPRECATED and replaced by modular components.
+
+Please use imports from:
+- state_refactored.py (main orchestrator + backward compatibility)
+- consensus_state_core.py (core consensus logic)
+- consensus_penalties.py (penalty calculations)
+- consensus_blockchain.py (blockchain operations)
+- consensus_validation.py (validation logic)
+- consensus_utils.py (utility functions)
+- consensus_errors.py (error handling)
+- consensus_config.py (configuration)
+
+This file will be removed in a future version.
 """
-import asyncio
-import datetime
-import json
+
+import warnings
 import logging
-import math
-import os
-import statistics
-import time
 import numpy as np
-from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Any, Union, Set
+from collections import defaultdict
+
+warnings.warn(
+    "mt_core.consensus.state is deprecated. Use state_refactored or specific consensus modules instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 
 # Updated imports for Core blockchain
 from web3 import Web3
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 
-from ..config.settings import settings
+# FIXED: Use new configuration system
+from ..config.config_loader import get_config
 from ..core.datatypes import (
     MinerInfo,
     ValidatorInfo,
@@ -49,8 +64,8 @@ from ..metagraph.metagraph_datum import (
     STATUS_INACTIVE,
 )
 
-# Type alias for backward compatibility
-RestClient = Web3  # For backward compatibility with existing function signatures
+# Load configuration
+config = get_config()
 
 EPSILON = 1e-9
 logger = logging.getLogger(__name__)
@@ -96,7 +111,7 @@ def calculate_historical_consistency(
 
 # --- Hàm tìm dữ liệu theo UID trên Aptos ---
 async def find_resource_by_uid(
-    client: RestClient,
+    client: Web3,
     contract_address: str,
     account_address: str,
     resource_type: str,  # Ví dụ: "miner::MinerInfo" hoặc "validator::ValidatorInfo"
@@ -106,7 +121,7 @@ async def find_resource_by_uid(
     Tìm resource dữ liệu trên Aptos theo UID.
 
     Args:
-        client (RestClient): Client Aptos REST API.
+        client (Web3): Client Aptos REST API.
         contract_address (str): Địa chỉ contract ModernTensor.
         account_address (str): Địa chỉ tài khoản chứa resource.
         resource_type (str): Loại resource cần tìm.
@@ -124,7 +139,7 @@ async def find_resource_by_uid(
         full_resource_type = f"{contract_address}::{resource_type}"
 
         # Lấy dữ liệu resource từ tài khoản
-        resources = await client.get_account_resources(account_address)
+        resources = await client.eth.get_account_resources(account_address)
 
         # Lọc resource theo loại
         for resource in resources:
@@ -176,11 +191,9 @@ def _calculate_fraud_severity(reason: str, tolerance: float) -> float:
                     max_deviation_factor = max(max_deviation_factor, deviation_factor)
             except Exception:
                 pass
-    severe_threshold_factor = getattr(
-        settings, "CONSENSUS_SEVERITY_SEVERE_FACTOR", 10.0
-    )
+    severe_threshold_factor = getattr(config, "CONSENSUS_SEVERITY_SEVERE_FACTOR", 10.0)
     moderate_threshold_factor = getattr(
-        settings, "CONSENSUS_SEVERITY_MODERATE_FACTOR", 3.0
+        config, "CONSENSUS_SEVERITY_MODERATE_FACTOR", 3.0
     )
     if max_deviation_factor >= severe_threshold_factor:
         severity = 0.7
@@ -373,7 +386,7 @@ def run_consensus_logic(
         historical_scores = getattr(validator_info, "performance_history", [])
         # Cần lấy tham số max_stddev_penalty từ settings hoặc đặt mặc định
         max_penalty_for_consistency = getattr(
-            settings, "CONSENSUS_METRIC_MAX_STDDEV", 0.2
+            config, "CONSENSUS_METRIC_MAX_STDDEV", 0.2
         )  # Ví dụ: ngưỡng 0.2
         metric_quality = calculate_historical_consistency(
             historical_scores, max_penalty_for_consistency
@@ -507,7 +520,7 @@ async def verify_and_penalize_logic(
     validators_info: Dict[
         str, ValidatorInfo
     ],  # Current state (start of cycle N), MODIFIED IN-PLACE
-    context: RestClient,  # Changed from BlockFrostChainContext to RestClient
+    context: Web3,  # Changed from BlockFrostChainContext to RestClient
     settings: Any,
     contract_address: str,  # Changed from script_hash to contract_address
 ) -> None:
@@ -521,7 +534,7 @@ async def verify_and_penalize_logic(
         previous_calculated_states (Dict[str, Any]): Expected states from cycle N-1.
         validators_info (Dict[str, ValidatorInfo]): Current validator state at the start of cycle N.
             This dictionary is MODIFIED IN-PLACE to update trust scores based on penalties.
-        context (RestClient): Aptos REST client.
+        context (Web3): Aptos REST client.
         settings (Any): Configuration settings.
         contract_address (str): ModernTensor contract address.
     """
@@ -656,7 +669,7 @@ async def verify_and_penalize_logic(
 
             # Update status if needed
             jailed_threshold = getattr(
-                settings, "CONSENSUS_JAILED_SEVERITY_THRESHOLD", 0.2
+                config, "CONSENSUS_JAILED_SEVERITY_THRESHOLD", 0.2
             )
             if (
                 fraud_severity >= jailed_threshold
@@ -681,7 +694,7 @@ async def prepare_miner_updates_logic(
     miners_info: Dict[str, MinerInfo],  # Input miner state (start of cycle)
     final_scores: Dict[str, float],  # Adjusted performance scores (P_adj)
     settings: Any,
-    client: RestClient,  # Changed from context/UTxO to RestClient
+    client: Web3,  # Changed from context/UTxO to RestClient
     contract_address: str,  # Added contract address
 ) -> Dict[str, MinerData]:
     """
@@ -694,7 +707,7 @@ async def prepare_miner_updates_logic(
         miners_info (Dict[str, MinerInfo]): Current miner states at cycle start.
         final_scores (Dict[str, float]): Final consensus scores (P_adj) for miners.
         settings (Any): Configuration settings.
-        client (RestClient): Aptos REST client.
+        client (Web3): Aptos REST client.
         contract_address (str): ModernTensor contract address.
 
     Returns:
@@ -829,7 +842,7 @@ async def prepare_validator_updates_logic(
     self_validator_info: ValidatorInfo,
     calculated_states: Dict[str, Any],
     settings: Any,
-    client: Optional[RestClient],  # Changed from BlockFrostChainContext to RestClient
+    client: Optional[Web3],  # Changed from BlockFrostChainContext to RestClient
     contract_address: str = None,  # Added contract address
 ) -> Dict[str, ValidatorData]:
     """
@@ -841,7 +854,7 @@ async def prepare_validator_updates_logic(
         self_validator_info (ValidatorInfo): The validator's own info.
         calculated_states (Dict[str, Any]): Calculated states from consensus.
         settings (Any): Configuration settings.
-        client (Optional[RestClient]): Aptos REST client.
+        client (Optional[Web3]): Aptos REST client.
         contract_address (str): ModernTensor contract address.
 
     Returns:
@@ -910,7 +923,7 @@ async def prepare_validator_updates_logic(
 
 async def commit_updates_logic(
     validator_updates: Dict[str, ValidatorData],  # Should contain only the self-update
-    client: RestClient,  # Changed from BlockFrostChainContext to RestClient
+    client: Web3,  # Changed from BlockFrostChainContext to RestClient
     account: Account,  # Changed from signing_key to account
     settings: Any,  # Full settings object
     contract_address: str,  # Changed from script_hash/bytes to contract_address
@@ -921,7 +934,7 @@ async def commit_updates_logic(
 
     Args:
         validator_updates (Dict[str, ValidatorData]): Dictionary of validator datum to update (usually just self)
-        client (RestClient): Aptos REST client
+        client (Web3): Aptos REST client
         account (Account): Aptos account for signing transactions
         settings (Any): Full settings object
         contract_address (str): ModernTensor contract address on Aptos

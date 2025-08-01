@@ -64,7 +64,9 @@ def _get_client(network: str) -> ModernTensorCoreClient:
     elif network == "testnet":
         return ModernTensorCoreClient("https://rpc.test.btcs.network")
     elif network == "devnet":
-        return ModernTensorCoreClient("https://rpc.dev.btcs.network")
+        return ModernTensorCoreClient(
+            "https://rpc.test.btcs.network"
+        )  # Use testnet for dev
     else:
         # Default to testnet
         return ModernTensorCoreClient("https://rpc.test.btcs.network")

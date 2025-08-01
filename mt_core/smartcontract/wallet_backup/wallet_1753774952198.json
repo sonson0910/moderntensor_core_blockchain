@@ -1,0 +1,19 @@
+{
+  "address": "0xdde6737eDe1ce1fde47209E2eE8fE80E9efF5C33",
+  "privateKey": "0xa07b6e0db803f9a21ffd1001c76b0aa0b313aaba8faab8c771af47301c4452b4",
+  "mnemonic": "oak safe spatial right penalty isolate animal copper oblige pass ill list",
+  "generatedAt": "2025-07-29T07:42:32.198Z",
+  "purpose": "ModernTensorAI Deployment Wallet",
+  "networks": {
+    "coreTestnet": {
+      "chainId": 1115,
+      "rpc": "https://rpc.test.btcs.network",
+      "explorer": "https://scan.test.btcs.network"
+    },
+    "coreMainnet": {
+      "chainId": 1116,
+      "rpc": "https://rpc.coredao.org",
+      "explorer": "https://scan.coredao.org"
+    }
+  }
+}

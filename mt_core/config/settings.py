@@ -72,63 +72,63 @@ class Settings(BaseSettings):
 
     # --- Các trường cấu hình cho Core blockchain ---
     CORE_NODE_URL: str = Field(
-        default="https://rpc.test.btcs.network", 
+        default="https://rpc.test.btcs.network",
         alias="CORE_NODE_URL",
-        description="Core blockchain RPC URL"
+        description="Core blockchain RPC URL",
     )
     CORE_MAINNET_URL: str = Field(
-        default="https://rpc.coredao.org", 
+        default="https://rpc.coredao.org",
         alias="CORE_MAINNET_URL",
-        description="Core blockchain mainnet RPC URL"
+        description="Core blockchain mainnet RPC URL",
     )
     CORE_CONTRACT_ADDRESS: str = Field(
-        default="0x0000000000000000000000000000000000000000", 
+        default="0xF5e19326A4c266F24404155aaF434D27e1064833",
         alias="CORE_CONTRACT_ADDRESS",
-        description="ModernTensor contract address on Core blockchain"
+        description="ModernTensor contract address on Core blockchain (NEW: with updateMinerScores)",
     )
     CORE_NETWORK: str = Field(
-        default="testnet", 
+        default="testnet",
         alias="CORE_NETWORK",
-        description="Core blockchain network (testnet/mainnet)"
+        description="Core blockchain network (testnet/mainnet)",
     )
     CORE_CHAIN_ID: int = Field(
         default=1115,
-        alias="CORE_CHAIN_ID", 
-        description="Core blockchain chain ID (1115 for testnet, 1116 for mainnet)"
+        alias="CORE_CHAIN_ID",
+        description="Core blockchain chain ID (1115 for testnet, 1116 for mainnet)",
     )
     CORE_TOKEN_ADDRESS: str = Field(
-        default="0x40375C92d9FAf44d2f9db9Bd9ba41a3317a2404f",
+        default="0x1361F20937a69aA841a37Ca943948463b8E6740C",
         alias="CORE_TOKEN_ADDRESS",
-        description="CORE token contract address"
+        description="CORE token contract address",
     )
-    
+
     # --- Bitcoin staking configuration ---
     BITCOIN_STAKING_ENABLED: bool = Field(
         default=True,
         alias="BITCOIN_STAKING_ENABLED",
-        description="Enable Bitcoin staking integration"
+        description="Enable Bitcoin staking integration",
     )
     BITCOIN_MIN_LOCK_TIME: int = Field(
         default=86400,  # 24 hours
         alias="BITCOIN_MIN_LOCK_TIME",
-        description="Minimum Bitcoin lock time in seconds"
+        description="Minimum Bitcoin lock time in seconds",
     )
     BITCOIN_RPC_URL: str = Field(
         default="https://bitcoin-rpc.com",
-        alias="BITCOIN_RPC_URL", 
-        description="Bitcoin RPC URL for staking verification"
+        alias="BITCOIN_RPC_URL",
+        description="Bitcoin RPC URL for staking verification",
     )
-    
+
     # --- Dual staking configuration ---
     DUAL_STAKING_ENABLED: bool = Field(
         default=True,
         alias="DUAL_STAKING_ENABLED",
-        description="Enable dual staking (Bitcoin + CORE)"
+        description="Enable dual staking (Bitcoin + CORE)",
     )
     DUAL_STAKING_MIN_CORE_RATIO: float = Field(
         default=0.1,
         alias="DUAL_STAKING_MIN_CORE_RATIO",
-        description="Minimum CORE to Bitcoin ratio for dual staking"
+        description="Minimum CORE to Bitcoin ratio for dual staking",
     )
 
     # --- Các trường cấu hình gốc của bạn ---
@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     HOTKEY_NAME: str = Field(default="hk1", alias="HOTKEY_NAME")
     HOTKEY_PASSWORD: str = Field(default="sonlearn2003", alias="HOTKEY_PASSWORD")
     ACCOUNT_BASE_DIR: str = Field(default="accounts", alias="ACCOUNT_BASE_DIR")
-    
+
     # --- Encryption Settings ---
     ENCRYPTION_PBKDF2_ITERATIONS: int = Field(
         default=100_000,  # Standard default for PBKDF2HMAC
@@ -177,44 +177,49 @@ class Settings(BaseSettings):
         alias="CONSENSUS_CYCLE_LENGTH",
         description="Độ dài của một chu kỳ đồng thuận tính bằng giây.",
     )
-    
+
     # --- Cardano-style Slot Configuration ---
     SLOT_DURATION_MINUTES: int = Field(
-        default=20,  # 20 phút cho testing, 60 phút cho production
+        default=4,  # 4 phút cho testing (bao gồm 30s metagraph update)
         alias="SLOT_DURATION_MINUTES",
-        description="Tổng thời gian của một slot (phút) - Cardano pattern"
+        description="Tổng thời gian của một slot (phút) - Cardano pattern",
     )
     TASK_ASSIGNMENT_MINUTES: int = Field(
-        default=5,  # 5 phút đầu để giao task
-        alias="TASK_ASSIGNMENT_MINUTES", 
-        description="Thời gian giao task trong slot (phút) - Cardano pattern"
+        default=1,  # 1 phút đầu để giao task
+        alias="TASK_ASSIGNMENT_MINUTES",
+        description="Thời gian giao task trong slot (phút) - Cardano pattern",
     )
     TASK_EXECUTION_MINUTES: int = Field(
-        default=10,  # 10 phút để miners thực hiện task
+        default=1,  # 1 phút để miners thực hiện task
         alias="TASK_EXECUTION_MINUTES",
-        description="Thời gian thực hiện task trong slot (phút) - Cardano pattern"
+        description="Thời gian thực hiện task trong slot (phút) - Cardano pattern",
     )
     CONSENSUS_MINUTES: int = Field(
-        default=5,  # 5 phút cuối để consensus
+        default=1,  # 1 phút cuối để consensus
         alias="CONSENSUS_MINUTES",
-        description="Thời gian consensus trong slot (phút) - Cardano pattern"
+        description="Thời gian consensus trong slot (phút) - Cardano pattern",
     )
-    
+    METAGRAPH_UPDATE_SECONDS: int = Field(
+        default=30,  # 30 giây để update metagraph
+        alias="METAGRAPH_UPDATE_SECONDS",
+        description="Thời gian update metagraph trong slot (giây) - Cardano pattern",
+    )
+
     # --- Cardano-style Consensus Timing ---
     CONSENSUS_SCORE_WAIT_TIMEOUT: int = Field(
         default=180,  # 3 phút chờ scores từ validators khác
         alias="CONSENSUS_SCORE_WAIT_TIMEOUT",
-        description="Timeout chờ consensus scores từ validators khác (giây) - Cardano pattern"
+        description="Timeout chờ consensus scores từ validators khác (giây) - Cardano pattern",
     )
     CONSENSUS_P2P_TIMEOUT: int = Field(
         default=5,  # 5 giây timeout cho P2P calls
-        alias="CONSENSUS_P2P_TIMEOUT", 
-        description="Timeout cho P2P score broadcast (giây) - Cardano pattern"
+        alias="CONSENSUS_P2P_TIMEOUT",
+        description="Timeout cho P2P score broadcast (giây) - Cardano pattern",
     )
     CONSENSUS_SLOT_CHECK_INTERVAL: int = Field(
         default=30,  # Kiểm tra phase mỗi 30 giây
         alias="CONSENSUS_SLOT_CHECK_INTERVAL",
-        description="Khoảng thời gian kiểm tra slot phase (giây) - Cardano pattern"
+        description="Khoảng thời gian kiểm tra slot phase (giây) - Cardano pattern",
     )
     CONSENSUS_QUERY_INTERVAL_SECONDS: float = Field(
         default=0.5,
@@ -497,7 +502,9 @@ class Settings(BaseSettings):
         None, alias="VALIDATOR_1_ADDRESS", description="Address for validator 1"
     )
     VALIDATOR_1_API_ENDPOINT: Optional[str] = Field(
-        None, alias="VALIDATOR_1_API_ENDPOINT", description="API endpoint for validator 1"
+        None,
+        alias="VALIDATOR_1_API_ENDPOINT",
+        description="API endpoint for validator 1",
     )
     VALIDATOR_1_PORT: Optional[int] = Field(
         None, alias="VALIDATOR_1_PORT", description="Port for validator 1"
@@ -510,7 +517,9 @@ class Settings(BaseSettings):
         None, alias="VALIDATOR_2_ADDRESS", description="Address for validator 2"
     )
     VALIDATOR_2_API_ENDPOINT: Optional[str] = Field(
-        None, alias="VALIDATOR_2_API_ENDPOINT", description="API endpoint for validator 2"
+        None,
+        alias="VALIDATOR_2_API_ENDPOINT",
+        description="API endpoint for validator 2",
     )
     VALIDATOR_2_PORT: Optional[int] = Field(
         None, alias="VALIDATOR_2_PORT", description="Port for validator 2"
@@ -523,7 +532,9 @@ class Settings(BaseSettings):
         None, alias="VALIDATOR_3_ADDRESS", description="Address for validator 3"
     )
     VALIDATOR_3_API_ENDPOINT: Optional[str] = Field(
-        None, alias="VALIDATOR_3_API_ENDPOINT", description="API endpoint for validator 3"
+        None,
+        alias="VALIDATOR_3_API_ENDPOINT",
+        description="API endpoint for validator 3",
     )
     VALIDATOR_3_PORT: Optional[int] = Field(
         None, alias="VALIDATOR_3_PORT", description="Port for validator 3"
@@ -560,75 +571,79 @@ class Settings(BaseSettings):
     HTTP_CLIENT_TIMEOUT: int = Field(
         default=30,
         alias="HTTP_CLIENT_TIMEOUT",
-        description="HTTP client timeout in seconds"
+        description="HTTP client timeout in seconds",
     )
     HTTP_CLIENT_MAX_CONNECTIONS: int = Field(
         default=100,
-        alias="HTTP_CLIENT_MAX_CONNECTIONS", 
-        description="Maximum number of HTTP connections"
+        alias="HTTP_CLIENT_MAX_CONNECTIONS",
+        description="Maximum number of HTTP connections",
     )
 
     # --- Consensus Retry Settings ---
     CONSENSUS_MAX_RETRIES: int = Field(
         default=3,
         alias="CONSENSUS_MAX_RETRIES",
-        description="Maximum number of retries for consensus operations"
+        description="Maximum number of retries for consensus operations",
     )
     CONSENSUS_RETRY_DELAY_SECONDS: float = Field(
         default=1.0,
         alias="CONSENSUS_RETRY_DELAY_SECONDS",
-        description="Delay in seconds between consensus retries"
+        description="Delay in seconds between consensus retries",
     )
 
     # --- Circuit Breaker Settings ---
     CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = Field(
         default=5,
         alias="CIRCUIT_BREAKER_FAILURE_THRESHOLD",
-        description="Number of failures before circuit breaker opens"
+        description="Number of failures before circuit breaker opens",
     )
     CIRCUIT_BREAKER_RESET_TIMEOUT: int = Field(
         default=60,
-        alias="CIRCUIT_BREAKER_RESET_TIMEOUT", 
-        description="Time in seconds before circuit breaker attempts to reset"
+        alias="CIRCUIT_BREAKER_RESET_TIMEOUT",
+        description="Time in seconds before circuit breaker attempts to reset",
     )
 
     # --- Rate Limiter Settings ---
     RATE_LIMITER_MAX_REQUESTS: int = Field(
         default=100,
         alias="RATE_LIMITER_MAX_REQUESTS",
-        description="Maximum requests allowed in time window"
+        description="Maximum requests allowed in time window",
     )
     RATE_LIMITER_TIME_WINDOW: int = Field(
         default=60,
         alias="RATE_LIMITER_TIME_WINDOW",
-        description="Time window in seconds for rate limiting"
+        description="Time window in seconds for rate limiting",
     )
 
     def get_validator_config(self, validator_id: int = 1) -> dict:
         """Get configuration for a specific validator"""
         if validator_id == 1:
             return {
-                "private_key": self.VALIDATOR_1_PRIVATE_KEY or self.VALIDATOR_PRIVATE_KEY,
+                "private_key": self.VALIDATOR_1_PRIVATE_KEY
+                or self.VALIDATOR_PRIVATE_KEY,
                 "address": self.VALIDATOR_1_ADDRESS or self.VALIDATOR_ADDRESS,
-                "api_endpoint": self.VALIDATOR_1_API_ENDPOINT or self.VALIDATOR_API_ENDPOINT,
-                "port": self.VALIDATOR_1_PORT or 8001
+                "api_endpoint": self.VALIDATOR_1_API_ENDPOINT
+                or self.VALIDATOR_API_ENDPOINT,
+                "port": self.VALIDATOR_1_PORT or 8001,
             }
         elif validator_id == 2:
             return {
                 "private_key": self.VALIDATOR_2_PRIVATE_KEY,
                 "address": self.VALIDATOR_2_ADDRESS,
                 "api_endpoint": self.VALIDATOR_2_API_ENDPOINT,
-                "port": self.VALIDATOR_2_PORT or 8002
+                "port": self.VALIDATOR_2_PORT or 8002,
             }
         elif validator_id == 3:
             return {
                 "private_key": self.VALIDATOR_3_PRIVATE_KEY,
                 "address": self.VALIDATOR_3_ADDRESS,
                 "api_endpoint": self.VALIDATOR_3_API_ENDPOINT,
-                "port": self.VALIDATOR_3_PORT or 8003
+                "port": self.VALIDATOR_3_PORT or 8003,
             }
         else:
-            raise ValueError(f"Invalid validator_id: {validator_id}. Must be 1, 2, or 3")
+            raise ValueError(
+                f"Invalid validator_id: {validator_id}. Must be 1, 2, or 3"
+            )
 
     def get_miner_config(self, miner_id: int = 1) -> dict:
         """Get configuration for a specific miner"""
@@ -637,14 +652,14 @@ class Settings(BaseSettings):
                 "private_key": self.MINER_1_PRIVATE_KEY or self.MINER_PRIVATE_KEY,
                 "address": self.MINER_1_ADDRESS or self.MINER_ADDRESS,
                 "api_endpoint": self.MINER_1_API_ENDPOINT,
-                "port": self.MINER_1_PORT or 8100
+                "port": self.MINER_1_PORT or 8100,
             }
         elif miner_id == 2:
             return {
                 "private_key": self.MINER_2_PRIVATE_KEY,
                 "address": self.MINER_2_ADDRESS,
                 "api_endpoint": self.MINER_2_API_ENDPOINT,
-                "port": self.MINER_2_PORT or 8101
+                "port": self.MINER_2_PORT or 8101,
             }
         else:
             raise ValueError(f"Invalid miner_id: {miner_id}. Must be 1 or 2")
@@ -659,13 +674,13 @@ class Settings(BaseSettings):
     def validate_network(cls, value: Optional[str]):
         if value is None:
             return "https://testnet.aptoslabs.com/v1"
-        
+
         value_str = str(value).strip()
-        
+
         # If already full URL, keep it
         if value_str.startswith("http://") or value_str.startswith("https://"):
             return value_str
-        
+
         # Otherwise convert network name to full URL
         normalized = value_str.lower()
         if normalized == "mainnet":

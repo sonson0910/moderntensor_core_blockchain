@@ -1,0 +1,27 @@
+{
+  "network": "unknown",
+  "chainId": 31337,
+  "contractName": "ModernTensorAI_Optimized",
+  "contractAddress": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+  "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "coreToken": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "btcToken": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+  "transactionHash": "0x8f4d6dddf50a3c5fce9deaed23846cfc32d0c2571ce45b071e58280efbd5c5ef",
+  "blockNumber": 3,
+  "deployedAt": "2025-07-29T07:39:03.316Z",
+  "parameters": {
+    "coreToken": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "btcToken": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    "minConsensusValidators": 3,
+    "consensusThreshold": 6667,
+    "minMinerStake": {
+      "type": "BigNumber",
+      "hex": "0x056bc75e2d63100000"
+    },
+    "minValidatorStake": {
+      "type": "BigNumber",
+      "hex": "0x3635c9adc5dea00000"
+    },
+    "btcBoostMultiplier": 15000
+  }
+}

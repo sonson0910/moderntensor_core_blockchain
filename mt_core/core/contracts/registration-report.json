@@ -1,0 +1,51 @@
+{
+  "contractAddress": "0x5f96BEA61E4ad2222c4B575fD6FFdCEd4DC04358",
+  "network": "unknown",
+  "chainId": 1115,
+  "timestamp": "2025-07-30T16:54:13.721Z",
+  "totalEntities": 5,
+  "successful": 5,
+  "failed": 0,
+  "results": [
+    {
+      "success": true,
+      "entity": "subnet1_miner_001",
+      "type": "miner",
+      "address": "0xd89fBAbb72190ed22F012ADFC693ad974bAD3005",
+      "txHash": "0x928466637b9ef8feebdb6b09adcdafde49ea6e4f2151f279d1f96d59e68a258b",
+      "blockNumber": 32407944
+    },
+    {
+      "success": true,
+      "entity": "subnet1_miner_002",
+      "type": "miner",
+      "address": "0x16102CA8BEF74fb6214AF352989b664BF0e50498",
+      "txHash": "0x9e8097909209598025c8e56c7bfcf6fbd09c581aec7c9adff132f36e46ab948c",
+      "blockNumber": 32407950
+    },
+    {
+      "success": true,
+      "entity": "subnet1_validator_001",
+      "type": "validator",
+      "address": "0x25F3D6316017FDF7A4f4e54003b29212a198768f",
+      "txHash": "0xf2c676b5e233983f2b1de78a74823363c3195f3fd7dbd646bbe5a7a9dd247386",
+      "blockNumber": 32407957
+    },
+    {
+      "success": true,
+      "entity": "subnet1_validator_002",
+      "type": "validator",
+      "address": "0x352516F491DFB3E6a55bFa9c58C551Ef10267dbB",
+      "txHash": "0x5507d7e26d1964a26c88782155955b7c1e0c5c201e36badec17b36d127e2896e",
+      "blockNumber": 32407964
+    },
+    {
+      "success": true,
+      "entity": "subnet1_validator_003",
+      "type": "validator",
+      "address": "0x0469C6644c07F6e860Af368Af8104F8D8829a78e",
+      "txHash": "0x95a3a98d520f13f6ce66012d4ea8575722b1d3c5bf31e1cb6d3667b0c322396e",
+      "blockNumber": 32407971
+    }
+  ]
+}

@@ -27,7 +27,7 @@ from .validator_node_tasks import ValidatorNodeTasks
 from .validator_node_consensus import ValidatorNodeConsensus
 from .validator_node_network import ValidatorNodeNetwork
 from .slot_coordinator import SlotPhase
-from ..config.settings import settings
+from ..config.config_loader import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,9 @@ class ValidatorNode:
         state_file: str = "validator_state.json",
         consensus_mode: str = "continuous",
         batch_wait_time: float = 30.0,
+        api_port: Optional[int] = None,
+        enable_flexible_consensus: bool = False,
+        flexible_mode: str = "balanced",
     ):
         """
         Initialize the refactored ValidatorNode.
@@ -64,7 +67,19 @@ class ValidatorNode:
             state_file: Path to state persistence file
             consensus_mode: "continuous" or "sequential"
             batch_wait_time: Wait time between batches
+            api_port: Port for API server (optional, extracted from validator_info if not provided)
         """
+        # Extract port from validator_info if not provided
+        if api_port is None and hasattr(validator_info, "api_endpoint"):
+            try:
+                import re
+
+                endpoint = validator_info.api_endpoint
+                port_match = re.search(r":(\d+)", endpoint) if endpoint else None
+                api_port = int(port_match.group(1)) if port_match else None
+            except (AttributeError, ValueError):
+                api_port = None
+
         # Initialize core module
         self.core = ValidatorNodeCore(
             validator_info=validator_info,
@@ -74,12 +89,17 @@ class ValidatorNode:
             state_file=state_file,
             consensus_mode=consensus_mode,
             batch_wait_time=batch_wait_time,
+            api_port=api_port,
         )
 
         # Initialize functional modules
         self.tasks = ValidatorNodeTasks(self.core)
         self.consensus = ValidatorNodeConsensus(self.core)
         self.network = ValidatorNodeNetwork(self.core)
+        
+        # Cross-reference tasks module in core for consensus access
+        self.core.tasks = self.tasks
+        self.core.validator_instance = self
 
         # Aliases for backward compatibility
         self.uid_prefix = self.core.uid_prefix
@@ -89,8 +109,17 @@ class ValidatorNode:
         self.main_task = None
         self.health_monitor_task = None
 
+        # === FLEXIBLE CONSENSUS INTEGRATION ===
+        self.enable_flexible_consensus = enable_flexible_consensus
+        self.flexible_mode = flexible_mode
+        self.flexible_consensus_enabled = False
+
+        if enable_flexible_consensus:
+            self._setup_flexible_consensus()
+
         logger.info(
             f"✅ {self.uid_prefix} Refactored ValidatorNode initialized successfully"
+            f" (Flexible Consensus: {'✅' if self.flexible_consensus_enabled else '❌'})"
         )
 
     # === Core Properties (Backward Compatibility) ===
@@ -130,12 +159,18 @@ class ValidatorNode:
             api_port: Port for API server (optional)
         """
         logger.info(f"{self.uid_prefix} Starting refactored ValidatorNode")
+        logger.debug(
+            f"{self.uid_prefix} start() received api_port parameter: {api_port}"
+        )
 
         try:
             # Load initial metagraph data
             await self.core.load_metagraph_data()
 
             # Start network services
+            logger.debug(
+                f"{self.uid_prefix} Calling network.start_api_server with api_port: {api_port}"
+            )
             await self.network.start_api_server(api_port)
 
             # Start health monitoring
@@ -175,6 +210,39 @@ class ValidatorNode:
     async def _main_operation_loop(self):
         """Main operation loop for the validator node."""
         logger.info(f"{self.uid_prefix} Starting main operation loop")
+
+        # Choose operation mode
+        if self.flexible_consensus_enabled:
+            await self._flexible_consensus_loop()
+        else:
+            await self._traditional_slot_loop()
+
+    async def _flexible_consensus_loop(self):
+        """Flexible consensus operation loop."""
+        logger.info(f"{self.uid_prefix} Starting flexible consensus loop")
+
+        while True:
+            try:
+                # Run flexible consensus cycle
+                if hasattr(self.consensus, "run_flexible_consensus_cycle"):
+                    await self.consensus.run_flexible_consensus_cycle()
+                else:
+                    logger.warning(
+                        f"{self.uid_prefix} Flexible consensus not available, falling back to traditional"
+                    )
+                    await self._traditional_slot_loop()
+                    break
+
+                # Wait before next cycle
+                await asyncio.sleep(self.core.batch_wait_time)
+
+            except Exception as e:
+                logger.error(f"{self.uid_prefix} Error in flexible consensus loop: {e}")
+                await asyncio.sleep(self.core.batch_wait_time)
+
+    async def _traditional_slot_loop(self):
+        """Traditional slot-based operation loop."""
+        logger.info(f"{self.uid_prefix} Starting traditional slot-based loop")
 
         while True:
             try:
@@ -218,7 +286,30 @@ class ValidatorNode:
 
         try:
             # Check consensus mode for coordination
-            if self.core.consensus_mode == "flexible":
+            if self.core.consensus_mode == "continuous":
+                # Continuous mode: Assign tasks immediately without coordination
+                logger.info(
+                    f"{self.uid_prefix} Continuous mode: assigning tasks for slot {slot}"
+                )
+
+                # Select miners for this slot
+                selected_miners = self.tasks.cardano_select_miners(slot)
+                logger.info(
+                    f"{self.uid_prefix} Selected {len(selected_miners)} miners for slot {slot}"
+                )
+
+                if selected_miners:
+                    # Send tasks to selected miners using minibatch approach
+                    await self.tasks.cardano_send_minibatches(slot, selected_miners)
+                    logger.info(
+                        f"{self.uid_prefix} Minibatch tasks completed for {len(selected_miners)} miners in slot {slot}"
+                    )
+                else:
+                    logger.warning(
+                        f"{self.uid_prefix} No miners selected for slot {slot} - check miner availability"
+                    )
+
+            elif self.core.consensus_mode == "flexible":
                 # Flexible mode: Enter task assignment independently
                 await self.core.slot_coordinator.register_phase_entry(
                     slot, SlotPhase.TASK_ASSIGNMENT
@@ -285,12 +376,20 @@ class ValidatorNode:
                 # Broadcast scores to other validators
                 await self.consensus.broadcast_scores({str(slot): scores})
 
-                # Wait for consensus
-                await self.consensus.wait_for_consensus(slot)
+                # Wait for consensus scores from other validators
+                consensus_timeout = 60.0  # 60 seconds timeout
+                await self.consensus.wait_for_consensus_scores(consensus_timeout)
+
+                # Finalize consensus by aggregating all scores (local + P2P)
+                final_scores = await self.consensus.finalize_consensus(slot)
 
                 logger.info(
-                    f"{self.uid_prefix} Consensus scoring completed for slot {slot}"
+                    f"{self.uid_prefix} Consensus finalized for slot {slot}: {len(final_scores)} final scores"
                 )
+
+            logger.info(
+                f"{self.uid_prefix} Consensus scoring completed for slot {slot}"
+            )
 
         except Exception as e:
             logger.error(f"{self.uid_prefix} Error in consensus scoring phase: {e}")
@@ -376,7 +475,106 @@ class ValidatorNode:
                 "consensus": True,
                 "network": self.network.http_client is not None,
             },
+            "flexible_consensus": self.flexible_consensus_enabled,
         }
+
+    # === FLEXIBLE CONSENSUS METHODS ===
+
+    def _setup_flexible_consensus(self):
+        """Setup flexible consensus for this validator"""
+        try:
+            logger.info(
+                f"🔄 {self.uid_prefix} Setting up flexible consensus in {self.flexible_mode} mode"
+            )
+
+            # Enable flexible mode in consensus
+            if hasattr(self.consensus, "enable_flexible_mode"):
+                success = self.consensus.enable_flexible_mode(
+                    auto_detect_epoch=True, adaptive_timing=True
+                )
+
+                if success:
+                    self.flexible_consensus_enabled = True
+                    logger.info(
+                        f"✅ {self.uid_prefix} Flexible consensus setup completed"
+                    )
+                else:
+                    logger.error(
+                        f"❌ {self.uid_prefix} Failed to enable flexible mode in consensus"
+                    )
+            else:
+                logger.error(
+                    f"❌ {self.uid_prefix} Consensus does not support flexible mode"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.uid_prefix} Failed to setup flexible consensus: {e}"
+            )
+            self.flexible_consensus_enabled = False
+
+    def enable_flexible_consensus_mode(self, mode: str = None) -> bool:
+        """
+        Enable flexible consensus mode for this validator.
+
+        Args:
+            mode: Optional mode override ('ultra_flexible', 'balanced', 'performance')
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if mode:
+            self.flexible_mode = mode
+
+        if not self.flexible_consensus_enabled:
+            self._setup_flexible_consensus()
+        elif hasattr(self.consensus, "enable_flexible_mode"):
+            self.consensus.enable_flexible_mode()
+
+        return self.flexible_consensus_enabled
+
+    async def run_consensus_cycle_flexible(self, slot: Optional[int] = None) -> bool:
+        """
+        Run a single flexible consensus cycle.
+
+        Args:
+            slot: Optional slot number (auto-detected if None)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.flexible_consensus_enabled:
+            logger.warning(f"{self.uid_prefix} Flexible consensus not enabled")
+            return False
+
+        try:
+            if hasattr(self.consensus, "run_flexible_consensus_cycle"):
+                await self.consensus.run_flexible_consensus_cycle(slot)
+                return True
+            else:
+                logger.error(
+                    f"{self.uid_prefix} Flexible consensus cycle not available"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"{self.uid_prefix} Error in flexible consensus cycle: {e}")
+            return False
+
+    def get_flexible_consensus_status(self) -> Dict[str, Any]:
+        """Get flexible consensus status and metrics"""
+        base_status = {
+            "validator_uid": self.info.uid,
+            "flexible_consensus_enabled": self.flexible_consensus_enabled,
+            "flexible_mode": self.flexible_mode,
+        }
+
+        if self.flexible_consensus_enabled and hasattr(
+            self.consensus, "get_flexible_status"
+        ):
+            base_status.update(self.consensus.get_flexible_status())
+
+        return base_status
 
     # === Legacy Methods Support ===
 
@@ -396,7 +594,11 @@ class ValidatorNode:
 
     async def __aenter__(self):
         """Async context manager entry."""
-        await self.start()
+        # Pass the api_port from core to start method
+        api_port = getattr(self.core, "api_port", None)
+        logger.debug(f"{self.uid_prefix} __aenter__ passing api_port: {api_port}")
+
+        await self.start(api_port=api_port)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -456,7 +658,8 @@ async def example_usage():
     )
 
     # Create Core client and account
-    core_client = Web3(Web3.HTTPProvider(settings.CORE_RPC_URL))
+    config = get_config()
+    core_client = Web3(Web3.HTTPProvider(config.get_node_url()))
     account = Account.create()
     contract_address = "0x456..."
 

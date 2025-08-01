@@ -181,3 +181,21 @@ def to_move_resource(data_obj: Any) -> Dict[str, Any]:
 # --- Legacy aliases for backward compatibility ---
 MinerDatum = MinerData
 ValidatorDatum = ValidatorData
+
+
+# Missing datum classes
+from dataclasses import dataclass
+
+@dataclass
+class SubnetStaticDatum:
+    """Static subnet data"""
+    subnet_id: int
+    name: str = ""
+    description: str = ""
+    
+@dataclass 
+class SubnetDynamicDatum:
+    """Dynamic subnet data"""
+    subnet_id: int
+    active_miners: int = 0
+    active_validators: int = 0

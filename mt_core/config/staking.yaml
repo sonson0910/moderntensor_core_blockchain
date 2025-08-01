@@ -1,0 +1,137 @@
+# Dual Staking Configuration
+staking:
+  # Dual staking feature
+  dual_staking:
+    enabled: true
+    min_core_ratio: 0.1  # minimum CORE to Bitcoin ratio
+  
+  # Staking tiers and thresholds (in CORE tokens)
+  tiers:
+    base:
+      multiplier: 1.0
+      min_core: 100      # 100 CORE
+      min_bitcoin: 0     # 0 BTC
+      
+    boost:
+      multiplier: 1.25
+      min_core: 1000     # 1,000 CORE  
+      min_bitcoin: 0.01  # 0.01 BTC
+      
+    super:
+      multiplier: 1.5
+      min_core: 10000    # 10,000 CORE
+      min_bitcoin: 0.1   # 0.1 BTC
+      
+    satoshi:
+      multiplier: 2.0
+      min_core: 50000    # 50,000 CORE
+      min_bitcoin: 1.0   # 1 BTC
+
+  # Minimum stake requirements
+  minimums:
+    miner_stake: 100      # 100 CORE minimum for miners
+    validator_stake: 1000 # 1,000 CORE minimum for validators
+  
+  # Bitcoin staking specific
+  bitcoin:
+    # Lock time requirements
+    min_lock_time: 86400    # 24 hours
+    max_lock_time: 31536000 # 1 year
+    
+    # Verification settings
+    min_confirmations: 6
+    verification_timeout: 3600  # 1 hour
+    
+    # Supported methods
+    timelock_method: "CLTV"  # CheckLockTimeVerify
+    custody_type: "self"     # self-custodial
+    
+    # Oracle configuration
+    oracle:
+      enabled: true
+      update_interval: 600    # 10 minutes
+      price_feeds:
+        - "chainlink"
+        - "coinbase"
+        - "binance"
+
+  # Reward distribution
+  rewards:
+    # Base APY rates
+    base_apy:
+      core_only: 0.05      # 5% APY for CORE only
+      bitcoin_staking: 0.03 # 3% APY from Bitcoin staking
+    
+    # Distribution intervals
+    distribution:
+      interval: 86400        # daily distribution
+      min_claim_amount: 1    # 1 CORE minimum to claim
+      gas_cost_threshold: 2  # don't claim if gas > 2x rewards
+    
+    # Fee structure
+    fees:
+      performance_fee: 0.02  # 2% performance fee
+      withdrawal_fee: 0.001  # 0.1% withdrawal fee
+      early_unstake_penalty: 0.05  # 5% penalty for early unstaking
+
+  # Slashing parameters
+  slashing:
+    enabled: true
+    
+    # Slash conditions
+    conditions:
+      malicious_behavior: 0.1    # 10% slash for malicious behavior
+      downtime_threshold: 0.05   # 5% slash for extended downtime
+      consensus_deviation: 0.02  # 2% slash for consensus deviation
+    
+    # Slash distribution
+    distribution:
+      burn_percentage: 0.5       # 50% burned
+      treasury_percentage: 0.3   # 30% to treasury
+      informant_percentage: 0.2  # 20% to informant
+
+  # Unstaking parameters
+  unstaking:
+    # Cooldown periods (in seconds)
+    cooldown:
+      core_tokens: 604800      # 7 days for CORE
+      bitcoin_stakes: 1209600  # 14 days for Bitcoin
+    
+    # Unbonding process
+    unbonding:
+      max_concurrent: 7        # max 7 concurrent unbonding requests
+      partial_unstake: true    # allow partial unstaking
+      min_unstake_amount: 10   # 10 CORE minimum unstake
+
+# Economics and Incentives
+economics:
+  # Token emission
+  emission:
+    daily_emission: 10000      # 10,000 CORE per day
+    halvening_interval: 1460   # days (4 years)
+    max_supply: 21000000       # 21M CORE max supply
+  
+  # Incentive distribution
+  incentive_split:
+    miners: 0.7               # 70% to miners
+    validators: 0.25          # 25% to validators  
+    treasury: 0.05            # 5% to treasury
+  
+  # Dynamic adjustments
+  adjustments:
+    difficulty_adjustment: 2016  # blocks
+    reward_adjustment: 10080     # blocks (weekly)
+    
+# Network Economics
+network:
+  # Subnet economics
+  subnet:
+    creation_cost: 1000        # 1,000 CORE to create subnet
+    registration_cost: 100     # 100 CORE to register in subnet
+    maintenance_fee: 10        # 10 CORE per epoch
+  
+  # Governance
+  governance:
+    proposal_deposit: 10000    # 10,000 CORE proposal deposit
+    voting_period: 604800      # 7 days voting period
+    execution_delay: 259200    # 3 days execution delay 

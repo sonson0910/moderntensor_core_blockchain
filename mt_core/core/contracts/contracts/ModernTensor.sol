@@ -159,6 +159,18 @@ contract ModernTensor is Ownable, ReentrancyGuard, Pausable {
         uint256 tier
     );
     
+    event MinerUIDUpdated(
+        address indexed miner,
+        bytes32 indexed oldUID,
+        bytes32 indexed newUID
+    );
+    
+    event ValidatorUIDUpdated(
+        address indexed validator,
+        bytes32 indexed oldUID,
+        bytes32 indexed newUID
+    );
+    
     // ===== Constructor =====
     
     constructor(address _coreToken) {
@@ -408,6 +420,52 @@ contract ModernTensor is Ownable, ReentrancyGuard, Pausable {
         
         validators[validatorAddr].status = newStatus;
         validators[validatorAddr].lastUpdateTimestamp = block.timestamp;
+    }
+    
+    // ===== UID Update Functions =====
+    
+    function updateMinerUID(address minerAddr, bytes32 newUID) external onlyOwner {
+        require(miners[minerAddr].uid != bytes32(0), "Miner not found");
+        require(newUID != bytes32(0), "Invalid UID");
+        
+        bytes32 oldUID = miners[minerAddr].uid;
+        miners[minerAddr].uid = newUID;
+        miners[minerAddr].lastUpdateTimestamp = block.timestamp;
+        
+        emit MinerUIDUpdated(minerAddr, oldUID, newUID);
+    }
+    
+    function updateValidatorUID(address validatorAddr, bytes32 newUID) external onlyOwner {
+        require(validators[validatorAddr].uid != bytes32(0), "Validator not found");
+        require(newUID != bytes32(0), "Invalid UID");
+        
+        bytes32 oldUID = validators[validatorAddr].uid;
+        validators[validatorAddr].uid = newUID;
+        validators[validatorAddr].lastUpdateTimestamp = block.timestamp;
+        
+        emit ValidatorUIDUpdated(validatorAddr, oldUID, newUID);
+    }
+    
+    function updateMinerUIDSelf(bytes32 newUID) external {
+        require(miners[msg.sender].uid != bytes32(0), "Miner not registered");
+        require(newUID != bytes32(0), "Invalid UID");
+        
+        bytes32 oldUID = miners[msg.sender].uid;
+        miners[msg.sender].uid = newUID;
+        miners[msg.sender].lastUpdateTimestamp = block.timestamp;
+        
+        emit MinerUIDUpdated(msg.sender, oldUID, newUID);
+    }
+    
+    function updateValidatorUIDSelf(bytes32 newUID) external {
+        require(validators[msg.sender].uid != bytes32(0), "Validator not registered");
+        require(newUID != bytes32(0), "Invalid UID");
+        
+        bytes32 oldUID = validators[msg.sender].uid;
+        validators[msg.sender].uid = newUID;
+        validators[msg.sender].lastUpdateTimestamp = block.timestamp;
+        
+        emit ValidatorUIDUpdated(msg.sender, oldUID, newUID);
     }
     
     // ===== View Functions =====

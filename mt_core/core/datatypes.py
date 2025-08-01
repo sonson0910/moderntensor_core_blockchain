@@ -144,3 +144,33 @@ class CycleConsensusResults(BaseModel):
         description="Timestamp khi kết quả được công bố/cache",
     )
     # signature: Optional[str] = Field(None, description="Chữ ký của validator trên hash(results) - triển khai sau")
+
+
+# === TASK ASSIGNMENT MODELS ===
+
+class TaskModel(BaseModel):
+    """Task model for miner assignments"""
+    task_id: str
+    prompt: str
+    seed: Optional[int] = None
+    miner_uid: Optional[str] = None
+    validator_uid: Optional[str] = None
+    slot: Optional[int] = None
+    round: Optional[int] = None
+    created_at: Optional[float] = None
+    deadline: Optional[float] = None
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+
+@dataclass
+class TaskAssignment:
+    """Task assignment tracking"""
+    task_id: str
+    task_data: Dict[str, Any]
+    miner_uid: str
+    validator_uid: str
+    timestamp_sent: float
+    expected_result_format: Dict[str, Any] = field(default_factory=dict)
+    status: str = "sent"  # sent, completed, timeout, failed

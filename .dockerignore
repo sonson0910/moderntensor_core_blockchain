@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+
+# Development files
+.vscode/
+.idea/
+*.log
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Test files
+tests/
+test_*/
+
+# Development configs
+.env.example
+.env.local
+docker-compose.dev.yml
+
+# CI/CD
+.github/
+
+# Security (don't include in image)
+security/results/
+monitoring/results/
+performance/results/ 
