@@ -6,10 +6,15 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract MTNSRTEST01 is ERC20, Ownable {
     uint256 public totalSupplyCap;
+    uint8 private constant _DECIMALS = 8;
 
-    constructor(uint256 initialSupply) ERC20("Moderntensor Token Test01", "MTNSRTEST01") Ownable(msg.sender) {
+    constructor(uint256 initialSupply) ERC20("Moderntensor Token Test01", "MTNSRTEST01") Ownable() {
         totalSupplyCap = initialSupply;
         _mint(msg.sender, initialSupply);
+    }
+
+    function decimals() public pure override returns (uint8) {
+        return _DECIMALS;
     }
 
     function mint(address to, uint256 amount) external onlyOwner {

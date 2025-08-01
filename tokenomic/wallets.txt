@@ -1,0 +1,27 @@
+WARNING: Keep this file secure and do not share it!
+
+Wallet 1 (Owner (deployer and governance)):
+  Address: 0xd39bBe6b2d77Dd663832E786eABA804e46FF3c02
+  Private Key: 0x236fcbf69d1e8b69b2057e1142db92234d9e122fd43b500ccc285b8adc5dd01b
+  Mnemonic: cover exhaust sunny gather brand shy lesson gadget blue remove tomorrow grunt
+  -----------------------------------
+Wallet 2 (Recipient 1 (vesting)):
+  Address: 0x49ec394CF063C535A55125b70c707b2bba9571A1
+  Private Key: 0x12c3736693fa9fb105232c5c60724edf10df312a04af4641fbc047506e92c988
+  Mnemonic: inner power cage model into dynamic flavor walk evidence steak arrow nice
+  -----------------------------------
+Wallet 3 (Recipient 2 (vesting)):
+  Address: 0x117de6CA1E32b55E17Fe87d8983Ef8040c147794
+  Private Key: 0xe75a821adc9b81e9ddf2ead7095805047c3733ccc6890f601a0600cf4e8705ad
+  Mnemonic: draft paper limb verb income thrive target detect huge motor tongue bacon
+  -----------------------------------
+Wallet 4 (Test Address 1 (governance/treasury)):
+  Address: 0xeae6B987490f1df3376c84d86cA591d9fe9C03fD
+  Private Key: 0xb9c4fc743353a699e250d0c722d3d0a3124318f440ba82a8a1f7d737b696b3eb
+  Mnemonic: mule panel body kitten into tired waste chimney metal because nasty pudding
+  -----------------------------------
+Wallet 5 (Test Address 2 (governance/treasury)):
+  Address: 0xaA02e0170a0a2603C2c23b646ECB174A59bD2874
+  Private Key: 0xc0acdf703f39306d2d049de56abdf6cdb3a899f5a499670262c00d8af592fdab
+  Mnemonic: stomach attitude ramp end edit punch jump echo prefer cram album topic
+  -----------------------------------

@@ -20,7 +20,7 @@ contract Governance is Ownable {
     event Voted(uint256 indexed proposalId, address voter, uint256 votes);
     event ProposalExecuted(uint256 indexed proposalId);
 
-    constructor(address _token) Ownable(msg.sender) {
+    constructor(address _token) Ownable() {
         token = IERC20(_token);
     }
 

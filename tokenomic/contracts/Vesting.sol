@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -20,7 +20,7 @@ contract Vesting is Ownable {
     event VestingInitialized(address indexed recipient, uint256 totalAmount, uint256 startTime, uint256 duration);
     event TokensReleased(address indexed recipient, uint256 amount);
 
-    constructor(address _token) Ownable(msg.sender) {
+    constructor(address _token) Ownable() {
         token = IERC20(_token);
     }
 

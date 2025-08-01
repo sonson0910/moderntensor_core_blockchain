@@ -35,7 +35,17 @@ project/
 │   ├── Governance.sol        # Governance and voting contract
 │   ├── Treasury.sol          # Treasury management contract
 ├── scripts/
+│   ├── automate.js             # Deployment script for Core DAO
+│   ├── createWallet.js             # Deployment script for Core DAO
 │   ├── deploy.js             # Deployment script for Core DAO
+│   ├── interact.js             # Deployment script for Core DAO
+├── contracts/
+│   ├── MTNSRTEST01.test.js       # ERC-20 token contract testing
+│   ├── Vesting.test.js           # Token vesting contract testing
+│   ├── RewardEmission.test.js    # Reward distribution contract testing
+│   ├── Governance.test.js        # Governance and voting contract testing
+│   ├── Treasury.test.js          # Treasury management contract testing
+├── wallets.txt                 # This store wallet test
 ├── hardhat.config.js         # Hardhat configuration
 ├── package.json              # Project dependencies
 ├── README.md                 # This file

@@ -1,0 +1,14 @@
+{
+  "name": "core-dao-project",
+  "version": "1.0.0",
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.3",
+    "ethers": "^6.15.0"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "@openzeppelin/hardhat-upgrades": "^3.9.1",
+    "dotenv": "^17.2.1",
+    "hardhat": "^2.26.1"
+  }
+}

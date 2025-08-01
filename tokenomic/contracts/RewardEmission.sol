@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -24,7 +24,7 @@ contract RewardEmission is Ownable {
     event RewardEmitted(uint256 amount, uint256 emissionCount);
     event EmissionParamsUpdated(uint256 newTotalSupply, uint256 newHalvingInterval);
 
-    constructor(address _token, uint256 totalSupply, uint256 emissionIntervalSecs, uint256 secondsPerHalving) Ownable(msg.sender) {
+    constructor(address _token, uint256 totalSupply, uint256 emissionIntervalSecs, uint256 secondsPerHalving) Ownable() {
         token = IERC20(_token);
         rewardState = RewardState({
             startTime: block.timestamp,
