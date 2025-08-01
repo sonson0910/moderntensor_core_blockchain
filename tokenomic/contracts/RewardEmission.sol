@@ -4,8 +4,13 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
+interface IRewardDistribution {
+    function receiveTokens(uint256 amount) external;
+}
+
 contract RewardEmission is Ownable {
     IERC20 public token;
+    address public rewardDistributor;
 
     struct RewardState {
         uint256 startTime;
@@ -19,12 +24,17 @@ contract RewardEmission is Ownable {
 
     RewardState public rewardState;
     uint256 public communityVaultBalance;
-    uint256 public epochPoolBalance;
 
     event RewardEmitted(uint256 amount, uint256 emissionCount);
+    event TokensTransferred(address to, uint256 amount);
     event EmissionParamsUpdated(uint256 newTotalSupply, uint256 newHalvingInterval);
 
-    constructor(address _token, uint256 totalSupply, uint256 emissionIntervalSecs, uint256 secondsPerHalving) Ownable() {
+    constructor(
+        address _token,
+        uint256 totalSupply,
+        uint256 emissionIntervalSecs,
+        uint256 secondsPerHalving
+    ) Ownable() {
         token = IERC20(_token);
         rewardState = RewardState({
             startTime: block.timestamp,
@@ -38,7 +48,7 @@ contract RewardEmission is Ownable {
     }
 
     function initializeVaultAndEpoch(uint256 depositAmount) external onlyOwner {
-        require(communityVaultBalance == 0 && epochPoolBalance == 0, "Vault already initialized");
+        require(communityVaultBalance == 0, "Vault already initialized");
         require(token.transferFrom(msg.sender, address(this), depositAmount), "Transfer failed");
         communityVaultBalance = depositAmount;
     }
@@ -50,6 +60,7 @@ contract RewardEmission is Ownable {
 
     function emitReward() external onlyOwner {
         require(block.timestamp >= rewardState.lastEmissionTime + rewardState.secondsPerPeriod, "Not time for emission");
+        require(rewardDistributor != address(0), "Reward distributor not set");
 
         uint256 periodsPerHalving = rewardState.secondsPerHalving / rewardState.secondsPerPeriod;
         uint256 initialReward = rewardState.totalSupply / (2 * periodsPerHalving);
@@ -60,14 +71,19 @@ contract RewardEmission is Ownable {
         require(rewardState.totalDistributed + adjustedReward <= rewardState.totalSupply, "Exceeds total supply");
         require(communityVaultBalance >= adjustedReward, "Insufficient vault balance");
 
+        // Chuyển token sang RewardDistribution
         communityVaultBalance -= adjustedReward;
-        epochPoolBalance += adjustedReward;
+        require(token.transfer(rewardDistributor, adjustedReward), "Transfer failed");
+
+        // Gọi receiveTokens trên RewardDistribution
+        IRewardDistribution(rewardDistributor).receiveTokens(adjustedReward);
 
         rewardState.lastEmissionTime = block.timestamp;
         rewardState.totalDistributed += adjustedReward;
         rewardState.emissionCount += 1;
 
         emit RewardEmitted(adjustedReward, rewardState.emissionCount);
+        emit TokensTransferred(rewardDistributor, adjustedReward);
     }
 
     function updateEmissionParams(uint256 newTotalSupply, uint256 newHalvingInterval) external onlyOwner {
@@ -76,14 +92,8 @@ contract RewardEmission is Ownable {
         emit EmissionParamsUpdated(newTotalSupply, newHalvingInterval);
     }
 
-    function extractFromEpochPool(address recipient, uint256 amount) external onlyOwner {
-        require(epochPoolBalance >= amount, "Insufficient epoch pool balance");
-        require(token.transfer(recipient, amount), "Transfer failed");
-        epochPoolBalance -= amount;
-    }
-
-    function getEpochPoolBalance() external view returns (uint256) {
-        return epochPoolBalance;
+    function setRewardDistributor(address _rewardDistributor) external onlyOwner {
+        rewardDistributor = _rewardDistributor;
     }
 
     function getEmissionCount() external view returns (uint256) {

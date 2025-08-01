@@ -1,0 +1,17 @@
+# Node modules
+node_modules/
+
+# Build artifacts
+artifacts/
+cache/
+typechain/
+coverage/
+.env
+wallets.txt
+
+# Hardhat-specific
+hardhat.log
+
+# Test output
+*.tsbuildinfo
+*.log

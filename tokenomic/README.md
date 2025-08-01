@@ -131,6 +131,7 @@ npm install
 ```bash
 npm install --save-dev hardhat
 npm install @openzeppelin/contracts
+npm install --save-dev hardhat @nomicfoundation/hardhat-toolbox @openzeppelin/hardhat-upgrades dotenv
 ```
 
 ### 4. Configure Hardhat (`hardhat.config.js`)

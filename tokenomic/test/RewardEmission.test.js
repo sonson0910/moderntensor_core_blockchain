@@ -1,83 +1,98 @@
 const { expect } = require("chai");
-const { ethers } = require("hardhat");
-const { parseUnits } = ethers; // Ethers v6
+const hre = require("hardhat");
+require("dotenv").config();
 
 describe("RewardEmission", function () {
-  let token, rewardEmission, owner, addr1;
-
-  const totalSupply = parseUnits("1000000000", 8); // 1 tỷ token (decimals = 8)
-  const emissionIntervalSecs = 5 * 24 * 60 * 60; // 5 ngày
-  const halvingIntervalSecs = 4 * 365 * 24 * 60 * 60; // 4 năm
-  const periodsPerHalving = BigInt(halvingIntervalSecs / emissionIntervalSecs); // 292
-  const initialReward = totalSupply / (2n * periodsPerHalving); // ≈ 171_232_876_712
+  let token, rewardEmission, rewardDistribution, owner, addr1;
+  const totalSupply = hre.ethers.parseUnits("1000000", 8); // 1M token
+  const totalSupplyBigInt = BigInt(totalSupply);
+  const emissionIntervalSecs = 60; // 60 giây
+  const halvingIntervalSecs = 600; // 600 giây
+  const periodsPerHalving = BigInt(halvingIntervalSecs / emissionIntervalSecs); // 10
+  const initialReward = totalSupplyBigInt / (2n * periodsPerHalving); // 50000 * 10^8
 
   beforeEach(async function () {
-    [owner, addr1] = await ethers.getSigners();
+    [owner, addr1] = await hre.ethers.getSigners();
 
-    const MTNSRTEST01Factory = await ethers.getContractFactory("MTNSRTEST01");
-    token = await MTNSRTEST01Factory.deploy(totalSupply);
+    // Deploy MTNSRTEST01
+    const TokenFactory = await hre.ethers.getContractFactory("MTNSRTEST01");
+    token = await TokenFactory.deploy(totalSupply);
+    await token.waitForDeployment();
 
-    const RewardEmissionFactory = await ethers.getContractFactory("RewardEmission");
+    // Mint và approve token
+    await token.mint(owner.address, totalSupply);
+    await token.approve(owner.address, totalSupply);
+
+    // Deploy RewardEmission
+    const RewardEmissionFactory = await hre.ethers.getContractFactory("RewardEmission");
     rewardEmission = await RewardEmissionFactory.deploy(
-      token.getAddress(),
+      token.target,
       totalSupply,
       emissionIntervalSecs,
       halvingIntervalSecs
     );
     await rewardEmission.waitForDeployment();
 
-    // Cấp thêm token và approve
-    await token.mint(await owner.getAddress(), totalSupply);
-    await token.approve(await rewardEmission.getAddress(), totalSupply);
+    // Deploy RewardDistribution
+    const RewardDistributionFactory = await hre.ethers.getContractFactory("RewardDistribution");
+    rewardDistribution = await RewardDistributionFactory.deploy(token.target);
+    await rewardDistribution.waitForDeployment();
+
+    // Link emission -> distributor
+    await rewardEmission.setRewardDistributor(rewardDistribution.target);
+    await rewardDistribution.setRewardEmission(rewardEmission.target);
+
+    // Approve token cho RewardEmission
+    await token.approve(rewardEmission.target, totalSupply);
   });
 
   it("Should initialize vault and emit reward correctly", async function () {
+    // Khởi tạo vault
     await rewardEmission.initializeVaultAndEpoch(totalSupply);
-    expect(await token.balanceOf(await rewardEmission.getAddress())).to.equal(totalSupply);
+    expect(await token.balanceOf(rewardEmission.target)).to.equal(totalSupply);
 
-    await ethers.provider.send("evm_increaseTime", [emissionIntervalSecs]);
-    await ethers.provider.send("evm_mine");
+    // Chờ interval
+    await hre.ethers.provider.send("evm_increaseTime", [emissionIntervalSecs]);
+    await hre.ethers.provider.send("evm_mine");
 
+    // Gọi emitReward
     await rewardEmission.emitReward();
-    const epochBalance = await rewardEmission.getEpochPoolBalance();
 
-    // So sánh với initialReward
-    expect(epochBalance).to.be.closeTo(initialReward, parseUnits("1", 8));
+    // Kiểm tra số dư chuyển sang distributor
+    const distributorBalance = await token.balanceOf(rewardDistribution.target);
+    expect(distributorBalance).to.be.closeTo(initialReward, hre.ethers.parseUnits("1", 8));
+
+    // Kiểm tra availableBalance trong RewardDistribution
+    const availableBalance = await rewardDistribution.getAvailableBalance();
+    expect(availableBalance).to.be.closeTo(initialReward, hre.ethers.parseUnits("1", 8));
   });
 
-  it("Should respect halving interval", async function () {
+  it("Should respect halving schedule", async function () {
+    // Khởi tạo vault
     await rewardEmission.initializeVaultAndEpoch(totalSupply);
 
-    const emissions = Number(periodsPerHalving) + 1; // 293 emissions
+    // Thực hiện nhiều lần emission để kiểm tra halving
+    const emissions = Number(periodsPerHalving) + 1; // 11 lần
+    let expectedTotal = 0n;
+
     for (let i = 0; i < emissions; i++) {
-      await ethers.provider.send("evm_increaseTime", [emissionIntervalSecs]);
-      await ethers.provider.send("evm_mine");
+      await hre.ethers.provider.send("evm_increaseTime", [emissionIntervalSecs]);
+      await hre.ethers.provider.send("evm_mine");
+
       await rewardEmission.emitReward();
-    }
 
-    const epochBalance = await rewardEmission.getEpochPoolBalance();
-
-    // Tính reward đúng theo stepwise halving
-    let totalReward = 0n;
-    for (let i = 0; i < emissions; i++) {
       const halvings = Math.floor(i / Number(periodsPerHalving));
       const shift = halvings > 63 ? 63 : halvings;
-      const adjustedReward = initialReward >> BigInt(shift);
-      totalReward += adjustedReward;
+      const reward = initialReward / BigInt(2 ** shift);
+      expectedTotal += reward;
     }
 
-    expect(epochBalance).to.be.closeTo(totalReward, parseUnits("1", 8));
-  });
+    // Kiểm tra số dư trong distributor
+    const distributorBalance = await token.balanceOf(rewardDistribution.target);
+    expect(distributorBalance).to.be.closeTo(expectedTotal, hre.ethers.parseUnits("1", 8));
 
-
-  it("Should allow owner to extract from epoch pool", async function () {
-    await rewardEmission.initializeVaultAndEpoch(totalSupply);
-    await ethers.provider.send("evm_increaseTime", [emissionIntervalSecs]);
-    await ethers.provider.send("evm_mine");
-    await rewardEmission.emitReward();
-
-    const extractAmount = parseUnits("100", 8);
-    await rewardEmission.extractFromEpochPool(await addr1.getAddress(), extractAmount);
-    expect(await token.balanceOf(await addr1.getAddress())).to.equal(extractAmount);
+    // Kiểm tra availableBalance trong RewardDistribution
+    const availableBalance = await rewardDistribution.getAvailableBalance();
+    expect(availableBalance).to.be.closeTo(expectedTotal, hre.ethers.parseUnits("1", 8));
   });
 });
