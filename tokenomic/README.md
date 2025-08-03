@@ -118,6 +118,7 @@ project/
 ```bash
 git clone <repository-url>
 cd moderntensor-core-dao
+cd tokenomic
 ```
 
 ### 2. Install Dependencies
@@ -140,14 +141,25 @@ npm install --save-dev hardhat @nomicfoundation/hardhat-toolbox @openzeppelin/ha
 module.exports = {
   solidity: "0.8.20",
   networks: {
-    coredao: {
-      url: "https://rpc.coredao.org",
+    coredao_network: {
+      url: "https://rpc.coredao.org"||URL_Network,
       accounts: ["YOUR_PRIVATE_KEY"]
     }
   }
 };
 ```
 
+---
+
+## 🧪 Testing
+
+### Local Testing
+
+* Write test cases in `test/` folder
+
+```bash
+npx hardhat test
+```
 ---
 
 ## 🚀 Deployment
@@ -158,12 +170,41 @@ module.exports = {
 npx hardhat compile
 ```
 
-### Deploy to Core DAO
+### Deploy to Core DAO and Run scripts
 
-Ensure your wallet has CORE tokens for gas. Then:
+
+Creates random wallets and saves to wallets.txt
 
 ```bash
-npx hardhat run scripts/deploy.js --network coredao
+npx hardhat run scripts/create_wallets.js --network  network_name 
+```
+
+
+Deploys all core contracts and initialize all parameter for all contract. Ensure your wallet has CORE tokens for gas. Then:
+```bash
+npx hardhat run scripts/deploy.js --network network_name
+```
+
+Releases vested tokens for eligible recipients
+```bash
+npx hardhat run scripts/vesting-release.js --network  network_name 
+```
+
+
+Emits and distributes epoch rewards
+```bash
+npx hardhat run scripts/emit_and_distribute.js --network  network_name 
+```
+
+
+Simulates governance flow
+```bash
+npx hardhat run scripts/propose-vote-execute.js --network  network_name 
+```
+
+Simulates treasury deposit and withdrawal
+```bash
+npx hardhat run scripts/treasury-deposit-withdraw.js --network  network_name 
 ```
 
 ### Token Distribution Summary
@@ -172,12 +213,6 @@ npx hardhat run scripts/deploy.js --network coredao
 * `Vesting`: 400M
 * `RewardEmission`: 400M
 * `Treasury`: 200M
-
-### Verify Contracts (Optional)
-
-```bash
-npx hardhat verify --network coredao <CONTRACT_ADDRESS> <CONSTRUCTOR_ARGS>
-```
 
 ---
 
@@ -222,24 +257,6 @@ Add the `MTNSRTEST01` token using deployed contract address.
 * **Liquidity**: Add MTNSRTEST01/CORE pair on ArcherSwap or CoreSwap
 * **Cross-Chain**: Use Core Bridge
 * **Explorer**: Track activity on [Core DAO Explorer](https://scan.coredao.org)
-
----
-
-## 🧪 Testing
-
-### Testnet Deployment
-
-```bash
-npx hardhat run scripts/deploy.js --network coredao_testnet
-```
-
-### Local Testing
-
-* Write test cases in `test/` folder
-
-```bash
-npx hardhat test
-```
 
 ---
 
