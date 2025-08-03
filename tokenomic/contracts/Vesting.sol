@@ -1,4 +1,4 @@
-// SPDX-License-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -16,6 +16,8 @@ contract Vesting is Ownable {
     }
 
     mapping(address => VestingSchedule) public schedules;
+    mapping(address => bool) public hasVesting;
+    address[] public recipients;
 
     event VestingInitialized(address indexed recipient, uint256 totalAmount, uint256 startTime, uint256 duration);
     event TokensReleased(address indexed recipient, uint256 amount);
@@ -37,10 +39,7 @@ contract Vesting is Ownable {
         require(startTime > block.timestamp, "Start time must be in the future");
         require(duration > 0, "Duration must be greater than 0");
         require(recipient != address(0), "Invalid recipient");
-
-        if (schedules[recipient].totalAmount > 0) {
-            delete schedules[recipient];
-        }
+        require(!hasVesting[recipient], "Vesting already set");
 
         schedules[recipient] = VestingSchedule({
             recipient: recipient,
@@ -49,6 +48,9 @@ contract Vesting is Ownable {
             startTime: startTime,
             duration: duration
         });
+
+        recipients.push(recipient);
+        hasVesting[recipient] = true;
 
         emit VestingInitialized(recipient, totalAmount, startTime, duration);
     }
@@ -75,5 +77,9 @@ contract Vesting is Ownable {
 
     function topUpVesting(uint256 amount) external onlyOwner {
         require(token.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+    }
+
+    function getAllRecipients() external view returns (address[] memory) {
+        return recipients;
     }
 }

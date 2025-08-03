@@ -2,10 +2,10 @@ const hre = require("hardhat");
 const { expect } = require("chai");
 
 describe("Vesting", function () {
-  let token, vesting, owner, addr1;
+  let token, vesting, owner, addr1, addr2;
 
   beforeEach(async function () {
-    [owner, addr1] = await hre.ethers.getSigners();
+    [owner, addr1, addr2] = await hre.ethers.getSigners();
 
     const Token = await hre.ethers.getContractFactory("MTNSRTEST01");
     token = await Token.deploy(hre.ethers.parseUnits("1000000", 8));
@@ -51,5 +51,33 @@ describe("Vesting", function () {
     await expect(
       vesting.connect(addr1).initializeVesting(hre.ethers.parseUnits("1000", 8))
     ).to.be.revertedWith("Ownable: caller is not the owner");
+  });
+
+  it("Should not allow setting vesting twice for same address", async function () {
+    const block = await hre.ethers.provider.getBlock("latest");
+    const currentTimestamp = block.timestamp;
+    const start = currentTimestamp + 3600;
+    const duration = 30 * 24 * 60 * 60;
+
+    await vesting.setupVesting(addr1.address, hre.ethers.parseUnits("1000", 8), start, duration);
+
+    await expect(
+      vesting.setupVesting(addr1.address, hre.ethers.parseUnits("500", 8), start, duration)
+    ).to.be.revertedWith("Vesting already set");
+  });
+
+  it("Should return all recipients after vesting setup", async function () {
+    const block = await hre.ethers.provider.getBlock("latest");
+    const currentTimestamp = block.timestamp;
+    const start = currentTimestamp + 3600;
+    const duration = 30 * 24 * 60 * 60;
+
+    await vesting.setupVesting(addr1.address, hre.ethers.parseUnits("1000", 8), start, duration);
+    await vesting.setupVesting(addr2.address, hre.ethers.parseUnits("2000", 8), start, duration);
+
+    const recipients = await vesting.getAllRecipients();
+    expect(recipients.length).to.equal(2);
+    expect(recipients).to.include(addr1.address);
+    expect(recipients).to.include(addr2.address);
   });
 });

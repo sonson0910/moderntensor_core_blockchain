@@ -1,27 +1,27 @@
 WARNING: Keep this file secure and do not share it!
 
 Wallet 1 (Owner (deployer and governance)):
-  Address: 0xd39bBe6b2d77Dd663832E786eABA804e46FF3c02
-  Private Key: 0x236fcbf69d1e8b69b2057e1142db92234d9e122fd43b500ccc285b8adc5dd01b
-  Mnemonic: cover exhaust sunny gather brand shy lesson gadget blue remove tomorrow grunt
+  Address: 0xB79aD198a68Df5898355d5903b9f6036163cd4bB
+  Private Key: 0x12856efb904db9e6432346f0a3bbe4a13aa2a6dea5451e4bf89d12fb3d8d3be1
+  Mnemonic: choice coffee proof midnight broken simple gloom claim victory farm toast employ
   -----------------------------------
 Wallet 2 (Recipient 1 (vesting)):
-  Address: 0x49ec394CF063C535A55125b70c707b2bba9571A1
-  Private Key: 0x12c3736693fa9fb105232c5c60724edf10df312a04af4641fbc047506e92c988
-  Mnemonic: inner power cage model into dynamic flavor walk evidence steak arrow nice
+  Address: 0x738C6CEd9b3D640cF6E38920f0cb652dE5B2FE87
+  Private Key: 0x9fe227c60cc89793dcd6d5634b19338a7e7397c60910926ccc928e9a9dfe6457
+  Mnemonic: envelope tag scare fire solve hero junior obtain mobile route learn discover
   -----------------------------------
 Wallet 3 (Recipient 2 (vesting)):
-  Address: 0x117de6CA1E32b55E17Fe87d8983Ef8040c147794
-  Private Key: 0xe75a821adc9b81e9ddf2ead7095805047c3733ccc6890f601a0600cf4e8705ad
-  Mnemonic: draft paper limb verb income thrive target detect huge motor tongue bacon
+  Address: 0x1323415145e126A75427B1398011981D647a9388
+  Private Key: 0x7f5bcb545267e366e0f0ecf164a46ad86c4c2f099258f5302e8d14732b27811f
+  Mnemonic: squeeze endorse fox aunt hint message bronze barrel foot broom concert govern
   -----------------------------------
 Wallet 4 (Test Address 1 (governance/treasury)):
-  Address: 0xeae6B987490f1df3376c84d86cA591d9fe9C03fD
-  Private Key: 0xb9c4fc743353a699e250d0c722d3d0a3124318f440ba82a8a1f7d737b696b3eb
-  Mnemonic: mule panel body kitten into tired waste chimney metal because nasty pudding
+  Address: 0xA81A107c3BC6C8170c924Dc750Fcf63fDD497e7c
+  Private Key: 0xefd3fd055608d3741c5ca74af2d2f60b60b132817ee519113bc8577ef2e81508
+  Mnemonic: card wolf whisper piece tube fruit address come elegant suggest spider bounce
   -----------------------------------
 Wallet 5 (Test Address 2 (governance/treasury)):
-  Address: 0xaA02e0170a0a2603C2c23b646ECB174A59bD2874
-  Private Key: 0xc0acdf703f39306d2d049de56abdf6cdb3a899f5a499670262c00d8af592fdab
-  Mnemonic: stomach attitude ramp end edit punch jump echo prefer cram album topic
+  Address: 0x530a46F1A77C78dE2a7319096e6E6F31ED030A58
+  Private Key: 0x6af60ff777121d4d412e92a2b9a152fbf710b65a5b0eee331c71c1b7848a8838
+  Mnemonic: rather disorder approve bar crash alter album annual execute boy sweet point
   -----------------------------------

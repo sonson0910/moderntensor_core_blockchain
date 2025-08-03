@@ -18,7 +18,7 @@ async function createWallets() {
     `# Owner wallet (for deployment and governance)`,
     `PRIVATE_KEY=${wallets[0].privateKey}`,
     `OWNER_ADDRESS=${wallets[0].address}`,
-    `RPC_URL=https://rpc.testnet.coredao.org`,
+    `RPC_URL=https://rpc.test2.btcs.network`,
     `TOKEN_ADDRESS=to_be_updated`,
     `VESTING_ADDRESS=to_be_updated`,
     `REWARD_EMISSION_ADDRESS=to_be_updated`,
@@ -81,8 +81,9 @@ async function createWallets() {
   console.log("\nInstructions for MetaMask:");
   console.log("1. Open MetaMask, click 'Import Wallet' for each wallet.");
   console.log("2. Enter the mnemonic from wallets.txt for the desired wallet.");
-  console.log("3. Add Core DAO Testnet (RPC: https://rpc.testnet.coredao.org, Chain ID: 1115).");
-  console.log("4. Fund addresses with CORE testnet tokens at https://scan.testnet.coredao.org/faucet.");
+  console.log("3. Add Core DAO Testnet (RPC: https://rpc.test2.btcs.network, Chain ID: 1114).");
+  console.log("4. Fund addresses with CORE testnet tokens at 	https://scan.test2.btcs.network/faucet");
+  console.log("4. Explore at 	https://scan.test2.btcs.network");
 }
 
 createWallets().catch((error) => {
