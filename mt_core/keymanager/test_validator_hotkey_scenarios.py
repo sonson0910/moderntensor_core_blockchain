@@ -18,7 +18,7 @@ import time
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from mt_core.keymanager.wallet_utils import WalletUtils
-from mt_core.keymanager.hd_wallet_manager import AptosHDWalletManager
+from mt_core.keymanager.hd_wallet_manager import CoreHDWalletManager
 
 console = Console()
 
@@ -39,7 +39,7 @@ def test_validator_hotkey_scenarios():
     with tempfile.TemporaryDirectory() as tmpdir:
         console.print(f"\n[dim]Test directory: {tmpdir}[/dim]")
         
-        wm = AptosHDWalletManager(base_dir=tmpdir)
+        wm = CoreHDWalletManager(base_dir=tmpdir)
         utils = WalletUtils(tmpdir)
         
         # === Scenario Setup ===

@@ -29,7 +29,8 @@ class MinerData:
 
     uid: str  # hexadecimal string
     subnet_uid: int
-    stake: int
+    stake: int  # CORE stake amount
+    bitcoin_stake: int  # Bitcoin stake amount (satoshis) - NEW FIELD
     scaled_last_performance: int  # Đã scale (x DIVISOR)
     scaled_trust_score: int  # Đã scale (x DIVISOR)
     accumulated_rewards: int
@@ -39,6 +40,7 @@ class MinerData:
     status: int  # 0: Inactive, 1: Active, 2: Jailed
     registration_time: int
     api_endpoint: str
+    owner: str  # Owner address - NEW FIELD
 
     @property
     def trust_score(self) -> float:
@@ -61,7 +63,8 @@ class ValidatorData:
 
     uid: str  # hexadecimal string
     subnet_uid: int
-    stake: int
+    stake: int  # CORE stake amount
+    bitcoin_stake: int  # Bitcoin stake amount (satoshis) - NEW FIELD
     scaled_last_performance: int  # Đã scale (x DIVISOR)
     scaled_trust_score: int  # Đã scale (x DIVISOR)
     accumulated_rewards: int
@@ -71,6 +74,7 @@ class ValidatorData:
     status: int  # 0: Inactive, 1: Active, 2: Jailed
     registration_time: int
     api_endpoint: str
+    owner: str  # Owner address - NEW FIELD
 
     @property
     def trust_score(self) -> float:
@@ -123,9 +127,7 @@ class SubnetDynamicData:
     @property
     def weight(self) -> float:
         """Trả về weight dạng float."""
-        return (
-            self.scaled_weight / DATUM_INT_DIVISOR
-        )  # Sử dụng divisor từ settings
+        return self.scaled_weight / DATUM_INT_DIVISOR  # Sử dụng divisor từ settings
 
     @property
     def performance(self) -> float:
@@ -134,47 +136,49 @@ class SubnetDynamicData:
             self.scaled_performance / DATUM_INT_DIVISOR
         )  # Sử dụng divisor từ settings
 
+
 # Helper functions to convert between data objects and Move resources
 def from_move_resource(resource_data: Dict[str, Any], data_class: type) -> Any:
     """
     Convert a Move resource dictionary to a Python data class instance.
-    
+
     Args:
         resource_data: Dictionary containing the Move resource fields
         data_class: The target Python data class type
-        
+
     Returns:
         An instance of the specified data class
     """
     # Create a dictionary of parameters for the data class constructor
     params = {}
-    
+
     # For each field in the data class, find the corresponding value in the resource data
     for field_name in data_class.__annotations__:
         # Handle type conversions as needed
         if field_name in resource_data:
             params[field_name] = resource_data[field_name]
-    
+
     # Create and return the data class instance
     return data_class(**params)
+
 
 def to_move_resource(data_obj: Any) -> Dict[str, Any]:
     """
     Convert a Python data class instance to a Move resource dictionary.
-    
+
     Args:
         data_obj: The data class instance to convert
-        
+
     Returns:
         Dictionary suitable for creating or updating a Move resource
     """
     # Create a dictionary from the data object's fields
     resource_data = {}
-    
+
     # Convert each field, handling any needed type conversions
     for field_name, field_value in data_obj.__dict__.items():
         resource_data[field_name] = field_value
-    
+
     return resource_data
 
 
@@ -186,16 +190,20 @@ ValidatorDatum = ValidatorData
 # Missing datum classes
 from dataclasses import dataclass
 
+
 @dataclass
 class SubnetStaticDatum:
     """Static subnet data"""
+
     subnet_id: int
     name: str = ""
     description: str = ""
-    
-@dataclass 
+
+
+@dataclass
 class SubnetDynamicDatum:
     """Dynamic subnet data"""
+
     subnet_id: int
     active_miners: int = 0
     active_validators: int = 0

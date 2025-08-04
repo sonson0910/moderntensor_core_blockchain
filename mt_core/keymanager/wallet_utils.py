@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 import getpass
 
-from .hd_wallet_manager import AptosHDWalletManager
+from .hd_wallet_manager import CoreHDWalletManager
 from ..account import Account
 from ..config.settings import settings, logger
 
@@ -33,7 +33,7 @@ class WalletUtils:
         if not self.base_dir:
             raise ValueError("Wallet base directory not configured")
         
-        self.wallet_manager = AptosHDWalletManager(self.base_dir)
+        self.wallet_manager = CoreHDWalletManager(self.base_dir)
         self._loaded_wallets = {}
     
     def quick_load_account(

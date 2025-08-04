@@ -20,11 +20,18 @@ from mt_core.keymanager.wallet_utils import WalletUtils
 
 logger = logging.getLogger(__name__)
 
+# === SLOT SYNCHRONIZATION CONSTANTS ===
+# Must match validator SlotCoordinator timing
+EPOCH_START = int(time.time()) - 3600  # 1 hour before current time (same as validator)
+SLOT_DURATION_MINUTES = 3.5  # Must match validator slot_config
+SLOT_DURATION_SECONDS = SLOT_DURATION_MINUTES * 60
+
 
 class CoreMinerAgent:
     """
     Core Blockchain compatible Miner Agent
     Manages miner performance tracking and blockchain interactions using Web3
+    Now includes slot synchronization with validator consensus timing
     """
 
     def __init__(
@@ -63,6 +70,10 @@ class CoreMinerAgent:
         self.last_processed_cycle = 0
         self.last_known_performance = 0.5  # Default 50%
 
+        # === SLOT SYNCHRONIZATION ===
+        self.last_processed_slot = -1
+        self.slot_sync_enabled = True
+
         # History file for persistence
         self.history_file = Path(f"miner_performance_{self.miner_uid_hex[:8]}.json")
 
@@ -99,45 +110,31 @@ class CoreMinerAgent:
                 ) from e
         else:
             logger.warning(
-                f"{uid_prefix} No miner account provided. Some operations may fail."
+                f"{uid_prefix} No miner account provided - using simulation mode"
             )
-            self.miner_account = None
 
         # --- Initialize Web3 client ---
         try:
             self.web3 = Web3(Web3.HTTPProvider(self.core_node_url))
             self.web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-            if not self.web3.is_connected():
-                raise RuntimeError(
-                    f"Failed to connect to Core blockchain at {self.core_node_url}"
+            if self.web3.is_connected():
+                logger.info(
+                    f"{uid_prefix} Connected to Core blockchain: {self.core_node_url}"
                 )
-
-            logger.debug(
-                f"{uid_prefix} Web3 client initialized (Node: {self.core_node_url})"
-            )
-            logger.debug(f"{uid_prefix} Contract address: {self.contract_address}")
-
-            # Initialize contract if ABI provided
-            if self.contract_address and self.contract_abi:
-                self.contract = self.web3.eth.contract(
-                    address=self.contract_address, abi=self.contract_abi
-                )
-                logger.debug(f"{uid_prefix} Contract instance created")
+                logger.info(f"{uid_prefix} Current block: {self.web3.eth.block_number}")
             else:
-                self.contract = None
-                logger.warning(
-                    f"{uid_prefix} No contract ABI provided - some functions may not work"
-                )
-
+                logger.warning(f"{uid_prefix} Failed to connect to Core blockchain")
         except Exception as e:
-            logger.exception(f"{uid_prefix} Failed to initialize Web3 client: {e}")
-            raise
+            logger.warning(f"{uid_prefix} Web3 initialization failed: {e}")
 
-        # Load existing performance history
+        # --- Load performance history ---
         self._load_history()
 
         logger.info(f"{uid_prefix} Core Miner Agent initialized successfully")
+        logger.info(
+            f"{uid_prefix} Slot synchronization: {'ENABLED' if self.slot_sync_enabled else 'DISABLED'}"
+        )
 
     def _load_history(self):
         """Load performance history from file"""
@@ -160,7 +157,7 @@ class CoreMinerAgent:
         except Exception as e:
             logger.warning(f"{uid_prefix} Could not load history: {e}")
 
-    def _save_history(self, cycle_num: int, performance: float):
+    def _save_history(self, slot_num: int, performance: float):
         """Save performance history to file"""
         uid_prefix = f"[SaveHist:{self.miner_uid_hex[:8]}...]"
         try:
@@ -172,7 +169,7 @@ class CoreMinerAgent:
             # Add new record
             history.append(
                 {
-                    "cycle": cycle_num,
+                    "slot": slot_num,
                     "performance": performance,
                     "timestamp": int(time.time()),
                 }
@@ -192,7 +189,7 @@ class CoreMinerAgent:
             )
 
     async def fetch_consensus_result(
-        self, validator_api_url: str, cycle_num: int
+        self, validator_api_url: str, slot_num: int
     ) -> Optional[Dict]:
         """
         Fetch consensus result from validator API
@@ -200,7 +197,7 @@ class CoreMinerAgent:
         uid_prefix = f"[FetchConsensus:{self.miner_uid_hex[:8]}...]"
 
         try:
-            url = f"{validator_api_url}/api/v1/consensus/result/{cycle_num}"
+            url = f"{validator_api_url}/api/v1/consensus/result/{slot_num}"
 
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url)
@@ -208,7 +205,7 @@ class CoreMinerAgent:
 
             result = response.json()
             logger.info(
-                f"{uid_prefix} Successfully fetched consensus result for cycle {cycle_num}"
+                f"{uid_prefix} Successfully fetched consensus result for slot {slot_num}"
             )
             return result
 
@@ -303,7 +300,7 @@ class CoreMinerAgent:
             return old_performance
 
     async def update_miner_data_on_chain(
-        self, new_performance: float, cycle_num: int
+        self, new_performance: float, slot_num: int
     ) -> Optional[str]:
         """
         Update miner performance data on Core blockchain
@@ -312,7 +309,7 @@ class CoreMinerAgent:
         uid_prefix = f"[UpdateChain:{self.miner_uid_hex[:8]}...]"
 
         logger.info(
-            f"{uid_prefix} Updating miner data on chain (performance: {new_performance:.4f}, cycle: {cycle_num})"
+            f"{uid_prefix} Updating miner data on chain (performance: {new_performance:.4f}, slot: {slot_num})"
         )
 
         # For now, just log the update (actual blockchain update would require specific contract functions)
@@ -321,22 +318,33 @@ class CoreMinerAgent:
         )
 
         # Save to local history
-        self._save_history(cycle_num, new_performance)
+        self._save_history(slot_num, new_performance)
 
         return "simulated_tx_hash"
 
-    async def run(self, validator_api_url: str, check_interval_seconds: int = 300):
+    async def run(self, validator_api_url: str, check_interval_seconds: int = 30):
         """
-        Main run loop for the Core Miner Agent
+        Main run loop for the Core Miner Agent with slot synchronization
         """
         uid_prefix = f"[Run:{self.miner_uid_hex[:8]}...]"
 
-        logger.info(f"{uid_prefix} Starting Core Miner Agent main loop...")
+        logger.info(
+            f"{uid_prefix} Starting Core Miner Agent main loop with slot sync..."
+        )
         logger.info(f"{uid_prefix} Validator API: {validator_api_url}")
         logger.info(f"{uid_prefix} Check interval: {check_interval_seconds}s")
+        logger.info(f"{uid_prefix} Slot duration: {SLOT_DURATION_MINUTES} minutes")
 
         while True:
             try:
+                # === SLOT SYNCHRONIZATION ===
+                current_slot = self.get_current_slot()
+                current_phase = self.get_slot_phase(current_slot)
+
+                logger.debug(
+                    f"{uid_prefix} Current slot: {current_slot}, phase: {current_phase}"
+                )
+
                 # Check if miner is registered on blockchain
                 miner_data = await self.get_miner_data_from_chain()
                 if not miner_data:
@@ -346,15 +354,18 @@ class CoreMinerAgent:
                     await asyncio.sleep(check_interval_seconds)
                     continue
 
-                # For now, simulate cycle processing
-                current_cycle = int(time.time()) // 300  # 5-minute cycles
+                # === SLOT-BASED PROCESSING ===
+                if (
+                    current_slot > self.last_processed_slot
+                    and self.should_check_consensus(current_slot)
+                ):
+                    logger.info(
+                        f"{uid_prefix} Processing slot {current_slot} (phase: {current_phase})..."
+                    )
 
-                if current_cycle > self.last_processed_cycle:
-                    logger.info(f"{uid_prefix} Processing cycle {current_cycle}...")
-
-                    # Fetch consensus result
+                    # Fetch consensus result for this slot
                     consensus_result = await self.fetch_consensus_result(
-                        validator_api_url, current_cycle
+                        validator_api_url, current_slot
                     )
 
                     if consensus_result:
@@ -366,27 +377,29 @@ class CoreMinerAgent:
 
                         # Update blockchain
                         tx_hash = await self.update_miner_data_on_chain(
-                            new_performance, current_cycle
+                            new_performance, current_slot
                         )
 
                         if tx_hash:
-                            self.last_processed_cycle = current_cycle
+                            self.last_processed_slot = current_slot
                             self.last_known_performance = new_performance
                             logger.info(
-                                f"{uid_prefix} Cycle {current_cycle} processed successfully"
+                                f"{uid_prefix} Slot {current_slot} processed successfully → TX Hash: {tx_hash}"
                             )
                         else:
                             logger.error(
-                                f"{uid_prefix} Failed to update blockchain for cycle {current_cycle}"
+                                f"{uid_prefix} Failed to update blockchain for slot {current_slot}"
                             )
                     else:
-                        logger.warning(
-                            f"{uid_prefix} No consensus result available for cycle {current_cycle}"
+                        logger.debug(
+                            f"{uid_prefix} No consensus result available for slot {current_slot} (phase: {current_phase})"
                         )
 
                 else:
+                    # Calculate time until next slot for better logging
+                    time_until_next = self.get_time_until_next_slot()
                     logger.debug(
-                        f"{uid_prefix} No new cycles to process (current: {current_cycle}, last: {self.last_processed_cycle})"
+                        f"{uid_prefix} Slot {current_slot} (phase: {current_phase}) - {time_until_next}s until next slot"
                     )
 
             except Exception as e:
@@ -400,3 +413,39 @@ class CoreMinerAgent:
         logger.info(f"{uid_prefix} Closing Core Miner Agent...")
         # No specific cleanup needed for Web3 client
         logger.info(f"{uid_prefix} Core Miner Agent closed.")
+
+    # === SLOT SYNCHRONIZATION METHODS ===
+
+    def get_current_slot(self) -> int:
+        """Get current slot number synchronized with validator timing"""
+        current_time = int(time.time())
+        slot_num = (current_time - EPOCH_START) // SLOT_DURATION_SECONDS
+        return slot_num
+
+    def get_slot_phase(self, slot_number: int) -> str:
+        """Get current phase within a slot (for logging)"""
+        current_time = int(time.time())
+        slot_start_time = EPOCH_START + (slot_number * SLOT_DURATION_SECONDS)
+        seconds_into_slot = current_time - slot_start_time
+
+        if seconds_into_slot < 120:  # 0-2min
+            return "TASK_ASSIGNMENT"
+        elif seconds_into_slot < 180:  # 2-3min
+            return "CONSENSUS_SCORING"
+        elif seconds_into_slot < 210:  # 3-3.5min
+            return "METAGRAPH_UPDATE"
+        else:
+            return "SLOT_END"
+
+    def should_check_consensus(self, slot_number: int) -> bool:
+        """Check if we should look for consensus results for this slot"""
+        # Only check during consensus phase or after slot ends
+        phase = self.get_slot_phase(slot_number)
+        return phase in ["CONSENSUS_SCORING", "METAGRAPH_UPDATE", "SLOT_END"]
+
+    def get_time_until_next_slot(self) -> int:
+        """Get seconds until next slot starts"""
+        current_time = int(time.time())
+        current_slot = self.get_current_slot()
+        next_slot_start = EPOCH_START + ((current_slot + 1) * SLOT_DURATION_SECONDS)
+        return max(0, next_slot_start - current_time)

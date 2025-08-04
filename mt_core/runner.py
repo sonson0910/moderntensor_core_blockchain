@@ -107,7 +107,7 @@ class ValidatorRunner:
 
                 # --- Initialize Aptos Client ---
                 logger.info(f"Runner: Initializing Aptos client for {aptos_node_url}...")
-                aptos_client = RestClient(aptos_node_url)
+                web3_client = RestClient(aptos_node_url)
                 logger.info("Runner: Aptos client initialized.")
 
                 # --- Create ValidatorInfo ---
@@ -123,7 +123,7 @@ class ValidatorRunner:
                 )
                 self.validator_node_instance = self.validator_class(
                     validator_info=validator_info,
-                    aptos_client=aptos_client,
+                    web3_client=web3_client,
                     account=account,
                     contract_address=contract_address,
                 )

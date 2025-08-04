@@ -130,6 +130,7 @@ async def prepare_miner_updates_logic(
                     updated_miner = MinerData(
                         uid=miner_uid_hex,
                         stake=current_miner.stake,
+                        bitcoin_stake=getattr(current_miner, "bitcoin_stake", 0),
                         last_performance=p_adj,
                         accumulated_rewards=current_miner.accumulated_rewards,
                         status=current_miner.status,
@@ -214,6 +215,7 @@ async def prepare_validator_updates_logic(
                     updated_validator = ValidatorData(
                         uid=validator_uid_hex,
                         stake=current_validator.stake,
+                        bitcoin_stake=getattr(current_validator, "bitcoin_stake", 0),
                         trust_score=new_trust,
                         last_performance=state.get("E_v", 0.0),
                         accumulated_rewards=current_validator.accumulated_rewards
@@ -479,7 +481,11 @@ async def get_blockchain_metrics(client: Web3, contract_address: str) -> Dict[st
             ]
             active_miners = [m for m in miners.values() if m.status == STATUS_ACTIVE]
 
-            total_stake = sum(v.stake for v in validators.values())
+            # Enhanced total stake calculation with Bitcoin integration
+            total_stake = sum(
+                v.stake + getattr(v, "bitcoin_stake", 0) * 2.0  # Bitcoin 2x multiplier
+                for v in validators.values()
+            )
             avg_trust_score = (
                 sum(v.trust_score for v in active_validators) / len(active_validators)
                 if active_validators

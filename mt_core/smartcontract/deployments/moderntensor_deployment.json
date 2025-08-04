@@ -1,0 +1,15 @@
+{
+  "contractAddress": "0x594fc12B3e3AB824537b947765dd9409DAAAa143",
+  "contractName": "ModernTensor",
+  "network": "Core Testnet",
+  "deployer": "0x16102CA8BEF74fb6214AF352989b664BF0e50498",
+  "deploymentTime": "2025-08-01T15:26:08.348Z",
+  "transactionHash": "0x711b26c21c61928af7a8c6b723d7ca1e22510cb9f41342193479ef5ad3f61434",
+  "blockNumber": 32463808,
+  "constructorArgs": {
+    "coreToken": "0x7B74e4868c8C500D6143CEa53a5d2F94e94c7637",
+    "btcToken": "0x44Ed1441D79FfCb76b7D6644dBa930309E0E6F31",
+    "minMinerStake": "10000000000000000",
+    "minValidatorStake": "50000000000000000"
+  }
+}

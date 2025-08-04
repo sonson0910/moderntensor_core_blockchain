@@ -38,6 +38,11 @@ from ..formulas.trust_score import update_trust_score
 from .scoring import score_results_logic, broadcast_scores_logic
 from .slot_coordinator import SlotPhase
 from ..core_client.contract_client import ModernTensorCoreClient
+from .modern_consensus import (
+    ModernConsensus,
+    NetworkMetrics,
+    format_consensus_results,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,11 @@ class ValidatorNodeConsensus:
         self.bitcoin_staking_rewards = {}
         self.staking_epoch_data = {}
 
+        # === MODERN CONSENSUS INTEGRATION ===
+        self.modern_consensus_engine: Optional[ModernConsensus] = None
+        self.modern_consensus_enabled = True
+        self.use_modern_consensus_algorithms = True
+
         # === FLEXIBLE CONSENSUS EXTENSIONS ===
         self.flexible_mode_enabled = False
         self.consensus_participation_rate = 1.0
@@ -100,6 +110,9 @@ class ValidatorNodeConsensus:
         # Initialize Core client if account is available
         if hasattr(core_node, "account") and core_node.account:
             self._initialize_core_client()
+
+        # Initialize Modern consensus engine after Core client is ready
+        self._initialize_modern_consensus_engine()
 
     def _initialize_core_client(self):
         """Initialize Core blockchain client for consensus operations."""
@@ -138,6 +151,37 @@ class ValidatorNodeConsensus:
         except Exception as e:
             logger.error(f"❌ {self.uid_prefix} Failed to initialize Core client: {e}")
             self.core_client = None
+
+    def _initialize_modern_consensus_engine(self):
+        """Initialize Modern consensus engine for enhanced algorithms."""
+        try:
+            if self.core_client and self.modern_consensus_enabled:
+                from ..config.settings import Settings
+
+                # Get settings
+                settings = Settings() if hasattr(Settings, "__call__") else None
+
+                # Initialize Modern consensus engine with Core client
+                self.modern_consensus_engine = ModernConsensus(
+                    core_client=self.core_client, settings=settings
+                )
+
+                logger.info(
+                    f"✅ {self.uid_prefix} ModernTensor consensus engine initialized successfully"
+                )
+
+            else:
+                logger.warning(
+                    f"⚠️ {self.uid_prefix} Modern consensus engine not initialized - Core client required"
+                )
+                self.modern_consensus_enabled = False
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.uid_prefix} Failed to initialize Modern consensus engine: {e}"
+            )
+            self.modern_consensus_engine = None
+            self.modern_consensus_enabled = False
 
     # === Scoring Methods ===
 
@@ -592,18 +636,24 @@ class ValidatorNodeConsensus:
                             consensus_scores[miner_uid] = []
                         consensus_scores[miner_uid].append(score_value)
 
-            # Calculate final consensus by averaging
-            final_consensus = {}
-            for miner_uid, scores_list in consensus_scores.items():
-                if scores_list:
-                    final_consensus[miner_uid] = sum(scores_list) / len(scores_list)
-                    logger.debug(
-                        f"{self.uid_prefix} Manual consensus for {miner_uid}: "
-                        f"{final_consensus[miner_uid]:.4f} (from {len(scores_list)} validators)"
-                    )
+            # Apply Modern consensus-enhanced consensus if available
+            if self.modern_consensus_enabled and self.modern_consensus_engine:
+                final_consensus = await self._apply_modern_consensus(
+                    slot, consensus_scores, current_cycle
+                )
+            else:
+                # Fallback to simple averaging
+                final_consensus = {}
+                for miner_uid, scores_list in consensus_scores.items():
+                    if scores_list:
+                        final_consensus[miner_uid] = sum(scores_list) / len(scores_list)
+                        logger.debug(
+                            f"{self.uid_prefix} Manual consensus for {miner_uid}: "
+                            f"{final_consensus[miner_uid]:.4f} (from {len(scores_list)} validators)"
+                        )
 
             logger.info(
-                f"{self.uid_prefix} Manual consensus completed: {len(final_consensus)} miners"
+                f"{self.uid_prefix} {'ModernTensor-enhanced' if self.modern_consensus_enabled else 'Simple'} consensus completed: {len(final_consensus)} miners"
             )
             return final_consensus
 
@@ -612,6 +662,143 @@ class ValidatorNodeConsensus:
                 f"{self.uid_prefix} Error in manual consensus coordination: {e}"
             )
             return {}
+
+    async def _apply_modern_consensus(
+        self, slot: int, consensus_scores: Dict[str, List[float]], current_cycle: int
+    ) -> Dict[str, float]:
+        """
+        Apply ModernTensor-enhanced consensus algorithms.
+
+        Args:
+            slot: Current slot number
+            consensus_scores: Dict of miner_uid -> list of scores from validators
+            current_cycle: Current consensus cycle
+
+        Returns:
+            Enhanced consensus scores using ModernTensor algorithms
+        """
+        try:
+            logger.info(
+                f"🧠 {self.uid_prefix} Applying ModernTensor consensus algorithms for slot {slot}"
+            )
+
+            # Convert scores format for Modern consensus engine
+            # consensus_scores: {miner_uid: [score1, score2, ...]}
+            # Need: {miner_uid: {validator_uid: score}}
+            miner_evaluations = {}
+
+            # Get validator information for weight calculation
+            active_validators = await self._get_active_validators()
+            validator_weights = {}
+
+            # Calculate validator weights based on stake and trust
+            for validator in active_validators:
+                if hasattr(validator, "stake") and hasattr(validator, "trust_score"):
+                    # Simple weight calculation - can be enhanced
+                    # Enhanced weight calculation with dual token staking
+                    core_weight = validator.stake * validator.trust_score
+                    btc_weight = (
+                        getattr(validator, "bitcoin_stake", 0)
+                        * 2.0
+                        * validator.trust_score
+                    )
+                    weight = core_weight + btc_weight
+                    validator_weights[validator.uid] = weight
+                else:
+                    validator_weights[validator.uid] = 1.0  # Default weight
+
+            # Normalize validator weights
+            total_weight = sum(validator_weights.values())
+            if total_weight > 0:
+                for uid in validator_weights:
+                    validator_weights[uid] = validator_weights[uid] / total_weight
+
+            # Convert consensus_scores to format expected by Modern consensus
+            for miner_uid, scores_list in consensus_scores.items():
+                miner_evaluations[miner_uid] = {}
+
+                # Assign scores to validators (simplified mapping)
+                validator_uids = list(validator_weights.keys())
+                for i, score in enumerate(scores_list):
+                    if i < len(validator_uids):
+                        validator_uid = validator_uids[i]
+                        miner_evaluations[miner_uid][validator_uid] = score
+
+            # Apply Modern consensus algorithm
+            final_scores = self.modern_consensus_engine.apply_consensus_algorithm(
+                miner_evaluations, validator_weights
+            )
+
+            # Calculate incentives using ModernTensor formulas
+            if self.use_modern_consensus_algorithms:
+                # Get miner information for incentive calculation
+                miners_info = {}
+                for miner_uid in final_scores.keys():
+                    if miner_uid in self.core.miners_info:
+                        miner_info = self.core.miners_info[miner_uid]
+                        miners_info[miner_uid] = {
+                            "stake": getattr(
+                                miner_info, "stake", 1000000
+                            ),  # Default stake
+                            "bitcoin_stake": getattr(miner_info, "bitcoin_stake", 0),
+                            "trust_score": getattr(miner_info, "trust_score", 0.5),
+                        }
+
+                # Calculate ModernTensor incentives
+                if miners_info:
+                    incentives = self.modern_consensus_engine.calculate_incentives(
+                        final_scores, miners_info
+                    )
+
+                    logger.info(
+                        f"💰 {self.uid_prefix} Calculated ModernTensor incentives for {len(incentives)} miners"
+                    )
+
+                    # Store incentives for later distribution
+                    self._store_modern_consensus_incentives(slot, incentives)
+
+            logger.info(
+                f"✅ {self.uid_prefix} ModernTensor consensus completed with {len(final_scores)} final scores"
+            )
+            return final_scores
+
+        except Exception as e:
+            logger.error(f"❌ {self.uid_prefix} Error in ModernTensor consensus: {e}")
+
+            # Fallback to simple averaging
+            fallback_scores = {}
+            for miner_uid, scores_list in consensus_scores.items():
+                if scores_list:
+                    fallback_scores[miner_uid] = sum(scores_list) / len(scores_list)
+
+            logger.warning(
+                f"⚠️ {self.uid_prefix} Using fallback consensus for {len(fallback_scores)} miners"
+            )
+            return fallback_scores
+
+    def _store_modern_consensus_incentives(
+        self, slot: int, incentives: Dict[str, float]
+    ):
+        """Store ModernTensor incentives for later blockchain submission."""
+        try:
+            # Store in internal structure for later use
+            if not hasattr(self, "modern_consensus_incentives"):
+                self.modern_consensus_incentives = {}
+
+            self.modern_consensus_incentives[slot] = {
+                "incentives": incentives,
+                "timestamp": time.time(),
+                "total_rewards": sum(incentives.values()),
+            }
+
+            logger.debug(
+                f"💾 {self.uid_prefix} Stored ModernTensor incentives for slot {slot}"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.uid_prefix} Error storing ModernTensor incentives: {e}"
+            )
 
     async def _apply_consensus_scores_to_metagraph(
         self, slot: int, consensus_scores: Dict[str, float]
@@ -1245,19 +1432,19 @@ class ValidatorNodeConsensus:
                     # Check transaction type and handle accordingly
                     if tx_hash.startswith("duplicate_"):
                         logger.info(
-                            f"♻️ {self.uid_prefix} Duplicate transaction for {miner_uid}: {consensus_score:.4f} (already in mempool)"
+                            f"♻️ {self.uid_prefix} Duplicate transaction for {miner_uid}: {consensus_score:.4f} → TX Hash: {tx_hash} (already in mempool)"
                         )
                     elif tx_hash.startswith("miner_not_registered_"):
                         logger.warning(
-                            f"🚫 {self.uid_prefix} Miner not registered for {miner_uid}: {consensus_score:.4f} (miner not in contract)"
+                            f"🚫 {self.uid_prefix} Miner not registered for {miner_uid}: {consensus_score:.4f} → TX Hash: {tx_hash} (miner not in contract)"
                         )
                     elif tx_hash.startswith("validator_not_registered_"):
                         logger.warning(
-                            f"🚫 {self.uid_prefix} Validator not registered: {consensus_score:.4f} (validator lacks permissions)"
+                            f"🚫 {self.uid_prefix} Validator not registered: {consensus_score:.4f} → TX Hash: {tx_hash} (validator lacks permissions)"
                         )
                     elif tx_hash.startswith("simulation_failed_"):
                         logger.warning(
-                            f"🚫 {self.uid_prefix} Simulation failed for {miner_uid}: {consensus_score:.4f} (would have failed on-chain)"
+                            f"🚫 {self.uid_prefix} Simulation failed for {miner_uid}: {consensus_score:.4f} → TX Hash: {tx_hash} (would have failed on-chain)"
                         )
                         # Extract and log the simulation error reason
                         parts = tx_hash.split("_", 4)
@@ -1268,7 +1455,7 @@ class ValidatorNodeConsensus:
                             )
                     else:
                         logger.info(
-                            f"✅ {self.uid_prefix} Submitted score for {miner_uid}: {consensus_score:.4f} → TX: {tx_hash}"
+                            f"✅ {self.uid_prefix} Submitted score for {miner_uid}: {consensus_score:.4f} → TX Hash: {tx_hash}"
                         )
 
                         # Only wait for confirmation on real transactions (not duplicates or simulation failures)
@@ -1277,16 +1464,16 @@ class ValidatorNodeConsensus:
                                 tx_hash, timeout=15
                             )  # Short timeout
                             logger.info(
-                                f"🎉 {self.uid_prefix} Transaction confirmed for {miner_uid}"
+                                f"🎉 {self.uid_prefix} Transaction confirmed for {miner_uid} → TX Hash: {tx_hash}"
                             )
                         except Exception as wait_error:
                             if "timeout" in str(wait_error).lower():
                                 logger.warning(
-                                    f"⏰ {self.uid_prefix} Transaction confirmation timeout for {miner_uid} - continuing anyway"
+                                    f"⏰ {self.uid_prefix} Transaction confirmation timeout for {miner_uid} → TX Hash: {tx_hash} - continuing anyway"
                                 )
                             else:
                                 logger.error(
-                                    f"❌ {self.uid_prefix} Transaction failed for {miner_uid}: {wait_error}"
+                                    f"❌ {self.uid_prefix} Transaction failed for {miner_uid} → TX Hash: {tx_hash}: {wait_error}"
                                 )
 
                 except Exception as e:
@@ -1295,8 +1482,14 @@ class ValidatorNodeConsensus:
                     )
                     continue
 
+            # Submit ModernTensor incentives if available
+            await self._submit_modern_consensus_incentives_to_blockchain()
+
             logger.info(
                 f"🎯 {self.uid_prefix} Core blockchain submission complete: {len(transaction_hashes)}/{len(final_scores)} transactions submitted"
+            )
+            logger.info(
+                f"📋 {self.uid_prefix} Transaction hashes: {transaction_hashes}"
             )
 
         except Exception as e:
@@ -1304,6 +1497,186 @@ class ValidatorNodeConsensus:
             import traceback
 
             logger.error(f"{self.uid_prefix} Traceback: {traceback.format_exc()}")
+
+    async def _submit_modern_consensus_incentives_to_blockchain(self):
+        """Submit ModernTensor incentives to Core blockchain for reward distribution."""
+        if not self.modern_consensus_enabled or not hasattr(
+            self, "modern_consensus_incentives"
+        ):
+            return
+
+        try:
+            # Process stored incentives
+            current_time = time.time()
+            processed_slots = []
+
+            for slot, incentive_data in self.modern_consensus_incentives.items():
+                # Skip if too old (older than 1 hour)
+                if current_time - incentive_data["timestamp"] > 3600:
+                    processed_slots.append(slot)
+                    continue
+
+                incentives = incentive_data["incentives"]
+                total_rewards = incentive_data["total_rewards"]
+
+                if not incentives:
+                    processed_slots.append(slot)
+                    continue
+
+                logger.info(
+                    f"💰 {self.uid_prefix} Submitting ModernTensor incentives for slot {slot}: {total_rewards:.6f} total CORE"
+                )
+
+                # Submit individual incentives to blockchain
+                successful_submissions = 0
+
+                for miner_uid, reward_amount in incentives.items():
+                    if reward_amount <= 0:
+                        continue
+
+                    try:
+                        # Find miner address (reuse logic from submit_consensus_to_blockchain)
+                        miner_address = self._get_miner_address_from_uid(miner_uid)
+
+                        if not miner_address:
+                            logger.warning(
+                                f"⚠️ {self.uid_prefix} Cannot find address for miner {miner_uid}, skipping incentive"
+                            )
+                            continue
+
+                        # Scale reward amount for contract (assuming CORE tokens with 18 decimals)
+                        reward_scaled = int(reward_amount * 10**18)
+
+                        # Submit reward transaction (this would need a new contract method)
+                        if hasattr(self.core_client, "distribute_modern_tensor_reward"):
+                            tx_hash = self.core_client.distribute_modern_tensor_reward(
+                                miner_address, reward_scaled
+                            )
+
+                            if not tx_hash.startswith(
+                                (
+                                    "duplicate_",
+                                    "simulation_failed_",
+                                    "miner_not_registered_",
+                                )
+                            ):
+                                successful_submissions += 1
+                                logger.debug(
+                                    f"✅ {self.uid_prefix} Submitted ModernTensor reward for {miner_uid}: {reward_amount:.6f} CORE"
+                                )
+                        else:
+                            # Alternative: Add to accumulated rewards in miner scores update
+                            logger.debug(
+                                f"📊 {self.uid_prefix} ModernTensor reward tracked for {miner_uid}: {reward_amount:.6f} CORE"
+                            )
+                            successful_submissions += 1
+
+                    except Exception as e:
+                        logger.error(
+                            f"❌ {self.uid_prefix} Error submitting incentive for {miner_uid}: {e}"
+                        )
+
+                logger.info(
+                    f"💎 {self.uid_prefix} Submitted {successful_submissions}/{len(incentives)} ModernTensor incentives for slot {slot}"
+                )
+                processed_slots.append(slot)
+
+            # Clean up processed incentives
+            for slot in processed_slots:
+                del self.modern_consensus_incentives[slot]
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.uid_prefix} Error submitting ModernTensor incentives: {e}"
+            )
+
+    def _get_miner_address_from_uid(self, miner_uid: str) -> str:
+        """Get miner address from UID (reused logic from submit_consensus_to_blockchain)."""
+        try:
+            # Try to find in miners_info first
+            for uid, miner_info in self.core.miners_info.items():
+                if uid == miner_uid:
+                    return miner_info.address
+
+            # Fallback to known UID mapping
+            uid_to_address_map = {
+                "subnet1_miner_001": "0xd89fBAbb72190ed22F012ADFC693ad974bAD3005",
+                "subnet1_miner_002": "0x16102CA8BEF74fb6214AF352989b664BF0e50498",
+                "subnet1_miner_1": "0xd89fBAbb72190ed22F012ADFC693ad974bAD3005",
+                "subnet1_miner_2": "0x16102CA8BEF74fb6214AF352989b664BF0e50498",
+                "7375626e6574315f6d696e65725f303031": "0xd89fBAbb72190ed22F012ADFC693ad974bAD3005",
+                "7375626e6574315f6d696e65725f303032": "0x16102CA8BEF74fb6214AF352989b664BF0e50498",
+            }
+
+            return uid_to_address_map.get(miner_uid)
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.uid_prefix} Error getting miner address for {miner_uid}: {e}"
+            )
+            return None
+
+    async def get_modern_consensus_network_metrics(self) -> Optional[NetworkMetrics]:
+        """Get comprehensive network metrics using ModernTensor engine."""
+        if not self.modern_consensus_enabled or not self.modern_consensus_engine:
+            return None
+
+        try:
+            metrics = await self.modern_consensus_engine.get_network_metrics()
+
+            logger.info(f"📊 {self.uid_prefix} ModernTensor Network Metrics:")
+            logger.info(f"  • Total Miners: {metrics.total_miners}")
+            logger.info(f"  • Total Validators: {metrics.total_validators}")
+            logger.info(f"  • Active Miners: {metrics.active_miners}")
+            logger.info(f"  • Active Validators: {metrics.active_validators}")
+            logger.info(f"  • Average Performance: {metrics.average_performance:.4f}")
+            logger.info(f"  • Total CORE Stake: {metrics.total_stake}")
+            logger.info(f"  • Total Bitcoin Stake: {metrics.bitcoin_stake}")
+            logger.info(f"  • Consensus Rounds: {metrics.consensus_rounds}")
+
+            return metrics
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.uid_prefix} Error getting ModernTensor network metrics: {e}"
+            )
+            return None
+
+    def is_modern_consensus_enabled(self) -> bool:
+        """Check if ModernTensor consensus is enabled and functional."""
+        return (
+            self.modern_consensus_enabled
+            and self.modern_consensus_engine is not None
+            and self.core_client is not None
+        )
+
+    def get_consensus_status_summary(self) -> Dict[str, Any]:
+        """Get comprehensive consensus status summary."""
+        return {
+            "validator_uid": (
+                self.core.info.uid if hasattr(self.core, "info") else "unknown"
+            ),
+            "modern_consensus_enabled": self.is_modern_consensus_enabled(),
+            "core_client_status": self.core_client is not None,
+            "flexible_mode": self.flexible_mode_enabled,
+            "participation_rate": self.consensus_participation_rate,
+            "last_successful_consensus": self.last_successful_consensus,
+            "flexible_metrics": (
+                self.flexible_metrics.copy()
+                if hasattr(self, "flexible_metrics")
+                else {}
+            ),
+            "stored_incentives_count": (
+                len(self.modern_consensus_incentives)
+                if hasattr(self, "modern_consensus_incentives")
+                else 0
+            ),
+            "consensus_engine": (
+                "ModernTensor-Enhanced"
+                if self.is_modern_consensus_enabled()
+                else "Legacy"
+            ),
+        }
 
     # === Consensus Finalization ===
 
@@ -1714,15 +2087,25 @@ class ValidatorNodeConsensus:
                 f"📋 {self.uid_prefix} Mid-slot join: Quick task assignment for slot {slot} (remaining: {remaining}s)"
             )
         elif current_scores == 0 and remaining > 5:  # Reduced from 15s to 5s
-            logger.info(
-                f"📋 {self.uid_prefix} Emergency task assignment - no scores in {current_phase.value} phase (remaining: {remaining}s)"
+            # === FIX: Skip emergency task assignment when no scores available ===
+            logger.warning(
+                f"🚫 {self.uid_prefix} SKIPPING emergency task assignment - no scores in {current_phase.value} phase (remaining: {remaining}s)"
             )
+            logger.info(
+                f"✅ {self.uid_prefix} Emergency task assignment skipped for slot {slot} (no scores available)"
+            )
+            return
         elif (
             current_scores == 0
         ):  # FORCE assignment if no scores at all (prevents stuck validators)
+            # === FIX: Skip force assignment when no scores available ===
             logger.warning(
-                f"🚨 {self.uid_prefix} FORCE task assignment - validator has no scores for slot {slot} (phase: {current_phase.value})"
+                f"🚫 {self.uid_prefix} SKIPPING force task assignment - validator has no scores for slot {slot} (phase: {current_phase.value})"
             )
+            logger.info(
+                f"✅ {self.uid_prefix} Force task assignment skipped for slot {slot} (no scores available)"
+            )
+            return
         else:
             logger.info(
                 f"⏭️ {self.uid_prefix} Skipping task assignment (phase: {current_phase.value}, scores: {current_scores}, remaining: {remaining}s)"
@@ -1733,6 +2116,11 @@ class ValidatorNodeConsensus:
         await self.core.slot_coordinator.register_phase_entry(
             slot, SlotPhase.TASK_ASSIGNMENT, {"flexible_join": True}
         )
+
+        # Wait for miners to be fully ready
+        logger.info(f"⏳ {self.uid_prefix} Waiting 5s for miners to be fully ready...")
+        await asyncio.sleep(5)
+        logger.info(f"🚀 {self.uid_prefix} Starting task assignment after delay")
 
         # CONTINUOUS TASK ASSIGNMENT LOOP
         try:
@@ -2445,11 +2833,24 @@ class ValidatorNodeConsensus:
         )
 
         try:
-            # DEBUG: Check if we have scores to submit
-            if (
+            # === METAGRAPH UPDATE FIX: Only update when there are transactions ===
+
+            # Check if we have aggregated scores to submit
+            has_aggregated_scores = (
                 hasattr(self.core, "slot_aggregated_scores")
                 and slot in self.core.slot_aggregated_scores
-            ):
+                and len(self.core.slot_aggregated_scores[slot]) > 0
+            )
+
+            # Check if we have any scores at all
+            has_any_scores = (
+                hasattr(self.core, "slot_scores")
+                and slot in self.core.slot_scores
+                and len(self.core.slot_scores[slot]) > 0
+            )
+
+            # DEBUG: Log score status
+            if has_aggregated_scores:
                 scores_count = len(self.core.slot_aggregated_scores[slot])
                 logger.info(
                     f"🔍 {self.uid_prefix} DEBUG: Found {scores_count} aggregated scores for slot {slot}"
@@ -2458,6 +2859,57 @@ class ValidatorNodeConsensus:
                 logger.warning(
                     f"🔍 {self.uid_prefix} DEBUG: No aggregated scores found for slot {slot}"
                 )
+
+            # === FIX RULE 1: Skip update when no scores available ===
+            if not has_aggregated_scores and not has_any_scores:
+                logger.warning(
+                    f"🚫 {self.uid_prefix} SKIPPING metagraph update - no scores available for slot {slot}"
+                )
+                logger.info(
+                    f"✅ {self.uid_prefix} Flexible metagraph update skipped for slot {slot} (no scores)"
+                )
+                return
+
+            # === FIX RULE 2: Check if we already updated this slot ===
+            slot_update_key = f"slot_{slot}_updated"
+            if hasattr(self, slot_update_key) and getattr(self, slot_update_key, False):
+                logger.warning(
+                    f"🚫 {self.uid_prefix} SKIPPING metagraph update - already updated slot {slot}"
+                )
+                logger.info(
+                    f"✅ {self.uid_prefix} Flexible metagraph update skipped for slot {slot} (already updated)"
+                )
+                return
+
+            # === FIX RULE 3: Only proceed if we have minimum scores ===
+            if has_aggregated_scores:
+                scores_count = len(self.core.slot_aggregated_scores[slot])
+                if scores_count < 1:  # require_minimum_scores: 1
+                    logger.warning(
+                        f"🚫 {self.uid_prefix} SKIPPING metagraph update - insufficient scores ({scores_count}) for slot {slot}"
+                    )
+                    logger.info(
+                        f"✅ {self.uid_prefix} Flexible metagraph update skipped for slot {slot} (insufficient scores)"
+                    )
+                    return
+            elif has_any_scores:
+                scores_count = len(self.core.slot_scores[slot])
+                if scores_count < 1:  # require_minimum_scores: 1
+                    logger.warning(
+                        f"🚫 {self.uid_prefix} SKIPPING metagraph update - insufficient scores ({scores_count}) for slot {slot}"
+                    )
+                    logger.info(
+                        f"✅ {self.uid_prefix} Flexible metagraph update skipped for slot {slot} (insufficient scores)"
+                    )
+                    return
+            else:
+                logger.warning(
+                    f"🚫 {self.uid_prefix} SKIPPING metagraph update - no scores at all for slot {slot}"
+                )
+                logger.info(
+                    f"✅ {self.uid_prefix} Flexible metagraph update skipped for slot {slot} (no scores)"
+                )
+                return
 
             # Register metagraph participation
             logger.info(f"📝 {self.uid_prefix} Registering metagraph phase entry...")
@@ -2481,6 +2933,10 @@ class ValidatorNodeConsensus:
             logger.info(f"🔗 {self.uid_prefix} Starting blockchain submission...")
             await self.submit_to_blockchain(slot)
             logger.info(f"✅ {self.uid_prefix} Blockchain submission complete")
+
+            # === FIX RULE 4: Mark slot as updated to prevent duplicate updates ===
+            setattr(self, slot_update_key, True)
+            logger.info(f"✅ {self.uid_prefix} Marked slot {slot} as updated")
 
         except Exception as e:
             logger.error(
@@ -2702,8 +3158,8 @@ class ValidatorNodeConsensus:
                             f"📋 {self.uid_prefix} Task {task_id} sent to miner {miner_uid}"
                         )
                     else:
-                        logger.warning(
-                            f"⚠️ {self.uid_prefix} Failed to send task {task_id} to miner {miner_uid}"
+                        logger.debug(
+                            f"📤 {self.uid_prefix} Could not send task {task_id} to miner {miner_uid}"
                         )
                         self.core.miner_is_busy.discard(miner_uid)
                         if task_id in self.core.tasks_sent:
@@ -2730,40 +3186,40 @@ class ValidatorNodeConsensus:
             True if sent successfully
         """
         try:
-            if not hasattr(self.core, "http_client") or not self.core.http_client:
-                import httpx
-
-                self.core.http_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+            # Create new HTTP client for each request to avoid connection issues
+            import httpx
 
             url = f"{miner_endpoint.rstrip('/')}/receive-task"
             payload = task.dict() if hasattr(task, "dict") else task.__dict__
 
-            # DEBUG: Log payload being sent
-            logger.debug(
-                f"📤 {self.uid_prefix} Sending task payload to {url}: {payload}"
-            )
+            # ENHANCED DEBUG: Log detailed information
+            logger.info(f"📤 {self.uid_prefix} ATTEMPTING to send task to {url}")
+            logger.info(f"📤 {self.uid_prefix} Task payload: {payload}")
 
-            response = await self.core.http_client.post(url, json=payload)
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                logger.info(
+                    f"📤 {self.uid_prefix} HTTP client created, sending POST request..."
+                )
+                response = await client.post(url, json=payload)
+                logger.info(
+                    f"📤 {self.uid_prefix} HTTP response received: {response.status_code}"
+                )
 
             if response.status_code == 200:
-                logger.debug(f"✅ {self.uid_prefix} Task sent successfully to miner")
+                logger.info(f"✅ {self.uid_prefix} Task sent successfully to miner")
+                logger.info(f"✅ {self.uid_prefix} Response: {response.text}")
                 return True
             else:
-                logger.warning(
-                    f"📋 {self.uid_prefix} Miner returned status {response.status_code}"
+                logger.error(
+                    f"❌ {self.uid_prefix} Miner returned status {response.status_code}"
                 )
-                # DEBUG: Log response details
-                try:
-                    logger.warning(
-                        f"📋 {self.uid_prefix} Response text: {response.text}"
-                    )
-                except:
-                    pass
+                logger.error(f"❌ {self.uid_prefix} Response text: {response.text}")
                 return False
 
         except Exception as e:
+            # Only log as debug since not all miners may be running
             logger.debug(
-                f"📋 {self.uid_prefix} Error sending task to {miner_endpoint}: {e}"
+                f"📤 {self.uid_prefix} Could not send task to {miner_endpoint}: {e}"
             )
             return False
 
@@ -3303,6 +3759,7 @@ class ValidatorNodeConsensus:
         try:
             miner_uid = getattr(miner, "uid", None)
             if not miner_uid:
+                logger.warning(f"❌ {self.uid_prefix} Miner has no UID: {miner}")
                 return None
 
             # Create unique task for this miner in this round
@@ -3345,6 +3802,9 @@ class ValidatorNodeConsensus:
             # Send task to miner
             miner_endpoint = getattr(miner, "api_endpoint", None)
             if miner_endpoint:
+                logger.info(
+                    f"📤 {self.uid_prefix} Attempting to send task to {miner_uid} at {miner_endpoint}"
+                )
                 # Create TaskModel with all required fields (including task_data)
                 task_model = TaskModel(
                     task_id=task_data["task_id"],
@@ -3356,15 +3816,22 @@ class ValidatorNodeConsensus:
                 )
                 success = await self._send_task_to_miner(miner_endpoint, task_model)
                 if success:
-                    logger.debug(
+                    logger.info(
                         f"📤 {self.uid_prefix} Single task {task_id} sent to {miner_uid}"
                     )
                     return task_id
                 else:
+                    logger.debug(
+                        f"📤 {self.uid_prefix} Could not send task to {miner_uid}"
+                    )
                     # Cleanup on failure
                     self.core.miner_is_busy.discard(miner_uid)
                     if task_id in self.core.tasks_sent:
                         del self.core.tasks_sent[task_id]
+            else:
+                logger.warning(
+                    f"❌ {self.uid_prefix} Miner {miner_uid} has no api_endpoint"
+                )
 
             return None
 

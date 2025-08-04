@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, List
 
 from mt_core.async_client import RestClient
 from mt_core.account import Account
-from .contract_client import AptosContractClient
+from .contract_client import ModernTensorCoreClient
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ async def get_validator_info(
         # Tạo contract client - cần một account dummy cho view functions
         from mt_aptos.account import Account
         dummy_account = Account.generate()  # Temporary account for view functions
-        contract_client = AptosContractClient(
+        contract_client = ModernTensorCoreClient(
             client=client,
             account=dummy_account,
             contract_address=contract_address
@@ -82,7 +82,7 @@ async def get_all_validators(
         # Tạo contract client - cần một account dummy cho view functions
         from mt_aptos.account import Account
         dummy_account = Account.generate()  # Temporary account for view functions
-        contract_client = AptosContractClient(
+        contract_client = ModernTensorCoreClient(
             client=client,
             account=dummy_account,
             contract_address=contract_address
@@ -116,7 +116,7 @@ async def get_all_miners(
         # Tạo contract client - cần một account dummy cho view functions
         from mt_aptos.account import Account
         dummy_account = Account.generate()  # Temporary account for view functions
-        contract_client = AptosContractClient(
+        contract_client = ModernTensorCoreClient(
             client=client,
             account=dummy_account,
             contract_address=contract_address

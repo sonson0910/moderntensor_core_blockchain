@@ -16,7 +16,7 @@ from rich.panel import Panel
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from mt_core.keymanager.wallet_utils import WalletUtils
-from mt_core.keymanager.hd_wallet_manager import AptosHDWalletManager
+from mt_core.keymanager.hd_wallet_manager import CoreHDWalletManager
 
 console = Console()
 
@@ -39,7 +39,7 @@ def test_cli_integration():
         # === Test 1: Direct Manager Usage ===
         console.print("\n[bold blue]📦 Test 1: Direct HD Wallet Manager[/bold blue]")
         
-        wm = AptosHDWalletManager(base_dir=tmpdir)
+        wm = CoreHDWalletManager(base_dir=tmpdir)
         
         # Create wallet
         wallet_name = "integration_test_wallet"

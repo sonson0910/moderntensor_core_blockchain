@@ -38,7 +38,7 @@ from eth_account import Account
 from eth_account.signers.local import LocalAccount
 
 # Remove Aptos SDK imports
-# from aptos_sdk.account import Account
+# from eth_account import Account
 
 from ..config.settings import settings
 from ..core.datatypes import (

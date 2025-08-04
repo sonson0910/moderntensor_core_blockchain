@@ -350,12 +350,21 @@ def run_consensus_logic(
         for uid, v in validators_info.items()
         if getattr(v, "status", STATUS_ACTIVE) == STATUS_ACTIVE
     }
-    total_active_stake = sum(v.stake for v in active_validators_info.values())
+
+    # Enhanced stake calculation with Bitcoin integration
+    total_active_stake = sum(
+        v.stake + getattr(v, "bitcoin_stake", 0) * 2.0  # Bitcoin 2x multiplier
+        for v in active_validators_info.values()
+    )
     e_avg_weighted = 0.0
     if total_active_stake > EPSILON:
         # Tính E_v trung bình dựa trên trạng thái *đầu chu kỳ* (last_performance từ ValidatorInfo)
         valid_e_validators_for_avg = [
-            (v.stake, getattr(v, "last_performance", 0.0))
+            # Enhanced stake with Bitcoin staking
+            (
+                v.stake + getattr(v, "bitcoin_stake", 0) * 2.0,
+                getattr(v, "last_performance", 0.0),
+            )
             for v in active_validators_info.values()
         ]
         if valid_e_validators_for_avg:

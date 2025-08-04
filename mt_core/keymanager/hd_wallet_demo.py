@@ -15,7 +15,7 @@ from rich.table import Table
 # Add the project root to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from mt_core.keymanager.hd_wallet_manager import AptosHDWalletManager
+from mt_core.keymanager.hd_wallet_manager import CoreHDWalletManager
 
 console = Console()
 
@@ -36,7 +36,7 @@ def demo_hd_wallet_system():
         console.print(f"\n[dim]Using temporary directory: {tmpdir}[/dim]")
         
         # Initialize wallet manager
-        wm = AptosHDWalletManager(base_dir=tmpdir)
+        wm = CoreHDWalletManager(base_dir=tmpdir)
         
         # === Step 1: Create HD Wallet ===
         console.print("\n[bold blue]📦 Step 1: Creating HD Wallet[/bold blue]")

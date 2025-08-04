@@ -82,7 +82,7 @@ class Settings(BaseSettings):
         description="Core blockchain mainnet RPC URL",
     )
     CORE_CONTRACT_ADDRESS: str = Field(
-        default="0xF5e19326A4c266F24404155aaF434D27e1064833",
+        default="0x594fc12B3e3AB824537b947765dd9409DAAAa143",
         alias="CORE_CONTRACT_ADDRESS",
         description="ModernTensor contract address on Core blockchain (NEW: with updateMinerScores)",
     )

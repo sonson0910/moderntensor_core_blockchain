@@ -16,7 +16,7 @@ from rich.table import Table
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from mt_core.keymanager.wallet_utils import WalletUtils
-from mt_core.keymanager.hd_wallet_manager import AptosHDWalletManager
+from mt_core.keymanager.hd_wallet_manager import CoreHDWalletManager
 
 console = Console()
 
@@ -39,7 +39,7 @@ def test_comprehensive_hotkey_system():
         # === Setup: Create Wallet and Coldkey ===
         console.print("\n[bold blue]🏗️ Setup: Creating Wallet and Coldkey[/bold blue]")
         
-        wm = AptosHDWalletManager(base_dir=tmpdir)
+        wm = CoreHDWalletManager(base_dir=tmpdir)
         utils = WalletUtils(tmpdir)
         
         # Create wallet

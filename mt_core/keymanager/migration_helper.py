@@ -20,7 +20,7 @@ from eth_account import Account
 current_dir = Path(__file__).parent
 sys.path.insert(0, str(current_dir.parent.parent.parent))
 
-from mt_core.keymanager.hd_wallet_manager import AptosHDWalletManager as CoreHDWalletManager
+from mt_core.keymanager.hd_wallet_manager import CoreHDWalletManager as CoreHDWalletManager
 from mt_core.keymanager.wallet_utils import WalletUtils
 from mt_core.config.settings import logger
 
@@ -378,9 +378,9 @@ account = utils.quick_load_account('{wallet_name}', '{coldkey_name}', 'HOTKEY_NA
 # account_manager = AccountManager()
 
 # NEW CODE:
-from moderntensor.mt_aptos.keymanager.hd_wallet_manager import AptosHDWalletManager
+from moderntensor.mt_aptos.keymanager.hd_wallet_manager import CoreHDWalletManager
 from moderntensor.mt_aptos.keymanager.wallet_utils import WalletUtils
-hd_wallet = AptosHDWalletManager()
+hd_wallet = CoreHDWalletManager()
 utils = WalletUtils()
 """
 
@@ -563,8 +563,8 @@ HD_WALLET_PASSWORD = "your_wallet_password"
 [bold cyan]Step-by-step migration process:[/bold cyan]
 
 [yellow]1. Create HD Wallet:[/yellow]
-   from moderntensor.mt_aptos.keymanager.hd_wallet_manager import AptosHDWalletManager
-   hd_wallet = AptosHDWalletManager()
+   from moderntensor.mt_aptos.keymanager.hd_wallet_manager import CoreHDWalletManager
+   hd_wallet = CoreHDWalletManager()
    mnemonic = hd_wallet.create_wallet("my_wallet", "password")
 
 [yellow]2. Load Wallet:[/yellow]

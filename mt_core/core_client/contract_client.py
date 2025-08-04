@@ -32,6 +32,7 @@ class ModernTensorCoreClient:
         account: Optional[Account] = None,
         contract_abi: Optional[List[Dict]] = None,
     ):
+        self._current_nonce = None
         """
         Khởi tạo client ModernTensor cho Core blockchain.
 
@@ -61,24 +62,35 @@ class ModernTensorCoreClient:
         try:
             import os
             from pathlib import Path
-            
+
             # Try to load from artifacts file
             current_file = Path(__file__)
-            artifacts_path = current_file.parent.parent / "smartcontract" / "artifacts" / "contracts" / "ModernTensorAI_v2_Bittensor.sol" / "ModernTensorAI_v2_Bittensor.json"
-            
+            artifacts_path = (
+                current_file.parent.parent
+                / "smartcontract"
+                / "artifacts"
+                / "contracts"
+                / "ModernTensor.sol"
+                / "ModernTensor.json"
+            )
+
             if artifacts_path.exists():
-                with open(artifacts_path, 'r') as f:
+                with open(artifacts_path, "r") as f:
                     contract_data = json.load(f)
-                    abi = contract_data.get('abi', [])
+                    abi = contract_data.get("abi", [])
                     if abi:
-                        logger.info(f"✅ Loaded ABI from artifacts: {len(abi)} functions")
+                        logger.info(
+                            f"✅ Loaded ABI from artifacts: {len(abi)} functions"
+                        )
                         return abi
-            
-            logger.warning(f"⚠️ Artifacts not found at {artifacts_path}, using fallback ABI")
-            
+
+            logger.warning(
+                f"⚠️ Artifacts not found at {artifacts_path}, using fallback ABI"
+            )
+
         except Exception as e:
             logger.warning(f"⚠️ Failed to load artifacts ABI: {e}, using fallback")
-        
+
         # Fallback to basic ABI
         return [
             {
@@ -132,7 +144,7 @@ class ModernTensorCoreClient:
                     {"name": "status", "type": "uint8"},
                     {"name": "uid2", "type": "bytes32"},
                     {"name": "apiEndpoint", "type": "string"},
-                    {"name": "owner", "type": "address"}
+                    {"name": "owner", "type": "address"},
                 ],
                 "stateMutability": "view",
                 "type": "function",
@@ -153,7 +165,7 @@ class ModernTensorCoreClient:
                     {"name": "status", "type": "uint8"},
                     {"name": "uid2", "type": "bytes32"},
                     {"name": "apiEndpoint", "type": "string"},
-                    {"name": "owner", "type": "address"}
+                    {"name": "owner", "type": "address"},
                 ],
                 "stateMutability": "view",
                 "type": "function",
@@ -168,7 +180,7 @@ class ModernTensorCoreClient:
             {
                 "inputs": [
                     {"name": "role", "type": "bytes32"},
-                    {"name": "account", "type": "address"}
+                    {"name": "account", "type": "address"},
                 ],
                 "name": "hasRole",
                 "outputs": [{"name": "", "type": "bool"}],
@@ -179,9 +191,9 @@ class ModernTensorCoreClient:
 
     def register_miner(
         self,
-        uid: bytes,
-        subnet_uid: int,
-        stake_amount: int,
+        subnet_id: int,
+        core_stake: int,
+        btc_stake: int,
         api_endpoint: str,
         gas_price: Optional[int] = None,
     ) -> str:
@@ -189,9 +201,9 @@ class ModernTensorCoreClient:
         Đăng ký một miner mới.
 
         Args:
-            uid: UID duy nhất của miner
-            subnet_uid: ID của subnet
-            stake_amount: Số lượng CORE tokens stake
+            subnet_id: ID của subnet
+            core_stake: Số lượng CORE tokens stake
+            btc_stake: Số lượng BTC tokens stake
             api_endpoint: Endpoint API của miner
             gas_price: Gas price (optional)
 
@@ -201,30 +213,39 @@ class ModernTensorCoreClient:
         if not self.account:
             raise ValueError("Account required for transaction")
 
+        # Get nonce
+        if self._current_nonce is None:
+            self._current_nonce = self.w3.eth.get_transaction_count(
+                self.account.address
+            )
+
         # Build transaction
         txn = self.contract.functions.registerMiner(
-            uid, subnet_uid, stake_amount, api_endpoint
+            subnet_id, core_stake, btc_stake, api_endpoint
         ).build_transaction(
             {
                 "from": self.account.address,
                 "gas": 500000,
                 "gasPrice": gas_price or self.w3.eth.gas_price,
-                "nonce": self.w3.eth.get_transaction_count(self.account.address),
+                "nonce": self._current_nonce,
             }
         )
 
+        # Increment nonce for next transaction
+        self._current_nonce += 1
+
         # Sign and send transaction
         signed_txn = self.account.sign_transaction(txn)
-        tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+        tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
 
         logger.info(f"Miner registration transaction sent: {tx_hash.hex()}")
         return tx_hash.hex()
 
     def register_validator(
         self,
-        uid: bytes,
-        subnet_uid: int,
-        stake_amount: int,
+        subnet_id: int,
+        core_stake: int,
+        btc_stake: int,
         api_endpoint: str,
         gas_price: Optional[int] = None,
     ) -> str:
@@ -232,9 +253,9 @@ class ModernTensorCoreClient:
         Đăng ký một validator mới.
 
         Args:
-            uid: UID duy nhất của validator
-            subnet_uid: ID của subnet
-            stake_amount: Số lượng CORE tokens stake
+            subnet_id: ID của subnet
+            core_stake: Số lượng CORE tokens stake
+            btc_stake: Số lượng BTC tokens stake
             api_endpoint: Endpoint API của validator
             gas_price: Gas price (optional)
 
@@ -244,21 +265,30 @@ class ModernTensorCoreClient:
         if not self.account:
             raise ValueError("Account required for transaction")
 
+        # Get nonce
+        if self._current_nonce is None:
+            self._current_nonce = self.w3.eth.get_transaction_count(
+                self.account.address
+            )
+
         # Build transaction
         txn = self.contract.functions.registerValidator(
-            uid, subnet_uid, stake_amount, api_endpoint
+            subnet_id, core_stake, btc_stake, api_endpoint
         ).build_transaction(
             {
                 "from": self.account.address,
                 "gas": 500000,
                 "gasPrice": gas_price or self.w3.eth.gas_price,
-                "nonce": self.w3.eth.get_transaction_count(self.account.address),
+                "nonce": self._current_nonce,
             }
         )
 
+        # Increment nonce for next transaction
+        self._current_nonce += 1
+
         # Sign and send transaction
         signed_txn = self.account.sign_transaction(txn)
-        tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+        tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
 
         logger.info(f"Validator registration transaction sent: {tx_hash.hex()}")
         return tx_hash.hex()
@@ -276,7 +306,7 @@ class ModernTensorCoreClient:
         Args:
             miner_scores: Dict mapping miner addresses to scores, OR single miner address (str)
             new_performance: Điểm hiệu suất mới (scaled by 1000000) - required if miner_scores is str
-            new_trust_score: Điểm tin cậy mới (scaled by 1000000) - required if miner_scores is str  
+            new_trust_score: Điểm tin cậy mới (scaled by 1000000) - required if miner_scores is str
             gas_price: Gas price (optional)
 
         Returns:
@@ -290,19 +320,21 @@ class ModernTensorCoreClient:
             # Old style: dict of {miner_address: score}
             if len(miner_scores) != 1:
                 raise ValueError("Currently only supports updating one miner at a time")
-            
+
             miner_address = list(miner_scores.keys())[0]
             score = list(miner_scores.values())[0]
-            
+
             # Convert normalized score (0.0-1.0) to scaled integers
             performance_scaled = int(score * 1000000)
             trust_scaled = int(score * 1000000)  # Use same score for both
-            
+
         else:
             # New style: individual parameters
             if new_performance is None or new_trust_score is None:
-                raise ValueError("new_performance and new_trust_score required when miner_scores is str")
-            
+                raise ValueError(
+                    "new_performance and new_trust_score required when miner_scores is str"
+                )
+
             miner_address = miner_scores
             performance_scaled = new_performance
             trust_scaled = new_trust_score
@@ -346,7 +378,10 @@ class ModernTensorCoreClient:
             )
 
             # Check common failure reasons
-            if "miner not found" in str(sim_error).lower() or "not registered" in str(sim_error).lower():
+            if (
+                "miner not found" in str(sim_error).lower()
+                or "not registered" in str(sim_error).lower()
+            ):
                 logger.warning(
                     f"⚠️ Miner {miner_address} not registered in contract - skipping score update"
                 )
@@ -516,14 +551,17 @@ class ModernTensorCoreClient:
         """
         return self.contract.functions.getAllMiners().call()
 
-    def get_all_validators(self) -> List[str]:
+    def get_all_validators(self, subnet_id: int = 1) -> List[str]:
         """
-        Lấy danh sách tất cả validators.
+        Lấy danh sách tất cả validators trong subnet.
+
+        Args:
+            subnet_id: ID của subnet (default: 1)
 
         Returns:
             Danh sách địa chỉ validators
         """
-        return self.contract.functions.getAllValidators().call()
+        return self.contract.functions.getSubnetValidators(subnet_id).call()
 
     def calculate_staking_tier(self, user_address: str) -> int:
         """
@@ -550,7 +588,7 @@ class ModernTensorCoreClient:
         """
         tier_names = ["Base", "Boost", "Super", "Satoshi"]
         return tier_names[tier] if 0 <= tier < len(tier_names) else "Unknown"
-        
+
     def get_miner_info(self, miner_address: str) -> Dict[str, Any]:
         """
         Lấy thông tin của miner.
@@ -563,7 +601,7 @@ class ModernTensorCoreClient:
         """
         miner_address = to_checksum_address(miner_address)
         return self.contract.functions.getMinerInfo(miner_address).call()
-    
+
     def get_validator_info(self, validator_address: str) -> Dict[str, Any]:
         """
         Lấy thông tin của validator.
@@ -576,25 +614,31 @@ class ModernTensorCoreClient:
         """
         validator_address = to_checksum_address(validator_address)
         return self.contract.functions.getValidatorInfo(validator_address).call()
-    
-    def get_all_miners(self) -> List[str]:
+
+    def get_all_miners(self, subnet_id: int = 1) -> List[str]:
         """
-        Lấy danh sách tất cả miners.
+        Lấy danh sách tất cả miners trong subnet.
+
+        Args:
+            subnet_id: ID của subnet (default: 1)
 
         Returns:
             Danh sách địa chỉ miners
         """
-        return self.contract.functions.getAllMiners().call()
-    
-    def get_all_validators(self) -> List[str]:
+        return self.contract.functions.getSubnetMiners(subnet_id).call()
+
+    def get_all_validators(self, subnet_id: int = 1) -> List[str]:
         """
-        Lấy danh sách tất cả validators.
+        Lấy danh sách tất cả validators trong subnet.
+
+        Args:
+            subnet_id: ID của subnet (default: 1)
 
         Returns:
             Danh sách địa chỉ validators
         """
-        return self.contract.functions.getAllValidators().call()
-    
+        return self.contract.functions.getSubnetValidators(subnet_id).call()
+
     def get_total_miners(self) -> int:
         """
         Lấy tổng số miners đã đăng ký.
@@ -603,7 +647,7 @@ class ModernTensorCoreClient:
             Số lượng miners
         """
         return len(self.get_all_miners())
-    
+
     def get_total_validators(self) -> int:
         """
         Lấy tổng số validators đã đăng ký.

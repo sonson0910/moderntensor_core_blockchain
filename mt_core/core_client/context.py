@@ -10,7 +10,7 @@ from mt_core.async_client import RestClient
 from mt_core.account import Account
 
 from mt_core.config.settings import settings
-from .contract_client import AptosContractClient, create_aptos_client
+from .contract_client import ModernTensorCoreClient, create_web3_client
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ async def get_aptos_context(
     node_url: Optional[str] = None,
     private_key: Optional[str] = None,
     contract_address: Optional[str] = None,
-) -> Tuple[AptosContractClient, RestClient, Account]:
+) -> Tuple[ModernTensorCoreClient, RestClient, Account]:
     """
     Returns a context for interacting with the Aptos blockchain.
 
@@ -29,7 +29,7 @@ async def get_aptos_context(
         contract_address (Optional[str]): ModernTensor contract address. Defaults to settings.APTOS_CONTRACT_ADDRESS.
 
     Returns:
-        Tuple[AptosContractClient, RestClient, Account]: Contract client, REST client, and Account
+        Tuple[ModernTensorCoreClient, RestClient, Account]: Contract client, REST client, and Account
     """
     # Use settings if parameters are not provided
     node_url = node_url or getattr(settings, "APTOS_NODE_URL", "https://fullnode.testnet.aptoslabs.com/v1")
@@ -43,7 +43,7 @@ async def get_aptos_context(
     )
     
     # Create client
-    client, rest_client, account = await create_aptos_client(
+    client, rest_client, account = await create_web3_client(
         contract_address=contract_address,
         node_url=node_url,
         private_key=private_key,

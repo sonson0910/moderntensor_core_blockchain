@@ -39,18 +39,20 @@ async def get_validator_health(
             "current_cycle": node.current_cycle,
             "consensus_mode": node.consensus_mode,
             "miners_count": len(node.miners_info) if node.miners_info else 0,
-            "validators_count": len(node.validators_info) if node.validators_info else 0,
+            "validators_count": (
+                len(node.validators_info) if node.validators_info else 0
+            ),
             "timestamp": time.time(),
         }
-        
+
         logger.debug(f"Health check requested for validator {node.info.uid}")
         return health_data
-        
+
     except Exception as e:
         logger.error(f"Health check failed for validator: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Validator health check failed: {str(e)}"
+            detail=f"Validator health check failed: {str(e)}",
         )
 
 
@@ -72,7 +74,7 @@ async def get_metagraph(
             "validators": {},
             "timestamp": time.time(),
         }
-        
+
         # Add miners info
         if node.miners_info:
             for uid, miner_info in node.miners_info.items():
@@ -83,9 +85,10 @@ async def get_metagraph(
                     "trust_score": miner_info.trust_score,
                     "weight": miner_info.weight,
                     "stake": miner_info.stake,
+                    "bitcoin_stake": getattr(miner_info, "bitcoin_stake", 0),
                     "status": miner_info.status,
                 }
-        
+
         # Add validators info
         if node.validators_info:
             for uid, validator_info in node.validators_info.items():
@@ -96,17 +99,18 @@ async def get_metagraph(
                     "trust_score": validator_info.trust_score,
                     "weight": validator_info.weight,
                     "stake": validator_info.stake,
+                    "bitcoin_stake": getattr(validator_info, "bitcoin_stake", 0),
                     "status": validator_info.status,
                 }
-        
+
         logger.debug(f"Metagraph data requested for validator {node.info.uid}")
         return metagraph_data
-        
+
     except Exception as e:
         logger.error(f"Failed to get metagraph data: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get metagraph data: {str(e)}"
+            detail=f"Failed to get metagraph data: {str(e)}",
         )
 
 
@@ -127,21 +131,27 @@ async def get_consensus_info(
             "current_cycle": node.current_cycle,
             "consensus_mode": node.consensus_mode,
             "slot_length": node.slot_length,
-            "current_slot_phase": node.current_slot_phase.value if hasattr(node.current_slot_phase, 'value') else str(node.current_slot_phase),
+            "current_slot_phase": (
+                node.current_slot_phase.value
+                if hasattr(node.current_slot_phase, "value")
+                else str(node.current_slot_phase)
+            ),
             "tasks_sent_count": len(node.tasks_sent) if node.tasks_sent else 0,
             "cycle_scores_count": len(node.cycle_scores) if node.cycle_scores else 0,
-            "results_buffer_count": len(node.results_buffer) if node.results_buffer else 0,
+            "results_buffer_count": (
+                len(node.results_buffer) if node.results_buffer else 0
+            ),
             "timestamp": time.time(),
         }
-        
+
         logger.debug(f"Consensus info requested for validator {node.info.uid}")
         return consensus_info
-        
+
     except Exception as e:
         logger.error(f"Failed to get consensus info: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get consensus info: {str(e)}"
+            detail=f"Failed to get consensus info: {str(e)}",
         )
 
 
@@ -160,25 +170,31 @@ async def get_consensus_results(
     try:
         results_data = {
             "current_cycle": node.current_cycle,
-            "consensus_cache_count": len(node.consensus_results_cache) if node.consensus_results_cache else 0,
+            "consensus_cache_count": (
+                len(node.consensus_results_cache) if node.consensus_results_cache else 0
+            ),
             "recent_results": [],
             "timestamp": time.time(),
         }
-        
+
         # Add recent consensus results if available
         if node.consensus_results_cache:
-            for cycle, results in list(node.consensus_results_cache.items())[-5:]:  # Last 5 results
-                results_data["recent_results"].append({
-                    "cycle": cycle,
-                    "results": results,
-                })
-        
+            for cycle, results in list(node.consensus_results_cache.items())[
+                -5:
+            ]:  # Last 5 results
+                results_data["recent_results"].append(
+                    {
+                        "cycle": cycle,
+                        "results": results,
+                    }
+                )
+
         logger.debug(f"Consensus results requested for validator {node.info.uid}")
         return results_data
-        
+
     except Exception as e:
         logger.error(f"Failed to get consensus results: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get consensus results: {str(e)}"
-        ) 
+            detail=f"Failed to get consensus results: {str(e)}",
+        )

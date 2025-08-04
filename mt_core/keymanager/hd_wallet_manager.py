@@ -26,7 +26,7 @@ from .encryption_utils import get_cipher_suite
 from ..config.settings import settings, logger
 
 
-class AptosHDWalletManager:
+class CoreHDWalletManager:
     """
     HD Wallet Manager for Aptos using BIP44 derivation
     Supports Bittensor-like coldkey/hotkey system with hierarchical deterministic wallets

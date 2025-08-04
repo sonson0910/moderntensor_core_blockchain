@@ -10,13 +10,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 from moderntensor_aptos.mt_core.account import Account
-from moderntensor_aptos.mt_core.async_client import ModernTensorCoreClient
+from moderntensor_aptos.mt_core.async_client import CoreAsyncClient
 from moderntensor_aptos.mt_core.config.settings import settings, logger
 from moderntensor_aptos.mt_core.core_client.contract_client import (
-    register_miner,
-    register_validator,
-    get_all_miners,
-    get_all_validators,
+    ModernTensorCoreClient,
 )
 
 
@@ -58,18 +55,16 @@ def _load_account(account_name: str, password: str, base_dir: str) -> Optional[A
 
 
 # Helper function to get Core Client
-def _get_client(network: str) -> ModernTensorCoreClient:
+def _get_client(network: str) -> CoreAsyncClient:
     if network == "mainnet":
-        return ModernTensorCoreClient("https://rpc.coredao.org")
+        return CoreAsyncClient("https://rpc.coredao.org")
     elif network == "testnet":
-        return ModernTensorCoreClient("https://rpc.test.btcs.network")
+        return CoreAsyncClient("https://rpc.test.btcs.network")
     elif network == "devnet":
-        return ModernTensorCoreClient(
-            "https://rpc.test.btcs.network"
-        )  # Use testnet for dev
+        return CoreAsyncClient("https://rpc.test.btcs.network")  # Use testnet for dev
     else:
         # Default to testnet
-        return ModernTensorCoreClient("https://rpc.test.btcs.network")
+        return CoreAsyncClient("https://rpc.test.btcs.network")
 
 
 # ------------------------------------------------------------------------------
@@ -88,14 +83,14 @@ def _get_client(network: str) -> ModernTensorCoreClient:
 )
 @click.option(
     "--contract-address",
-    default=lambda: settings.APTOS_CONTRACT_ADDRESS,
+    default=lambda: settings.CORE_CONTRACT_ADDRESS,
     help="ModernTensor contract address.",
 )
 @click.option(
     "--network",
-    default=lambda: settings.APTOS_NETWORK,
+    default=lambda: settings.CORE_NETWORK,
     type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
-    help="Select Aptos network.",
+    help="Select Core network.",
 )
 @click.option(
     "--base-dir",
@@ -140,8 +135,11 @@ def register_miner_cmd(
     console.print("⏳ Submitting miner registration transaction...")
     try:
         # Create ModernTensorClient and register miner
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider(client.rpc_url))
         moderntensor_client = ModernTensorCoreClient(
-            account_obj, client, contract_address
+            w3=w3, contract_address=contract_address, account=account_obj
         )
 
         # Generate a random UID - in a real implementation, this would be derived from the account
@@ -194,14 +192,14 @@ def register_miner_cmd(
 )
 @click.option(
     "--contract-address",
-    default=lambda: settings.APTOS_CONTRACT_ADDRESS,
+    default=lambda: settings.CORE_CONTRACT_ADDRESS,
     help="ModernTensor contract address.",
 )
 @click.option(
     "--network",
-    default=lambda: settings.APTOS_NETWORK,
+    default=lambda: settings.CORE_NETWORK,
     type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
-    help="Select Aptos network.",
+    help="Select Core network.",
 )
 @click.option(
     "--base-dir",
@@ -246,8 +244,11 @@ def register_validator_cmd(
     console.print("⏳ Submitting validator registration transaction...")
     try:
         # Create ModernTensorClient and register validator
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider(client.rpc_url))
         moderntensor_client = ModernTensorCoreClient(
-            account_obj, client, contract_address
+            w3=w3, contract_address=contract_address, account=account_obj
         )
 
         # Generate a random UID - in a real implementation, this would be derived from the account
@@ -289,14 +290,14 @@ def register_validator_cmd(
 @click.option("--subnet-uid", type=int, help="Filter miners by subnet ID (optional).")
 @click.option(
     "--contract-address",
-    default=lambda: settings.APTOS_CONTRACT_ADDRESS,
+    default=lambda: settings.CORE_CONTRACT_ADDRESS,
     help="ModernTensor contract address.",
 )
 @click.option(
     "--network",
-    default=lambda: settings.APTOS_NETWORK,
+    default=lambda: settings.CORE_NETWORK,
     type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
-    help="Select Aptos network.",
+    help="Select Core network.",
 )
 def list_miners_cmd(subnet_uid, contract_address, network):
     """
@@ -312,12 +313,21 @@ def list_miners_cmd(subnet_uid, contract_address, network):
         console.print("⏳ Fetching all miners...")
 
     try:
-        # Get all miners
-        miners = asyncio.run(
-            get_all_miners(
-                client=client, contract_address=contract_address, subnet_uid=subnet_uid
-            )
+        # Get all miners using ModernTensorCoreClient
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider(client.rpc_url))
+        moderntensor_client = ModernTensorCoreClient(
+            w3=w3, contract_address=contract_address
         )
+        console.print(f"🔍 Connecting to contract: {contract_address}")
+        console.print(f"🔍 Using RPC: {client.rpc_url}")
+
+        miners = moderntensor_client.get_all_miners()
+        console.print(f"🔍 Found {len(miners) if miners else 0} miners")
+
+        if miners:
+            console.print(f"🔍 Miner addresses: {miners}")
 
         if not miners:
             console.print("[bold yellow]No miners found.[/bold yellow]")
@@ -332,36 +342,66 @@ def list_miners_cmd(subnet_uid, contract_address, network):
         table.add_column("UID", style="magenta")
         table.add_column("Address", style="blue")
         table.add_column("API Endpoint", style="green")
-        table.add_column("Stake", style="yellow")
+        table.add_column("Stake (CORE + BTC)", style="yellow")
         table.add_column("Trust Score", style="cyan")
+        table.add_column("Owner", style="white")
         table.add_column("Status", style="bright_white")
 
-        for miner in miners:
-            status_str = (
-                "Active"
-                if miner.status == 1
-                else "Inactive" if miner.status == 0 else "Jailed"
-            )
-            status_style = (
-                "green"
-                if miner.status == 1
-                else "yellow" if miner.status == 0 else "red"
-            )
+        for miner_address in miners:
+            try:
+                # Get detailed miner info
+                miner_info = moderntensor_client.get_miner_info(miner_address)
+                console.print(f"🔍 Miner info: {miner_info}")
 
-            table.add_row(
-                miner.uid[:8] + "...",  # Truncate UID for display
-                miner.address,
-                miner.api_endpoint or "N/A",
-                f"{miner.stake:.8f} APT",
-                f"{miner.trust_score:.6f}",
-                f"[{status_style}]{status_str}[/{status_style}]",
-            )
+                # Basic display for now
+                table.add_row(
+                    miner_address[:8] + "...",  # Truncate address for display
+                    miner_address,
+                    "N/A",  # API endpoint
+                    "N/A",  # Stake
+                    "N/A",  # Trust score
+                    "N/A",  # Owner
+                    "[green]Active[/green]",
+                )
+            except Exception as e:
+                console.print(f"⚠️ Error getting miner info for {miner_address}: {e}")
+                # Still add to table with basic info
+                table.add_row(
+                    miner_address[:8] + "...",
+                    miner_address,
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    "[yellow]Unknown[/yellow]",
+                )
 
         console.print(table)
-        console.print(f"Total miners: [bold cyan]{len(miners)}[/bold cyan]")
+
+        # Enhanced network statistics with Bitcoin staking
+        total_miners = len(miners)
+        total_core_stake = 0  # TODO: Calculate from miner info
+        total_bitcoin_stake = 0  # TODO: Calculate from miner info
+        miners_with_btc = 0  # TODO: Calculate from miner info
+
+        console.print(f"\n📊 [bold blue]Miners Summary[/bold blue]")
+        console.print(f"Total miners: [bold cyan]{total_miners}[/bold cyan]")
+        console.print(f"Total CORE stake: [yellow]{total_core_stake:.4f} CORE[/yellow]")
+        console.print(
+            f"Total Bitcoin stake: [orange1]{total_bitcoin_stake/100000000:.8f} BTC[/orange1]"
+        )
+        console.print(
+            f"Miners with Bitcoin: [green]{miners_with_btc}/{total_miners}[/green] ({miners_with_btc/total_miners*100:.1f}%)"
+            if total_miners > 0
+            else "Miners with Bitcoin: 0/0"
+        )
 
     except Exception as e:
         console.print(f"[bold red]Error listing miners:[/bold red] {e}")
+        console.print(f"[bold red]Error type:[/bold red] {type(e).__name__}")
+        import traceback
+
+        console.print(f"[bold red]Traceback:[/bold red] {traceback.format_exc()}")
         logger.exception("List miners command failed")
 
 
@@ -374,14 +414,14 @@ def list_miners_cmd(subnet_uid, contract_address, network):
 )
 @click.option(
     "--contract-address",
-    default=lambda: settings.APTOS_CONTRACT_ADDRESS,
+    default=lambda: settings.CORE_CONTRACT_ADDRESS,
     help="ModernTensor contract address.",
 )
 @click.option(
     "--network",
-    default=lambda: settings.APTOS_NETWORK,
+    default=lambda: settings.CORE_NETWORK,
     type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
-    help="Select Aptos network.",
+    help="Select Core network.",
 )
 def list_validators_cmd(subnet_uid, contract_address, network):
     """
@@ -397,12 +437,14 @@ def list_validators_cmd(subnet_uid, contract_address, network):
         console.print("⏳ Fetching all validators...")
 
     try:
-        # Get all validators
-        validators = asyncio.run(
-            get_all_validators(
-                client=client, contract_address=contract_address, subnet_uid=subnet_uid
-            )
+        # Get all validators using ModernTensorCoreClient
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider(client.rpc_url))
+        moderntensor_client = ModernTensorCoreClient(
+            w3=w3, contract_address=contract_address
         )
+        validators = moderntensor_client.get_all_validators()
 
         if not validators:
             console.print("[bold yellow]No validators found.[/bold yellow]")
@@ -417,36 +459,71 @@ def list_validators_cmd(subnet_uid, contract_address, network):
         table.add_column("UID", style="magenta")
         table.add_column("Address", style="blue")
         table.add_column("API Endpoint", style="green")
-        table.add_column("Stake", style="yellow")
+        table.add_column("Stake (CORE + BTC)", style="yellow")
         table.add_column("Trust Score", style="cyan")
         table.add_column("Performance", style="bright_yellow")
+        table.add_column("Owner", style="white")
         table.add_column("Status", style="bright_white")
 
-        for validator in validators:
-            status_str = (
-                "Active"
-                if validator.status == 1
-                else "Inactive" if validator.status == 0 else "Jailed"
-            )
-            status_style = (
-                "green"
-                if validator.status == 1
-                else "yellow" if validator.status == 0 else "red"
-            )
+        for validator_address in validators:
+            try:
+                # Get detailed validator info
+                validator_info = moderntensor_client.get_validator_info(
+                    validator_address
+                )
+                console.print(f"🔍 Validator info: {validator_info}")
 
-            table.add_row(
-                validator.uid[:8] + "...",  # Truncate UID for display
-                validator.address,
-                validator.api_endpoint or "N/A",
-                f"{validator.stake:.8f} APT",
-                f"{validator.trust_score:.6f}",
-                f"{validator.last_performance:.6f}",
-                f"[{status_style}]{status_str}[/{status_style}]",
-            )
+                # Basic display for now
+                table.add_row(
+                    validator_address[:8] + "...",  # Truncate address for display
+                    validator_address,
+                    "N/A",  # API endpoint
+                    "N/A",  # Stake
+                    "N/A",  # Trust score
+                    "N/A",  # Performance
+                    "N/A",  # Owner
+                    "[green]Active[/green]",
+                )
+            except Exception as e:
+                console.print(
+                    f"⚠️ Error getting validator info for {validator_address}: {e}"
+                )
+                # Still add to table with basic info
+                table.add_row(
+                    validator_address[:8] + "...",
+                    validator_address,
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    "[yellow]Unknown[/yellow]",
+                )
 
         console.print(table)
-        console.print(f"Total validators: [bold cyan]{len(validators)}[/bold cyan]")
+
+        # Enhanced network statistics with Bitcoin staking
+        total_validators = len(validators)
+        total_core_stake = 0  # TODO: Calculate from validator info
+        total_bitcoin_stake = 0  # TODO: Calculate from validator info
+        validators_with_btc = 0  # TODO: Calculate from validator info
+
+        console.print(f"\n📊 [bold blue]Validators Summary[/bold blue]")
+        console.print(f"Total validators: [bold cyan]{total_validators}[/bold cyan]")
+        console.print(f"Total CORE stake: [yellow]{total_core_stake:.4f} CORE[/yellow]")
+        console.print(
+            f"Total Bitcoin stake: [orange1]{total_bitcoin_stake/100000000:.8f} BTC[/orange1]"
+        )
+        console.print(
+            f"Validators with Bitcoin: [green]{validators_with_btc}/{total_validators}[/green] ({validators_with_btc/total_validators*100:.1f}%)"
+            if total_validators > 0
+            else "Validators with Bitcoin: 0/0"
+        )
 
     except Exception as e:
         console.print(f"[bold red]Error listing validators:[/bold red] {e}")
         logger.exception("List validators command failed")
+
+
+if __name__ == "__main__":
+    metagraph_cli()

@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt, IntPrompt, Confirm
 from typing import Optional
 
-from ..keymanager.hd_wallet_manager import AptosHDWalletManager
+from ..keymanager.hd_wallet_manager import CoreHDWalletManager
 from ..keymanager.wallet_utils import WalletUtils
 from ..config.settings import settings
 
@@ -23,7 +23,7 @@ _wallet_utils = WalletUtils()
 def hdwallet(ctx):
     """🏦 HD Wallet Management - Bittensor-like coldkey/hotkey system for Aptos"""
     ctx.ensure_object(dict)
-    ctx.obj['wallet_manager'] = AptosHDWalletManager()
+    ctx.obj['wallet_manager'] = CoreHDWalletManager()
     ctx.obj['wallet_utils'] = _wallet_utils
 
 

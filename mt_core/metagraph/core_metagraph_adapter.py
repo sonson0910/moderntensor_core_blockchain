@@ -27,7 +27,7 @@ class CoreMetagraphClient:
         # Load contract ABI
         abi_path = os.path.join(
             os.path.dirname(__file__),
-            "../smartcontract/artifacts/contracts/ModernTensorAI_v2_Bittensor.sol/ModernTensorAI_v2_Bittensor.json",
+            "../smartcontract/artifacts/contracts/ModernTensor.sol/ModernTensor.json",
         )
 
         with open(abi_path, "r") as f:
@@ -58,26 +58,53 @@ class CoreMetagraphClient:
         """Get detailed miner information"""
         try:
             miner_info = self.contract.functions.getMinerInfo(address).call()
-            # MinerData struct: uid, subnet_uid, stake, scaled_last_performance,
+            # Enhanced MinerData struct: uid, subnet_uid, stake, bitcoin_stake, scaled_last_performance,
             # scaled_trust_score, accumulated_rewards, last_update_time,
-            # performance_history_hash, wallet_addr_hash, status, registration_time, api_endpoint
+            # performance_history_hash, wallet_addr_hash, status, registration_time, api_endpoint, owner
             return {
                 "address": address,
                 "uid": miner_info[0].hex(),
                 "subnet_uid": int(miner_info[1]),
                 "stake": float(self.web3.from_wei(miner_info[2], "ether")),
-                "scaled_last_performance": int(miner_info[3]),
-                "scaled_trust_score": int(miner_info[4]),
-                "accumulated_rewards": float(
-                    self.web3.from_wei(miner_info[5], "ether")
+                "bitcoin_stake": (
+                    int(miner_info[3]) if len(miner_info) > 12 else 0
+                ),  # NEW: Bitcoin stake in satoshis
+                "scaled_last_performance": (
+                    int(miner_info[4]) if len(miner_info) > 12 else int(miner_info[3])
                 ),
-                "last_update_time": int(miner_info[6]),
-                "performance_history_hash": miner_info[7].hex(),
-                "wallet_addr_hash": miner_info[8].hex(),
-                "status": int(miner_info[9]),
-                "registration_time": int(miner_info[10]),
-                "api_endpoint": miner_info[11],
-                "active": bool(miner_info[9]),  # status: 0=Inactive, 1=Active, 2=Jailed
+                "scaled_trust_score": (
+                    int(miner_info[5]) if len(miner_info) > 12 else int(miner_info[4])
+                ),
+                "accumulated_rewards": float(
+                    self.web3.from_wei(
+                        miner_info[6] if len(miner_info) > 12 else miner_info[5],
+                        "ether",
+                    )
+                ),
+                "last_update_time": (
+                    int(miner_info[7]) if len(miner_info) > 12 else int(miner_info[6])
+                ),
+                "performance_history_hash": (
+                    miner_info[8] if len(miner_info) > 12 else miner_info[7]
+                ).hex(),
+                "wallet_addr_hash": (
+                    miner_info[9] if len(miner_info) > 12 else miner_info[8]
+                ).hex(),
+                "status": (
+                    int(miner_info[10]) if len(miner_info) > 12 else int(miner_info[9])
+                ),
+                "registration_time": (
+                    int(miner_info[11]) if len(miner_info) > 12 else int(miner_info[10])
+                ),
+                "api_endpoint": (
+                    miner_info[12] if len(miner_info) > 12 else miner_info[11]
+                ),
+                "owner": (
+                    miner_info[13] if len(miner_info) > 13 else address
+                ),  # NEW: Owner address
+                "active": bool(
+                    miner_info[10] if len(miner_info) > 12 else miner_info[9]
+                ),  # status: 0=Inactive, 1=Active, 2=Jailed
             }
         except Exception as e:
             print(f"Error fetching miner {address}: {e}")
