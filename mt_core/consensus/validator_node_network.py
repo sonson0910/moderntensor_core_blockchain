@@ -64,19 +64,23 @@ class ValidatorNodeNetwork:
         # API app
         self.app = None
 
-        # Initialize HTTP client
-        asyncio.create_task(self._initialize_http_client())
+        # Initialize HTTP client (defer to first use to avoid event loop issues)
+        self._http_client_initialized = False
 
     # === HTTP Client Management ===
 
     async def _initialize_http_client(self):
         """Initialize the HTTP client for P2P communication."""
+        if self._http_client_initialized:
+            return
+
         try:
             self.http_client = httpx.AsyncClient(
                 timeout=HTTP_TIMEOUT,
                 limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             )
             self.core.http_client = self.http_client
+            self._http_client_initialized = True
 
             logger.info(f"{self.uid_prefix} HTTP client initialized")
 

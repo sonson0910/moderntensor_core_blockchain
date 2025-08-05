@@ -15,8 +15,8 @@ async function main() {
     // Update .env file
     const envContent = `# CORE TESTNET CONFIGURATION
 PRIVATE_KEY=${wallet.privateKey.slice(2)}
-CORE_TESTNET_RPC=https://rpc.test.btcs.network
-CORE_MAINNET_RPC=https://rpc.coredao.org
+CORE_TESTNET_RPC=https://rpc.test2.btcs.network
+CORE_MAINNET_RPC=https://rpc.test2.btcs.network
 GAS_PRICE=20000000000
 GAS_LIMIT=8000000
 

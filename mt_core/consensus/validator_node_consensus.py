@@ -123,7 +123,7 @@ class ValidatorNodeConsensus:
             import os
 
             # Initialize Web3 connection
-            core_node_url = "https://rpc.test.btcs.network"
+            core_node_url = "https://rpc.test2.btcs.network"
             w3 = Web3(Web3.HTTPProvider(core_node_url))
 
             # Get environment variables
@@ -1998,19 +1998,15 @@ class ValidatorNodeConsensus:
             logger.error(
                 f"{self.uid_prefix} Cannot enable flexible mode - no slot coordinator"
             )
-            return False
+            self.flexible_mode_enabled = False
+            return
 
-        logger.info(f"🔄 {self.uid_prefix} Enabling flexible consensus mode")
-
-        # Enable flexible mode in slot coordinator
-        self.core.slot_coordinator.enable_flexible_mode(auto_detect_epoch)
-
-        # Update consensus settings
+        # The coordinator itself doesn't need to be enabled.
+        # This flag enables the *consensus handler* to use flexible logic.
         self.flexible_mode_enabled = True
-        self.auto_adapt_timing = adaptive_timing
-
-        logger.info(f"✅ {self.uid_prefix} Flexible consensus mode enabled")
-        return True
+        logger.info(
+            f"✅ {self.uid_prefix} ValidatorNodeConsensus flexible mode enabled."
+        )
 
     async def run_flexible_consensus_cycle(self, slot: Optional[int] = None):
         """
@@ -2025,6 +2021,11 @@ class ValidatorNodeConsensus:
         """
         logger.info(f"🔧 RUN_FLEXIBLE_CONSENSUS_CYCLE called for {self.uid_prefix}")
         logger.info(f"🔧 Flexible mode enabled: {self.flexible_mode_enabled}")
+
+        # Flexible mode with synchronized cutoffs - allow running
+        logger.info(
+            f"{self.uid_prefix} Running flexible mode with synchronized cutoffs"
+        )
 
         if not self.flexible_mode_enabled:
             logger.warning(
@@ -2070,51 +2071,39 @@ class ValidatorNodeConsensus:
             raise
 
     async def _run_flexible_task_phase(self, slot: int):
-        """Run task assignment phase with continuous task assignment and scoring"""
-        current_phase, time_in_phase, remaining = (
-            self.core.slot_coordinator.get_slot_phase(slot)
+        """Run task assignment phase with flexible assignment and strict cutoff"""
+
+        # STEP 1: FLEXIBLE TASK ASSIGNMENT - start immediately, no waiting
+        logger.info(
+            f"📋 {self.uid_prefix} Starting FLEXIBLE task assignment for slot {slot} (assign anytime)"
         )
 
-        # ALLOW TASK ASSIGNMENT if no scores exist yet (regardless of phase)
-        current_scores = len(self.core.slot_scores.get(slot, []))
+        # Calculate exact task assignment cutoff timing based on slot number
+        from mt_core.consensus.slot_coordinator import EPOCH_START
 
-        if current_phase == SlotPhase.TASK_ASSIGNMENT:
-            logger.info(
-                f"📋 {self.uid_prefix} Starting task assignment for slot {slot} (remaining: {remaining}s)"
-            )
-        elif current_phase == SlotPhase.TASK_EXECUTION and remaining > 10:
-            logger.info(
-                f"📋 {self.uid_prefix} Mid-slot join: Quick task assignment for slot {slot} (remaining: {remaining}s)"
-            )
-        elif current_scores == 0 and remaining > 5:  # Reduced from 15s to 5s
-            # === FIX: Skip emergency task assignment when no scores available ===
-            logger.warning(
-                f"🚫 {self.uid_prefix} SKIPPING emergency task assignment - no scores in {current_phase.value} phase (remaining: {remaining}s)"
-            )
-            logger.info(
-                f"✅ {self.uid_prefix} Emergency task assignment skipped for slot {slot} (no scores available)"
-            )
-            return
-        elif (
-            current_scores == 0
-        ):  # FORCE assignment if no scores at all (prevents stuck validators)
-            # === FIX: Skip force assignment when no scores available ===
-            logger.warning(
-                f"🚫 {self.uid_prefix} SKIPPING force task assignment - validator has no scores for slot {slot} (phase: {current_phase.value})"
-            )
-            logger.info(
-                f"✅ {self.uid_prefix} Force task assignment skipped for slot {slot} (no scores available)"
-            )
-            return
-        else:
-            logger.info(
-                f"⏭️ {self.uid_prefix} Skipping task assignment (phase: {current_phase.value}, scores: {current_scores}, remaining: {remaining}s)"
-            )
-            return
+        slot_start_time = EPOCH_START + (
+            slot * self.core.slot_config.slot_duration_minutes * 60
+        )
+        task_assignment_end_time = slot_start_time + (
+            self.core.slot_config.task_assignment_minutes * 60
+        )
 
-        # Register participation early
+        current_time = int(time.time())
+        remaining_time = task_assignment_end_time - current_time
+
+        logger.info(
+            f"✅ {self.uid_prefix} Flexible task assignment started for slot {slot} (remaining: {remaining_time:.1f}s)"
+        )
+
+        # STEP 2: Register participation
         await self.core.slot_coordinator.register_phase_entry(
             slot, SlotPhase.TASK_ASSIGNMENT, {"flexible_join": True}
+        )
+
+        # ENFORCE TASK ASSIGNMENT CUTOFF - ensure all validators finish together
+        await self.core.slot_coordinator.enforce_task_assignment_cutoff(slot)
+        logger.info(
+            f"🛑 {self.uid_prefix} Task assignment cutoff enforced for slot {slot}"
         )
 
         # Wait for miners to be fully ready
@@ -2136,60 +2125,69 @@ class ValidatorNodeConsensus:
                 if slot not in self.core.slot_scores:
                     self.core.slot_scores[slot] = []
 
-                task_assignment_end_time = time.time() + remaining
+                task_assignment_end_time = time.time() + remaining_time
                 task_round = 1
 
-                # FORCE SEQUENTIAL ASSIGNMENT - Không dùng batch mode
+                # BATCH TASK ASSIGNMENT - Giao nhiều task cùng lúc
                 logger.info(
-                    f"📋 {self.uid_prefix} Starting SEQUENTIAL task assignment (giao từng task một)"
+                    f"📋 {self.uid_prefix} Starting BATCH task assignment (giao nhiều task cùng lúc)"
                 )
 
-                # SEQUENTIAL TASK ASSIGNMENT LOOP - Giao từng task một
+                # MINI-BATCH SEQUENTIAL ASSIGNMENT - Giao 5 miners cùng lúc, chờ hoàn thành rồi giao tiếp
+                logger.info(
+                    f"📋 {self.uid_prefix} Starting MINI-BATCH SEQUENTIAL assignment (5 miners per batch, sequential processing)"
+                )
+
+                # MINI-BATCH ASSIGNMENT: Giao 5 miners cùng lúc, chờ hoàn thành rồi giao tiếp
                 while time.time() < task_assignment_end_time:
                     remaining_time = task_assignment_end_time - time.time()
                     if remaining_time <= 10:  # Stop if less than 10s remaining
+                        logger.info(
+                            f"⏰ {self.uid_prefix} Approaching cutoff time, stopping task assignment"
+                        )
                         break
 
                     logger.info(
-                        f"📋 {self.uid_prefix} Sequential round {task_round} - {remaining_time:.1f}s remaining"
+                        f"📋 {self.uid_prefix} Mini-batch round {task_round} - {remaining_time:.1f}s until cutoff"
                     )
 
-                    # SEQUENTIAL ASSIGNMENT: Giao từng miner một task
-                    round_scores = 0
-                    for miner in selected_miners:
+                    # SELECT RANDOM 5 MINERS for this batch
+                    import random
+
+                    batch_miners = random.sample(
+                        selected_miners, min(5, len(selected_miners))
+                    )
+                    logger.info(
+                        f"🎲 {self.uid_prefix} Selected {len(batch_miners)} random miners for batch {task_round}"
+                    )
+
+                    # MINI-BATCH ASSIGNMENT: Giao task cho 5 miners cùng lúc
+                    batch_tasks = []
+                    batch_scores = 0
+
+                    # STEP 1: Giao task cho tất cả 5 miners trong batch
+                    logger.info(
+                        f"📤 {self.uid_prefix} Sending tasks to {len(batch_miners)} miners in batch {task_round}"
+                    )
+
+                    for miner in batch_miners:
                         try:
                             remaining_in_round = task_assignment_end_time - time.time()
-                            if remaining_in_round <= 5:
+                            if remaining_in_round <= 5:  # Stop 5s before cutoff
+                                logger.info(
+                                    f"⏰ {self.uid_prefix} Cutoff approaching, stopping batch assignment"
+                                )
                                 break
 
-                            # Giao 1 task cho 1 miner
+                            # Giao task cho miner này
                             task_sent = await self._send_single_task_to_miner(
                                 slot, miner, task_round
                             )
                             if task_sent:
+                                batch_tasks.append((miner, task_sent))
                                 logger.info(
-                                    f"📤 {self.uid_prefix} Sequential task sent to miner {getattr(miner, 'uid', 'unknown')}"
+                                    f"📤 {self.uid_prefix} Task sent to miner {getattr(miner, 'uid', 'unknown')} in batch {task_round}"
                                 )
-
-                                # Chờ kết quả (5-20s) - Increased timeout for better task completion
-                                result_timeout = min(20.0, remaining_in_round * 0.4)
-                                logger.info(
-                                    f"⏳ {self.uid_prefix} Waiting {result_timeout:.1f}s for result..."
-                                )
-                                await asyncio.sleep(result_timeout)
-
-                                # Chấm điểm ngay lập tức cho task này
-                                scored = await self._score_single_task_result(
-                                    slot, task_sent
-                                )
-                                if scored:
-                                    round_scores += 1
-                                    logger.info(
-                                        f"⚡ {self.uid_prefix} Scored task from miner {getattr(miner, 'uid', 'unknown')}"
-                                    )
-
-                                # Brief pause trước khi giao task cho miner tiếp theo (2s)
-                                await asyncio.sleep(min(2.0, remaining_in_round * 0.1))
 
                         except Exception as e:
                             logger.error(
@@ -2197,20 +2195,54 @@ class ValidatorNodeConsensus:
                             )
                             continue
 
+                    # STEP 2: Chờ tất cả 5 miners trong batch hoàn thành
+                    if batch_tasks:
+                        logger.info(
+                            f"⏳ {self.uid_prefix} Waiting for {len(batch_tasks)} miners in batch {task_round} to complete..."
+                        )
+
+                        # Chờ kết quả cho tất cả miners trong batch (15-30s)
+                        result_timeout = min(30.0, remaining_time * 0.7)
+                        logger.info(
+                            f"⏳ {self.uid_prefix} Waiting {result_timeout:.1f}s for batch {task_round} results..."
+                        )
+                        await asyncio.sleep(result_timeout)
+
+                        # STEP 3: Chấm điểm tất cả 5 miners trong batch
+                        logger.info(
+                            f"📊 {self.uid_prefix} Scoring {len(batch_tasks)} miners in batch {task_round}..."
+                        )
+
+                        for miner, task_sent in batch_tasks:
+                            try:
+                                scored = await self._score_single_task_result(
+                                    slot, task_sent
+                                )
+                                if scored:
+                                    batch_scores += 1
+                                    logger.info(
+                                        f"⚡ {self.uid_prefix} Scored task from miner {getattr(miner, 'uid', 'unknown')} in batch {task_round}"
+                                    )
+                            except Exception as e:
+                                logger.error(
+                                    f"❌ {self.uid_prefix} Error scoring task from miner {getattr(miner, 'uid', 'unknown')}: {e}"
+                                )
+
                     task_round += 1
                     logger.info(
-                        f"✅ {self.uid_prefix} Sequential round {task_round-1} completed: {round_scores} scores"
+                        f"✅ {self.uid_prefix} Mini-batch {task_round-1} completed: {batch_scores} scores from {len(batch_tasks)} miners"
                     )
 
-                    # Pause trước round tiếp theo (3s)
-                    pause_time = min(3.0, remaining_time * 0.15)
-                    logger.info(
-                        f"⏸️ {self.uid_prefix} Pause {pause_time:.1f}s before next round..."
-                    )
-                    await asyncio.sleep(pause_time)
+                    # Pause trước batch tiếp theo (3s)
+                    if remaining_time > 15:
+                        pause_time = min(3.0, remaining_time * 0.1)
+                        logger.info(
+                            f"⏸️ {self.uid_prefix} Pause {pause_time:.1f}s before next mini-batch..."
+                        )
+                        await asyncio.sleep(pause_time)
 
                 logger.info(
-                    f"✅ {self.uid_prefix} Sequential assignment completed: {task_round-1} rounds"
+                    f"✅ {self.uid_prefix} Mini-batch sequential assignment completed: {task_round-1} rounds"
                 )
 
                 # CALCULATE AVERAGE SCORES PER MINER after all assignment rounds
@@ -2391,6 +2423,43 @@ class ValidatorNodeConsensus:
             f"🎯 {self.uid_prefix} Starting flexible consensus scoring for slot {slot}"
         )
 
+        # STEP 0: SLOT-BASED SYNCHRONIZATION - wait for exact slot timing
+        logger.info(
+            f"🛑 {self.uid_prefix} Waiting for slot-based synchronization for slot {slot}"
+        )
+
+        # Calculate exact timing based on slot number
+        from mt_core.consensus.slot_coordinator import EPOCH_START
+
+        slot_start_time = EPOCH_START + (
+            slot * self.core.slot_config.slot_duration_minutes * 60
+        )
+        task_cutoff_time = slot_start_time + (
+            self.core.slot_config.task_assignment_minutes * 60
+        )
+        consensus_start_time = task_cutoff_time
+        consensus_end_time = consensus_start_time + (
+            self.core.slot_config.consensus_minutes * 60
+        )
+        metagraph_start_time = consensus_end_time
+        metagraph_end_time = (
+            metagraph_start_time + self.core.slot_config.metagraph_update_seconds
+        )
+
+        current_time = int(time.time())
+
+        # Wait for exact task cutoff time
+        if current_time < task_cutoff_time:
+            wait_time = task_cutoff_time - current_time
+            logger.info(
+                f"⏰ {self.uid_prefix} Waiting {wait_time}s for SLOT-BASED task cutoff (slot {slot})"
+            )
+            await asyncio.sleep(wait_time)
+
+        logger.info(
+            f"✅ {self.uid_prefix} Slot-based task cutoff reached for slot {slot}"
+        )
+
         # STEP 1: Use scores already generated by tasks module
         slot_scores = self.core.slot_scores.get(slot, [])
 
@@ -2441,6 +2510,24 @@ class ValidatorNodeConsensus:
                 )
 
         if averaged_scores:
+            # SLOT-BASED P2P CONSENSUS - wait for exact consensus timing
+            logger.info(
+                f"🤝 {self.uid_prefix} Waiting for slot-based P2P consensus for slot {slot}"
+            )
+
+            # Wait for exact consensus start time
+            current_time = int(time.time())
+            if current_time < consensus_start_time:
+                wait_time = consensus_start_time - current_time
+                logger.info(
+                    f"⏰ {self.uid_prefix} Waiting {wait_time}s for SLOT-BASED P2P consensus start (slot {slot})"
+                )
+                await asyncio.sleep(wait_time)
+
+            logger.info(
+                f"✅ {self.uid_prefix} Slot-based P2P consensus started for slot {slot}"
+            )
+
             # Use existing coordinate_consensus_round from slot_coordinator
             if hasattr(self.core, "slot_coordinator") and hasattr(
                 self.core.slot_coordinator, "coordinate_consensus_round"
@@ -2833,6 +2920,40 @@ class ValidatorNodeConsensus:
         )
 
         try:
+            # STEP 1: SLOT-BASED METAGRAPH SYNCHRONIZATION - wait for exact metagraph timing
+            logger.info(
+                f"🌐 {self.uid_prefix} Waiting for slot-based metagraph update for slot {slot}"
+            )
+
+            # Calculate exact metagraph timing based on slot number
+            from mt_core.consensus.slot_coordinator import EPOCH_START
+
+            slot_start_time = EPOCH_START + (
+                slot * self.core.slot_config.slot_duration_minutes * 60
+            )
+            task_cutoff_time = slot_start_time + (
+                self.core.slot_config.task_assignment_minutes * 60
+            )
+            consensus_start_time = task_cutoff_time
+            consensus_end_time = consensus_start_time + (
+                self.core.slot_config.consensus_minutes * 60
+            )
+            metagraph_start_time = consensus_end_time
+
+            current_time = int(time.time())
+
+            # Wait for exact metagraph start time
+            if current_time < metagraph_start_time:
+                wait_time = metagraph_start_time - current_time
+                logger.info(
+                    f"⏰ {self.uid_prefix} Waiting {wait_time}s for SLOT-BASED metagraph start (slot {slot})"
+                )
+                await asyncio.sleep(wait_time)
+
+            logger.info(
+                f"✅ {self.uid_prefix} Slot-based metagraph update started for slot {slot}"
+            )
+
             # === METAGRAPH UPDATE FIX: Only update when there are transactions ===
 
             # Check if we have aggregated scores to submit

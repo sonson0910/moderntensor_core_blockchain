@@ -1,0 +1,55 @@
+{
+  "contractAddress": "0xAA6B8200495F7741B0B151B486aEB895fEE8c272",
+  "coreTokenAddress": "0xbCfb1f5E120BE57cBBcB331D8392ae63C903dBaE",
+  "subnetId": 1,
+  "timestamp": "2025-08-05T12:03:11.406Z",
+  "results": {
+    "success": [
+      {
+        "name": "subnet1_miner_002",
+        "address": "0x16102CA8BEF74fb6214AF352989b664BF0e50498",
+        "type": "miner",
+        "txHash": "0xb9d44c5557d9dd61513d35213a3d3159769b725cd8b08b789d5a4a53314d6edb",
+        "blockNumber": 7064142,
+        "gasUsed": "376732",
+        "stake": "0.05"
+      },
+      {
+        "name": "subnet1_validator_001",
+        "address": "0x25F3D6316017FDF7A4f4e54003b29212a198768f",
+        "type": "validator",
+        "txHash": "0x655e7fa3c2a1bef271e818c4e328f5c659e43a7f38d7b01b78c1ab9ded8278c5",
+        "blockNumber": 7064146,
+        "gasUsed": "418350",
+        "stake": "0.08"
+      },
+      {
+        "name": "subnet1_validator_002",
+        "address": "0x352516F491DFB3E6a55bFa9c58C551Ef10267dbB",
+        "type": "validator",
+        "txHash": "0xb4f7d45b7cd9b16e3c1ba54e51a5e714622281bd107e71bd77973866cbc32791",
+        "blockNumber": 7064152,
+        "gasUsed": "401250",
+        "stake": "0.08"
+      },
+      {
+        "name": "subnet1_validator_003",
+        "address": "0x0469C6644c07F6e860Af368Af8104F8D8829a78e",
+        "type": "validator",
+        "txHash": "0xf27646ce00ee8127f178dbc50204b9f5c947839bff98ab4a45dedebf8c34d858",
+        "blockNumber": 7064157,
+        "gasUsed": "401250",
+        "stake": "0.08"
+      }
+    ],
+    "skipped": [
+      {
+        "name": "subnet1_miner_001",
+        "address": "0xd89fBAbb72190ed22F012ADFC693ad974bAD3005",
+        "type": "miner",
+        "reason": "already_registered"
+      }
+    ],
+    "failed": []
+  }
+}

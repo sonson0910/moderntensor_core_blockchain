@@ -72,7 +72,7 @@ from moderntensor.mt_core.config.settings import Settings
 
 # Cấu hình cho Core testnet
 settings = Settings(
-    CORE_NODE_URL="https://rpc.test.btcs.network",
+    CORE_NODE_URL="https://rpc.test2.btcs.network",
     CORE_CONTRACT_ADDRESS="0x56C2F2d0914DF10CE048e07EF1eCbac09AF80cd2",  # ModernTensorAI_Optimized - DEPLOYED
     CORE_TOKEN_ADDRESS="0x7B74e4868c8C500D6143CEa53a5d2F94e94c7637",     # Mock CORE token (ultra-low testnet)
     BTC_TOKEN_ADDRESS="0x44Ed1441D79FfCb76b7D6644dBa930309E0E6F31",      # Mock BTC token (ultra-low testnet)
@@ -103,7 +103,7 @@ from web3 import Web3
 from moderntensor.mt_core.core_client import ModernTensorCoreClient
 
 # Khởi tạo Web3 và client
-w3 = Web3(Web3.HTTPProvider("https://rpc.test.btcs.network"))
+w3 = Web3(Web3.HTTPProvider("https://rpc.test2.btcs.network"))
 client = ModernTensorCoreClient(
     w3=w3,
     contract_address="0x...",  # ModernTensor contract
@@ -205,8 +205,8 @@ npx hardhat verify --network core-testnet <contract_address> "<constructor_args>
 ## 🔗 Core Blockchain Integration
 
 ### Network Configuration
-- **Testnet RPC:** https://rpc.test.btcs.network
-- **Mainnet RPC:** https://rpc.coredao.org  
+- **Testnet RPC:** https://rpc.test2.btcs.network
+- **Mainnet RPC:** https://rpc.test2.btcs.network  
 - **Explorer:** https://scan.coredao.org
 - **Chain ID:** 1116 (mainnet), 1115 (testnet)
 

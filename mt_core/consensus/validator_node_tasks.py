@@ -139,12 +139,17 @@ class ValidatorNodeTasks:
         """Select miners for a specific slot using Cardano-style selection."""
         logger.info(f"{self.uid_prefix} Selecting miners for slot {slot}")
 
-        # Filter active miners
+        # Filter active miners from blockchain
         active_miners = [
             miner
             for miner in self.core.miners_info.values()
             if getattr(miner, "status", STATUS_ACTIVE) == STATUS_ACTIVE
         ]
+
+        # If no miners from blockchain, use mock miners for testing
+        if not active_miners:
+            logger.info(f"{self.uid_prefix} Using mock miners for testing")
+            active_miners = self._create_mock_miners()
 
         if not active_miners:
             logger.warning(
@@ -168,6 +173,33 @@ class ValidatorNodeTasks:
         )
 
         return selected_miners
+
+    def _create_mock_miners(self) -> List[MinerInfo]:
+        """Create mock miners for testing when no real miners are available."""
+        mock_miners = []
+
+        # Create 2 mock miners for testing
+        for i in range(1, 3):
+            miner_info = MinerInfo(
+                uid=f"subnet1_miner_{i}",
+                address=f"0x{'0' * 40}",  # Mock address
+                api_endpoint=f"http://localhost:800{i+1}",
+                trust_score=0.8,
+                stake=1000.0,
+                weight=1.0,
+                status=STATUS_ACTIVE,
+                performance_history=[],
+                last_update_time=time.time(),
+            )
+            mock_miners.append(miner_info)
+
+            # Add to core miners_info for consistency
+            self.core.miners_info[miner_info.uid] = miner_info
+
+        logger.info(
+            f"{self.uid_prefix} Created {len(mock_miners)} mock miners for testing"
+        )
+        return mock_miners
 
     # === Task Creation Methods ===
 

@@ -66,8 +66,8 @@ async function main() {
         const fs = require('fs');
         const envContent = `# CORE TESTNET CONFIGURATION
 PRIVATE_KEY=${process.env.PRIVATE_KEY}
-CORE_TESTNET_RPC=https://rpc.test.btcs.network
-CORE_MAINNET_RPC=https://rpc.coredao.org
+CORE_TESTNET_RPC=https://rpc.test2.btcs.network
+CORE_MAINNET_RPC=https://rpc.test2.btcs.network
 GAS_PRICE=20000000000
 GAS_LIMIT=8000000
 
@@ -75,7 +75,7 @@ GAS_LIMIT=8000000
 CORE_CONTRACT_ADDRESS=${contractAddress}
 CORE_TOKEN_ADDRESS=${coreTokenAddress}
 BTC_TOKEN_ADDRESS=${btcTokenAddress}
-CORE_NODE_URL=https://rpc.test.btcs.network
+CORE_NODE_URL=https://rpc.test2.btcs.network
 `;
         fs.writeFileSync('.env', envContent);
         console.log("\n✅ .env file updated with new contract addresses");
@@ -85,7 +85,7 @@ CORE_NODE_URL=https://rpc.test.btcs.network
 CORE_CONTRACT_ADDRESS=${contractAddress}
 CORE_TOKEN_ADDRESS=${coreTokenAddress}
 BTC_TOKEN_ADDRESS=${btcTokenAddress}
-CORE_NODE_URL=https://rpc.test.btcs.network
+CORE_NODE_URL=https://rpc.test2.btcs.network
 
 # ENTITY CONFIGURATIONS FOR LOCALHOST
 MINER_1_PRIVATE_KEY=0xe9c03148c011d553d43b485d73b1407d24f1498a664f782dc0204e524855be4e

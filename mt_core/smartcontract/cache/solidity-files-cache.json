@@ -1291,8 +1291,8 @@
       ]
     },
     "/Users/sonson/Documents/code/moderntensor_core/moderntensor_aptos/mt_core/smartcontract/contracts/ModernTensor.sol": {
-      "lastModificationDate": 1754061563163,
-      "contentHash": "04790a3575d62c9d1a766e8cd607ea7a",
+      "lastModificationDate": 1754394042215,
+      "contentHash": "15f931d6e923f493e6609901d6c645ab",
       "sourceName": "contracts/ModernTensor.sol",
       "solcConfig": {
         "version": "0.8.19",

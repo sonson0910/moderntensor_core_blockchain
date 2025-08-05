@@ -4,8 +4,8 @@ blockchain:
   network: "testnet"  # testnet, mainnet
   
   # Core blockchain RPC URLs
-  testnet_url: "https://rpc.test.btcs.network"
-  mainnet_url: "https://rpc.coredao.org"
+  testnet_url: "https://rpc.test2.btcs.network"
+  mainnet_url: "https://rpc.test2.btcs.network"
   
   # Chain IDs
   testnet_chain_id: 1115

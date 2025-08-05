@@ -24,12 +24,12 @@ class BlockchainConfig(BaseModel):
     """Blockchain configuration model"""
 
     network: str = "testnet"
-    testnet_url: str = "https://rpc.test.btcs.network"
-    mainnet_url: str = "https://rpc.coredao.org"
+    testnet_url: str = "https://rpc.test2.btcs.network"
+    mainnet_url: str = "https://rpc.test2.btcs.network"
     testnet_chain_id: int = 1115
     mainnet_chain_id: int = 1116
-    contract_address: str = "0x5f96BEA61E4ad2222c4B575fD6FFdCEd4DC04358"
-    core_token_address: str = "0x1361F20937a69aA841a37Ca943948463b8E6740C"
+    contract_address: str = "0xAA6B8200495F7741B0B151B486aEB895fEE8c272"
+    CORE_TOKEN_ADDRESS: str = "0xbCfb1f5E120BE57cBBcB331D8392ae63C903dBaE"
     gas_price: int = 20000000000
     gas_limit: int = 6000000
     transaction_timeout: int = 120

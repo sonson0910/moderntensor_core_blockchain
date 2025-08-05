@@ -15,7 +15,9 @@ import asyncio
 from typing import Dict, Any
 
 from moderntensor_aptos.mt_core.account import Account
-from moderntensor_aptos.mt_core.async_client import ModernTensorCoreClient
+from moderntensor_aptos.mt_core.core_client.contract_client import (
+    ModernTensorCoreClient,
+)
 from moderntensor_aptos.mt_core.keymanager.wallet_manager import WalletManager
 from moderntensor_aptos.mt_core.keymanager.decryption_utils import decode_hotkey_account
 from moderntensor_aptos.mt_core.config.settings import settings, logger

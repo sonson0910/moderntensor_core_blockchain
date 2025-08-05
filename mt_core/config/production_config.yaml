@@ -6,17 +6,17 @@ production:
   network:
     name: "Core Testnet"
     chain_id: 1115
-    rpc_url: "https://rpc.test.btcs.network"
+    rpc_url: "https://rpc.test2.btcs.network"
     explorer_url: "https://scan.test.btcs.network"
     
   # Production Smart Contract Addresses (CORRECT DEPLOYED ADDRESSES)
   contracts:
     # Main ModernTensor contract - DEPLOYED & VERIFIED
-    moderntensor_main: "0x594fc12B3e3AB824537b947765dd9409DAAAa143"
+    moderntensor_main: "0xAA6B8200495F7741B0B151B486aEB895fEE8c272"
     
     # Token contracts for testing (ultra-low stakes)
-    core_token: "0x7B74e4868c8C500D6143CEa53a5d2F94e94c7637"    # Mock CORE token
-    btc_token: "0x44Ed1441D79FfCb76b7D6644dBa930309E0E6F31"     # Mock BTC token
+    core_token: "0xAA6B8200495F7741B0B151B486aEB895fEE8c272"    # Mock CORE token
+    btc_token: "0xAA6B8200495F7741B0B151B486aEB895fEE8c272"     # Mock BTC token
     
     # Future mainnet addresses (TBD)
     mainnet:
@@ -76,7 +76,7 @@ production:
 environments:
   development:
     contracts:
-      moderntensor_main: "0x594fc12B3e3AB824537b947765dd9409DAAAa143"
+      moderntensor_main: "0xAA6B8200495F7741B0B151B486aEB895fEE8c272"
     staking:
       minimums:
         miner_stake: 50000000000000000000     # 50 CORE (dev testing)
@@ -84,7 +84,7 @@ environments:
         
   staging:
     contracts:
-      moderntensor_main: "0x594fc12B3e3AB824537b947765dd9409DAAAa143"
+      moderntensor_main: "0xAA6B8200495F7741B0B151B486aEB895fEE8c272"
     staking:
       minimums:
         miner_stake: 100000000000000000000     # 100 CORE  
@@ -94,5 +94,5 @@ environments:
     # Use production minimums
     network:
       chain_id: 1116  # Core mainnet
-      rpc_url: "https://rpc.coredao.org"
+      rpc_url: "https://rpc.test2.btcs.network"
       explorer_url: "https://scan.coredao.org"

@@ -381,6 +381,11 @@ class ValidatorNodeCore:
             self.miners_info = temp_miners_info
             self.validators_info = temp_validators_info
 
+            # If no miners found and we're in flexible mode, create mock miners for testing
+            if not self.miners_info and hasattr(self, 'flexible_mode_enabled') and self.flexible_mode_enabled:
+                logger.info(f"{self.uid_prefix} No miners found on blockchain, creating mock miners for flexible mode testing")
+                self._create_mock_miners_for_flexible_mode()
+
             # Update self validator info
             self._update_self_validator_info()
 

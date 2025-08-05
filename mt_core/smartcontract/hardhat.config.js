@@ -16,8 +16,17 @@ module.exports = {
   networks: {
     // Core DAO Testnet
     core_testnet: {
-      url: "https://rpc.test.btcs.network",
+      url: "https://rpc.test2.btcs.network",
       chainId: 1115,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      gasPrice: 20000000000, // 20 gwei
+      gas: 6000000,
+      timeout: 60000,
+    },
+    // Core DAO Test2 Network
+    core_test2: {
+      url: "https://rpc.test2.btcs.network",
+      chainId: 1114, // Test2 chain ID
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       gasPrice: 20000000000, // 20 gwei
       gas: 6000000,
@@ -25,7 +34,7 @@ module.exports = {
     },
     // Core DAO Mainnet  
     core_mainnet: {
-      url: "https://rpc.coredao.org",
+      url: "https://rpc.test2.btcs.network",
       chainId: 1116,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       gasPrice: 20000000000, // 20 gwei

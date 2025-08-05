@@ -36,8 +36,8 @@ Create a `.env` file:
 PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
 
 # Core blockchain RPC endpoints
-CORE_TESTNET_RPC=https://rpc.test.btcs.network
-CORE_MAINNET_RPC=https://rpc.coredao.org
+CORE_TESTNET_RPC=https://rpc.test2.btcs.network
+CORE_MAINNET_RPC=https://rpc.test2.btcs.network
 
 # Etherscan API key for contract verification
 ETHERSCAN_API_KEY=your_etherscan_api_key_here
@@ -184,13 +184,13 @@ npm run coverage
 
 ### Core Testnet
 - **Chain ID**: 1115
-- **RPC**: https://rpc.test.btcs.network
+- **RPC**: https://rpc.test2.btcs.network
 - **Explorer**: https://scan.test.btcs.network
 - **Gas Price**: 20 gwei
 
 ### Core Mainnet
 - **Chain ID**: 1116
-- **RPC**: https://rpc.coredao.org
+- **RPC**: https://rpc.test2.btcs.network
 - **Explorer**: https://scan.coredao.org
 - **Gas Price**: 20 gwei
 

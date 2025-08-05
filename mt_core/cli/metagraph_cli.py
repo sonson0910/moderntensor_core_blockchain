@@ -57,14 +57,14 @@ def _load_account(account_name: str, password: str, base_dir: str) -> Optional[A
 # Helper function to get Core Client
 def _get_client(network: str) -> CoreAsyncClient:
     if network == "mainnet":
-        return CoreAsyncClient("https://rpc.coredao.org")
+        return CoreAsyncClient("https://rpc.test2.btcs.network")
     elif network == "testnet":
-        return CoreAsyncClient("https://rpc.test.btcs.network")
+        return CoreAsyncClient("https://rpc.test2.btcs.network")
     elif network == "devnet":
-        return CoreAsyncClient("https://rpc.test.btcs.network")  # Use testnet for dev
+        return CoreAsyncClient("https://rpc.test2.btcs.network")  # Use testnet for dev
     else:
         # Default to testnet
-        return CoreAsyncClient("https://rpc.test.btcs.network")
+        return CoreAsyncClient("https://rpc.test2.btcs.network")
 
 
 # ------------------------------------------------------------------------------
@@ -523,6 +523,276 @@ def list_validators_cmd(subnet_uid, contract_address, network):
     except Exception as e:
         console.print(f"[bold red]Error listing validators:[/bold red] {e}")
         logger.exception("List validators command failed")
+
+
+# ------------------------------------------------------------------------------
+# SUBNET COMMANDS
+# ------------------------------------------------------------------------------
+@metagraph_cli.command("list-subnets")
+@click.option(
+    "--contract-address",
+    default=lambda: settings.CORE_CONTRACT_ADDRESS,
+    help="ModernTensor contract address.",
+)
+@click.option(
+    "--network",
+    default=lambda: settings.CORE_NETWORK,
+    type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
+    help="Select Core network.",
+)
+def list_subnets_cmd(contract_address, network):
+    """
+    📋 List all subnets from metagraph perspective.
+    """
+    console = Console()
+    client = _get_client(network)
+
+    console.print("⏳ Fetching all subnets from metagraph...")
+
+    try:
+        # Get all subnets using ModernTensorCoreClient
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider(client.rpc_url))
+        moderntensor_client = ModernTensorCoreClient(
+            w3=w3, contract_address=contract_address
+        )
+
+        console.print(f"🔍 Connecting to contract: {contract_address}")
+        console.print(f"🔍 Using RPC: {client.rpc_url}")
+
+        # Get all subnet IDs
+        subnet_ids = moderntensor_client.contract.functions.getAllSubnetIds().call()
+
+        if not subnet_ids:
+            console.print("[bold yellow]No subnets found.[/bold yellow]")
+            return
+
+        # Display subnets in a table
+        table = Table(
+            title="📋 ModernTensor Subnets",
+            border_style="blue",
+        )
+        table.add_column("Subnet ID", style="bold blue")
+        table.add_column("Name", style="cyan")
+        table.add_column("Description", style="white")
+        table.add_column("Owner", style="yellow")
+        table.add_column("Miners", style="green")
+        table.add_column("Validators", style="magenta")
+        table.add_column("AI Model", style="bright_cyan")
+        table.add_column("Status", style="bright_white")
+
+        for subnet_id in subnet_ids:
+            try:
+                # Get detailed subnet info using getSubnet
+                subnet_data = moderntensor_client.contract.functions.getSubnet(
+                    subnet_id
+                ).call()
+                static_data, dynamic_data, miner_addresses, validator_addresses = (
+                    subnet_data
+                )
+
+                subnet_name = (
+                    static_data[1] if static_data[1] else f"Subnet {subnet_id}"
+                )
+                description = (
+                    static_data[2][:50] + "..."
+                    if len(static_data[2]) > 50
+                    else static_data[2]
+                )
+                owner = static_data[3][:10] + "..." if static_data[3] else "N/A"
+                miners_count = len(miner_addresses)
+                validators_count = len(validator_addresses)
+                ai_model = static_data[5] if static_data[5] else "General"
+                status = "Active" if dynamic_data[6] == 1 else "Inactive"
+
+                table.add_row(
+                    str(subnet_id),
+                    subnet_name,
+                    description,
+                    owner,
+                    str(miners_count),
+                    str(validators_count),
+                    ai_model,
+                    (
+                        f"[green]{status}[/green]"
+                        if status == "Active"
+                        else f"[red]{status}[/red]"
+                    ),
+                )
+
+            except Exception as e:
+                console.print(f"⚠️ Error getting subnet {subnet_id} details: {e}")
+                table.add_row(
+                    str(subnet_id),
+                    "Error",
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    "[red]Error[/red]",
+                )
+
+        console.print(table)
+
+        # Summary statistics
+        total_subnets = len(subnet_ids)
+        console.print(f"\n📊 [bold blue]Subnets Summary[/bold blue]")
+        console.print(f"Total subnets: [bold cyan]{total_subnets}[/bold cyan]")
+        console.print(
+            f"💡 Use [cyan]mtcore metagraph subnet-info --subnet-id <ID>[/cyan] for detailed subnet information"
+        )
+
+    except Exception as e:
+        console.print(f"[bold red]Error listing subnets:[/bold red] {e}")
+        logger.exception("List subnets command failed")
+
+
+@metagraph_cli.command("subnet-info")
+@click.option("--subnet-id", required=True, type=int, help="Subnet ID to query.")
+@click.option(
+    "--contract-address",
+    default=lambda: settings.CORE_CONTRACT_ADDRESS,
+    help="ModernTensor contract address.",
+)
+@click.option(
+    "--network",
+    default=lambda: settings.CORE_NETWORK,
+    type=click.Choice(["mainnet", "testnet", "devnet", "local"]),
+    help="Select Core network.",
+)
+@click.option(
+    "--show-entities",
+    is_flag=True,
+    help="Show detailed miner and validator information.",
+)
+def subnet_info_cmd(subnet_id, contract_address, network, show_entities):
+    """
+    🔍 Get detailed subnet information including all entities.
+    """
+    console = Console()
+    client = _get_client(network)
+
+    console.print(f"⏳ Fetching subnet [blue]{subnet_id}[/blue] information...")
+
+    try:
+        # Get subnet info using ModernTensorCoreClient
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider(client.rpc_url))
+        moderntensor_client = ModernTensorCoreClient(
+            w3=w3, contract_address=contract_address
+        )
+
+        # Get detailed subnet info using getSubnet
+        try:
+            subnet_data = moderntensor_client.contract.functions.getSubnet(
+                subnet_id
+            ).call()
+            static_data, dynamic_data, miner_addresses, validator_addresses = (
+                subnet_data
+            )
+
+            # Display subnet overview
+            console.print(
+                Panel(
+                    f"[bold]Name:[/bold] [cyan]{static_data[1]}[/cyan]\n"
+                    f"[bold]Description:[/bold] {static_data[2]}\n"
+                    f"[bold]Owner:[/bold] [yellow]{static_data[3]}[/yellow]\n"
+                    f"[bold]Created At:[/bold] {static_data[4]}\n"
+                    f"[bold]AI Model Type:[/bold] [bright_cyan]{static_data[5]}[/bright_cyan]\n"
+                    f"[bold]Consensus Type:[/bold] [magenta]{static_data[6]}[/magenta]",
+                    title=f"🌐 Subnet {subnet_id} - Overview",
+                    border_style="cyan",
+                )
+            )
+
+            # Display network statistics
+            console.print(
+                Panel(
+                    f"[bold]Total Miners:[/bold] [green]{dynamic_data[0]}[/green]\n"
+                    f"[bold]Total Validators:[/bold] [magenta]{dynamic_data[1]}[/magenta]\n"
+                    f"[bold]CORE Staked:[/bold] [yellow]{dynamic_data[2] / 10**18:.4f} CORE[/yellow]\n"
+                    f"[bold]BTC Staked:[/bold] [orange1]{dynamic_data[3] / 10**8:.8f} BTC[/orange1]\n"
+                    f"[bold]Current Epoch:[/bold] {dynamic_data[4]}\n"
+                    f"[bold]Last Update:[/bold] {dynamic_data[5]}\n"
+                    f"[bold]Status:[/bold] {'[green]Active[/green]' if dynamic_data[6] == 1 else '[red]Inactive[/red]'}",
+                    title="📊 Network Statistics",
+                    border_style="yellow",
+                )
+            )
+
+            if show_entities:
+                # Display miners
+                if miner_addresses:
+                    miners_table = Table(
+                        title=f"⛏️ Miners in Subnet {subnet_id}", border_style="green"
+                    )
+                    miners_table.add_column("Index", style="bold")
+                    miners_table.add_column("Address", style="green")
+                    miners_table.add_column("Info", style="cyan")
+
+                    for i, miner in enumerate(miner_addresses):
+                        try:
+                            # Try to get miner details
+                            miner_info = moderntensor_client.get_miner_info(miner)
+                            info_text = "Active" if miner_info else "Registered"
+                        except:
+                            info_text = "Registered"
+
+                        miners_table.add_row(str(i + 1), miner, info_text)
+
+                    console.print(miners_table)
+                else:
+                    console.print("[yellow]No miners found in this subnet.[/yellow]")
+
+                # Display validators
+                if validator_addresses:
+                    validators_table = Table(
+                        title=f"✅ Validators in Subnet {subnet_id}",
+                        border_style="magenta",
+                    )
+                    validators_table.add_column("Index", style="bold")
+                    validators_table.add_column("Address", style="magenta")
+                    validators_table.add_column("Info", style="cyan")
+
+                    for i, validator in enumerate(validator_addresses):
+                        try:
+                            # Try to get validator details
+                            validator_info = moderntensor_client.get_validator_info(
+                                validator
+                            )
+                            info_text = "Active" if validator_info else "Registered"
+                        except:
+                            info_text = "Registered"
+
+                        validators_table.add_row(str(i + 1), validator, info_text)
+
+                    console.print(validators_table)
+                else:
+                    console.print(
+                        "[yellow]No validators found in this subnet.[/yellow]"
+                    )
+            else:
+                console.print(
+                    f"\n💡 Use [cyan]--show-entities[/cyan] flag to see detailed miner and validator lists"
+                )
+
+        except Exception as contract_error:
+            if "Subnet not found" in str(contract_error):
+                console.print(f"❌ [bold red]Subnet {subnet_id} not found[/bold red]")
+                console.print(
+                    "💡 Use 'mtcore metagraph list-subnets' to see available subnets"
+                )
+            else:
+                console.print(
+                    f"❌ [bold red]Contract Error:[/bold red] {contract_error}"
+                )
+
+    except Exception as e:
+        console.print(f"[bold red]Error getting subnet info:[/bold red] {e}")
+        logger.exception("Subnet info command failed")
 
 
 if __name__ == "__main__":

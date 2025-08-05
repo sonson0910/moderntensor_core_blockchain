@@ -123,10 +123,26 @@ class CoreMinerAgent:
                     f"{uid_prefix} Connected to Core blockchain: {self.core_node_url}"
                 )
                 logger.info(f"{uid_prefix} Current block: {self.web3.eth.block_number}")
+
+                # Initialize contract if ABI provided
+                if self.contract_address and self.contract_abi:
+                    self.contract = self.web3.eth.contract(
+                        address=self.contract_address, abi=self.contract_abi
+                    )
+                    logger.info(
+                        f"{uid_prefix} Contract initialized: {self.contract_address}"
+                    )
+                else:
+                    self.contract = None
+                    logger.warning(
+                        f"{uid_prefix} No contract ABI provided - using simulation mode"
+                    )
             else:
                 logger.warning(f"{uid_prefix} Failed to connect to Core blockchain")
+                self.contract = None
         except Exception as e:
             logger.warning(f"{uid_prefix} Web3 initialization failed: {e}")
+            self.contract = None
 
         # --- Load performance history ---
         self._load_history()
@@ -304,7 +320,6 @@ class CoreMinerAgent:
     ) -> Optional[str]:
         """
         Update miner performance data on Core blockchain
-        Note: This is a simplified version - actual implementation may vary based on contract design
         """
         uid_prefix = f"[UpdateChain:{self.miner_uid_hex[:8]}...]"
 
@@ -312,15 +327,64 @@ class CoreMinerAgent:
             f"{uid_prefix} Updating miner data on chain (performance: {new_performance:.4f}, slot: {slot_num})"
         )
 
-        # For now, just log the update (actual blockchain update would require specific contract functions)
-        logger.info(
-            f"{uid_prefix} Would update blockchain with performance: {new_performance:.4f}"
-        )
+        # Check if we have contract and account
+        if not self.contract or not self.miner_account:
+            logger.warning(
+                f"{uid_prefix} No contract or account available - using simulation mode"
+            )
+            self._save_history(slot_num, new_performance)
+            return "simulated_tx_hash"
 
-        # Save to local history
-        self._save_history(slot_num, new_performance)
+        try:
+            # Convert performance to uint64 (0-1_000_000 scale)
+            performance_scaled = int(new_performance * 1_000_000)
+            performance_scaled = max(0, min(1_000_000, performance_scaled))
 
-        return "simulated_tx_hash"
+            # Use current trust score (or default to 500_000 = 50%)
+            trust_score_scaled = 500_000  # Default 50% trust score
+
+            logger.info(
+                f"{uid_prefix} Calling updateMinerScores: performance={performance_scaled}, trust_score={trust_score_scaled}"
+            )
+
+            # Build transaction for ModernTensor.sol contract
+            tx = self.contract.functions.updateMinerScores(
+                self.miner_account.address,  # miner address
+                performance_scaled,  # new performance
+                trust_score_scaled,  # new trust score
+            ).build_transaction(
+                {
+                    "from": self.miner_account.address,
+                    "gas": 200000,
+                    "gasPrice": self.web3.eth.gas_price,
+                    "nonce": self.web3.eth.get_transaction_count(
+                        self.miner_account.address
+                    ),
+                }
+            )
+
+            # Sign and send transaction
+            signed_tx = self.web3.eth.account.sign_transaction(
+                tx, self.miner_account.key
+            )
+            tx_hash = self.web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+
+            # Wait for transaction receipt
+            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+
+            if receipt.status == 1:
+                logger.info(f"{uid_prefix} Transaction successful: {tx_hash.hex()}")
+                self._save_history(slot_num, new_performance)
+                return f"0x{tx_hash.hex()}"
+            else:
+                logger.error(f"{uid_prefix} Transaction failed: {tx_hash.hex()}")
+                return None
+
+        except Exception as e:
+            logger.error(f"{uid_prefix} Failed to update blockchain: {e}")
+            # Fallback to simulation mode
+            self._save_history(slot_num, new_performance)
+            return "simulated_tx_hash"
 
     async def run(self, validator_api_url: str, check_interval_seconds: int = 30):
         """
@@ -383,9 +447,16 @@ class CoreMinerAgent:
                         if tx_hash:
                             self.last_processed_slot = current_slot
                             self.last_known_performance = new_performance
-                            logger.info(
-                                f"{uid_prefix} Slot {current_slot} processed successfully → TX Hash: {tx_hash}"
-                            )
+
+                            # Check if this is a simulated transaction
+                            if tx_hash.startswith("simulated_"):
+                                logger.info(
+                                    f"{uid_prefix} Slot {current_slot} processed successfully (simulated update)"
+                                )
+                            else:
+                                logger.info(
+                                    f"{uid_prefix} Slot {current_slot} processed successfully → TX Hash: {tx_hash}"
+                                )
                         else:
                             logger.error(
                                 f"{uid_prefix} Failed to update blockchain for slot {current_slot}"

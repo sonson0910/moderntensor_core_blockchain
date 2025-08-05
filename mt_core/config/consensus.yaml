@@ -8,7 +8,7 @@ consensus:
   task_assignment_minutes: 1
   task_execution_minutes: 1
   consensus_minutes: 1
-  metagraph_update_seconds: 30  # 30 giây cho metagraph update
+  metagraph_update_seconds: 10  # 10 giây cho metagraph update (tối ưu)
   
   # Slot configuration
   slot:

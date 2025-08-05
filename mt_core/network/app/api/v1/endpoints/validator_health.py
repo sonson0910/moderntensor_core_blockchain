@@ -13,7 +13,7 @@ else:
     # Runtime import - avoid circular import
     ValidatorNode = None
 
-from mt_core.network.app.dependencies import get_validator_node
+from moderntensor_aptos.mt_core.network.app.dependencies import get_validator_node
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

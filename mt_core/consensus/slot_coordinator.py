@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # Dynamic EPOCH_START - set to 1 hour before current time to ensure proper slot timing
 import time as time_module
+
 EPOCH_START = int(time_module.time()) - 3600  # 1 hour before current time
 EXPECTED_VALIDATORS = ["validator_1", "validator_2", "validator_3"]
 MAJORITY_THRESHOLD = 2  # Need 2 out of 3 validators
@@ -77,7 +78,7 @@ class SlotConfig:
     task_assignment_minutes: int = 2  # 0-2min: Task assignment + execution (merged)
     task_execution_minutes: int = 0  # DEPRECATED: Now merged into task_assignment
     consensus_minutes: int = 1  # 2-3min: Consensus scoring
-    metagraph_update_seconds: int = 30  # 3-3.5min: Metagraph update (30 giây)
+    metagraph_update_seconds: int = 10  # 3-3.5min: Metagraph update (10 giây - tối ưu)
 
     # === FLEXIBLE CONSENSUS EXTENSIONS ===
     # Flexibility options
@@ -787,7 +788,7 @@ class SlotCoordinator:
                 )
                 return True
 
-            # Calculate exact cutoff time
+            # Calculate exact cutoff time based on slot number
             slot_start_time = EPOCH_START + (
                 slot * self.slot_config.slot_duration_minutes * 60
             )
@@ -796,16 +797,38 @@ class SlotCoordinator:
             )
             current_time = int(time.time())
 
+            logger.info(
+                f"🕐 [V:{self.validator_uid}] Slot {slot} task assignment cutoff: {cutoff_time} (current: {current_time})"
+            )
+
             if current_time < cutoff_time:
                 wait_time = cutoff_time - current_time
                 logger.info(
-                    f"⏰ [V:{self.validator_uid}] Waiting {wait_time}s for task assignment cutoff"
+                    f"⏰ [V:{self.validator_uid}] Waiting {wait_time}s for FIXED task assignment cutoff (slot {slot})"
                 )
                 await asyncio.sleep(wait_time)
+            else:
+                logger.info(
+                    f"✅ [V:{self.validator_uid}] Already past cutoff time for slot {slot}"
+                )
 
             # Register that we've stopped task assignment
             await self.register_phase_entry(
                 slot, SlotPhase.TASK_EXECUTION, {"task_assignment_stopped": True}
+            )
+
+            # WAIT FOR ALL VALIDATORS TO REACH CUTOFF
+            logger.info(
+                f"🤝 [V:{self.validator_uid}] Waiting for all validators to reach task assignment cutoff"
+            )
+
+            # Wait for consensus that all validators have stopped task assignment
+            ready_validators = await self.wait_for_phase_consensus(
+                slot, SlotPhase.TASK_EXECUTION, timeout=30
+            )
+
+            logger.info(
+                f"✅ [V:{self.validator_uid}] Task assignment cutoff consensus reached: {len(ready_validators)} validators"
             )
 
             logger.info(

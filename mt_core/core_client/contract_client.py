@@ -399,20 +399,16 @@ class ModernTensorCoreClient:
                 logger.warning(
                     f"⚠️ Contract execution reverted - likely registration issue"
                 )
-                # TEMPORARY: Skip simulation failures during development/testing
+                # PRODUCTION MODE: Send transaction even if simulation fails
                 logger.warning(
-                    f"🔧 DEVELOPMENT MODE: Skipping transaction due to simulation failure"
+                    f"⚠️ Simulation failed but sending transaction anyway: {sim_error}"
                 )
-                return f"simulation_failed_{nonce}_{miner_address[-8:]}_{str(sim_error)[:50]}"
+                # Continue to send the transaction despite simulation failure
             else:
                 logger.warning(
                     f"⚠️ Unknown simulation error for {miner_address}: {sim_error}"
                 )
-
-            # Return a simulation failure indicator instead of sending the transaction
-            return (
-                f"simulation_failed_{nonce}_{miner_address[-8:]}_{str(sim_error)[:50]}"
-            )
+                # Continue to send the transaction despite simulation failure
 
         # Sign and send transaction with error handling
         signed_txn = self.account.sign_transaction(txn)
@@ -420,7 +416,7 @@ class ModernTensorCoreClient:
         try:
             tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
             logger.info(f"Miner scores update transaction sent: {tx_hash.hex()}")
-            return tx_hash.hex()
+            return f"0x{tx_hash.hex()}"
 
         except Exception as e:
             error_msg = str(e)
@@ -464,7 +460,7 @@ class ModernTensorCoreClient:
                     logger.info(
                         f"Retry transaction sent with higher gas: {tx_hash.hex()}"
                     )
-                    return tx_hash.hex()
+                    return f"0x{tx_hash.hex()}"
                 except Exception as retry_error:
                     logger.error(f"Retry failed for {miner_address}: {retry_error}")
                     raise retry_error

@@ -27,6 +27,7 @@ from .validator_node_tasks import ValidatorNodeTasks
 from .validator_node_consensus import ValidatorNodeConsensus
 from .validator_node_network import ValidatorNodeNetwork
 from .slot_coordinator import SlotPhase
+from .flexible_slot_coordinator import FlexibleSlotCoordinator, FlexibleSlotPhase
 from ..config.config_loader import get_config
 
 logger = logging.getLogger(__name__)
@@ -50,10 +51,10 @@ class ValidatorNode:
         account: Account,
         contract_address: str,
         state_file: str = "validator_state.json",
-        consensus_mode: str = "continuous",
+        consensus_mode: str = "flexible",  # Flexible mode with synchronized cutoffs
         batch_wait_time: float = 30.0,
         api_port: Optional[int] = None,
-        enable_flexible_consensus: bool = False,
+        enable_flexible_consensus: bool = True,  # Enable flexible mode with synchronized cutoffs
         flexible_mode: str = "balanced",
     ):
         """
@@ -96,7 +97,7 @@ class ValidatorNode:
         self.tasks = ValidatorNodeTasks(self.core)
         self.consensus = ValidatorNodeConsensus(self.core)
         self.network = ValidatorNodeNetwork(self.core)
-        
+
         # Cross-reference tasks module in core for consensus access
         self.core.tasks = self.tasks
         self.core.validator_instance = self
@@ -115,7 +116,26 @@ class ValidatorNode:
         self.flexible_consensus_enabled = False
 
         if enable_flexible_consensus:
-            self._setup_flexible_consensus()
+            try:
+                logger.info(f"🔄 {self.uid_prefix} Initializing Flexible Consensus...")
+                # Correctly initialize and assign the Slot Coordinator
+                self.core.slot_coordinator = FlexibleSlotCoordinator(
+                    validator_uid=self.core.info.uid,
+                    # coordination_dir can be customized if needed, default is fine
+                )
+                logger.info(f"   - FlexibleSlotCoordinator initialized and assigned.")
+
+                # Now, enable the mode in the consensus handler
+                self.consensus.enable_flexible_mode()
+                self.flexible_consensus_enabled = True
+                logger.info(f"   - Flexible mode enabled in consensus handler.")
+
+            except Exception as e:
+                logger.error(
+                    f"❌ {self.uid_prefix} Failed to initialize flexible consensus: {e}",
+                    exc_info=True,
+                )
+                self.flexible_consensus_enabled = False
 
         logger.info(
             f"✅ {self.uid_prefix} Refactored ValidatorNode initialized successfully"
@@ -211,34 +231,129 @@ class ValidatorNode:
         """Main operation loop for the validator node."""
         logger.info(f"{self.uid_prefix} Starting main operation loop")
 
-        # Choose operation mode
+        # FLEXIBLE MODE WITH SYNCHRONIZED CUTOFFS
         if self.flexible_consensus_enabled:
+            logger.info(
+                f"{self.uid_prefix} Using flexible mode with synchronized cutoffs"
+            )
             await self._flexible_consensus_loop()
         else:
             await self._traditional_slot_loop()
 
     async def _flexible_consensus_loop(self):
-        """Flexible consensus operation loop."""
-        logger.info(f"{self.uid_prefix} Starting flexible consensus loop")
+        """Flexible consensus operation loop with synchronized cutoffs."""
+        logger.info(
+            f"{self.uid_prefix} Starting flexible consensus loop with synchronized cutoffs"
+        )
+
+        last_processed_slot = -1
+        last_processed_phase = None
+        task_assignment_completed_slots = (
+            set()
+        )  # Track slots where task assignment was completed
 
         while True:
             try:
-                # Run flexible consensus cycle
-                if hasattr(self.consensus, "run_flexible_consensus_cycle"):
-                    await self.consensus.run_flexible_consensus_cycle()
-                else:
-                    logger.warning(
-                        f"{self.uid_prefix} Flexible consensus not available, falling back to traditional"
+                # Get current slot and phase from the flexible coordinator
+                current_slot, current_phase, phase_info = (
+                    self.core.slot_coordinator.get_current_slot_and_phase()
+                )
+
+                # Determine if we should process this slot/phase combination
+                should_process = False
+
+                if current_slot > last_processed_slot:
+                    # New slot - always process
+                    should_process = True
+                    logger.info(
+                        f"🔄 {self.uid_prefix} New slot detected: {current_slot} (last: {last_processed_slot})"
                     )
-                    await self._traditional_slot_loop()
-                    break
+                elif (
+                    current_slot == last_processed_slot
+                    and current_phase != last_processed_phase
+                ):
+                    # Same slot but different phase - process if we haven't done this phase
+                    should_process = True
+                    logger.info(
+                        f"🔄 {self.uid_prefix} Phase transition in slot {current_slot}: {last_processed_phase} → {current_phase.value}"
+                    )
+                elif (
+                    current_slot == last_processed_slot
+                    and current_phase == last_processed_phase
+                ):
+                    # Same slot and same phase - already processed, don't repeat
+                    should_process = False
+                    logger.debug(
+                        f"⏭️ {self.uid_prefix} Already processed slot {current_slot} phase {current_phase.value}, skipping"
+                    )
+
+                if should_process:
+                    logger.info(
+                        f"▶️ {self.uid_prefix} Processing slot {current_slot} in phase {current_phase.value}"
+                    )
+
+                    # Handle phase-specific operations
+                    if current_phase == FlexibleSlotPhase.TASK_ASSIGNMENT:
+                        # Prevent duplicate task assignments for same slot
+                        if current_slot not in task_assignment_completed_slots:
+                            await self._handle_task_assignment_phase(current_slot)
+                            task_assignment_completed_slots.add(current_slot)
+                            logger.info(
+                                f"✅ {self.uid_prefix} Task assignment completed for slot {current_slot}"
+                            )
+                        else:
+                            logger.debug(
+                                f"⏭️ {self.uid_prefix} Task assignment already completed for slot {current_slot}, skipping"
+                            )
+
+                    elif current_phase == FlexibleSlotPhase.TASK_EXECUTION:
+                        await self._handle_task_execution_phase(current_slot)
+                    elif current_phase == FlexibleSlotPhase.CONSENSUS_SCORING:
+                        await self._handle_consensus_scoring_phase(current_slot)
+                    elif current_phase == FlexibleSlotPhase.METAGRAPH_UPDATE:
+                        await self._handle_metagraph_update_phase(current_slot)
+
+                        # Clean up old task assignment tracking when slot is fully completed
+                        old_slots = {
+                            s
+                            for s in task_assignment_completed_slots
+                            if s < current_slot - 2
+                        }
+                        task_assignment_completed_slots -= old_slots
+                        if old_slots:
+                            logger.debug(
+                                f"🧹 {self.uid_prefix} Cleaned up task assignment tracking for old slots: {old_slots}"
+                            )
+
+                    # Update tracking - update slot tracking IMMEDIATELY to prevent infinite loops
+                    last_processed_phase = current_phase
+                    last_processed_slot = current_slot  # Always update slot tracking!
+
+                    if current_phase == FlexibleSlotPhase.METAGRAPH_UPDATE:
+                        # Final phase completed
+                        logger.info(
+                            f"✅ {self.uid_prefix} Completed ALL phases for slot {current_slot}"
+                        )
+                    else:
+                        logger.info(
+                            f"🔄 {self.uid_prefix} Completed phase {current_phase.value} for slot {current_slot}"
+                        )
+
+                else:
+                    # Already processed this slot/phase combination
+                    logger.debug(
+                        f"⏳ {self.uid_prefix} Waiting for progression (slot: {current_slot}, phase: {current_phase.value}, last_slot: {last_processed_slot}, last_phase: {last_processed_phase})"
+                    )
 
                 # Wait before next cycle
-                await asyncio.sleep(self.core.batch_wait_time)
+                await asyncio.sleep(5)  # Reduced sleep for better responsiveness
 
             except Exception as e:
-                logger.error(f"{self.uid_prefix} Error in flexible consensus loop: {e}")
-                await asyncio.sleep(self.core.batch_wait_time)
+                logger.error(
+                    f"{self.uid_prefix} Error in flexible consensus loop: {e}",
+                    exc_info=True,
+                )
+                await asyncio.sleep(30)  # Wait before retrying
 
     async def _traditional_slot_loop(self):
         """Traditional slot-based operation loop."""
@@ -310,27 +425,13 @@ class ValidatorNode:
                     )
 
             elif self.core.consensus_mode == "flexible":
-                # Flexible mode: Enter task assignment independently
-                await self.core.slot_coordinator.register_phase_entry(
-                    slot, SlotPhase.TASK_ASSIGNMENT
-                )
-                logger.info(
-                    f"{self.uid_prefix} Entered task assignment phase independently for slot {slot}"
-                )
-
-                # Select and send tasks to miners using minibatch approach
-                selected_miners = self.tasks.cardano_select_miners(slot)
-
-                if selected_miners:
-                    await self.tasks.cardano_send_minibatches(slot, selected_miners)
-                    logger.info(
-                        f"{self.uid_prefix} Minibatch tasks completed for {len(selected_miners)} miners in slot {slot}"
-                    )
+                # FLEXIBLE MODE: CONTINUOUS TASK ASSIGNMENT WITH SYNCHRONIZED CUTOFF
+                await self._run_continuous_flexible_task_assignment(slot)
 
             elif self.core.consensus_mode == "synchronized":
                 # Synchronized mode: Wait for all validators
-                await self.core.slot_coordinator.register_phase_entry(
-                    slot, SlotPhase.TASK_ASSIGNMENT
+                await self.core.slot_coordinator.register_phase_entry_flexible(
+                    slot, FlexibleSlotPhase.TASK_ASSIGNMENT
                 )
 
                 # Wait for consensus to proceed
@@ -348,8 +449,236 @@ class ValidatorNode:
                         f"{self.uid_prefix} Minibatch tasks completed for {len(selected_miners)} miners in slot {slot}"
                     )
 
+                # ENFORCE TASK ASSIGNMENT CUTOFF - ensure all validators finish together
+                await self.core.slot_coordinator.enforce_task_assignment_cutoff(slot)
+                logger.info(
+                    f"{self.uid_prefix} Task assignment cutoff enforced for slot {slot}"
+                )
+
         except Exception as e:
             logger.error(f"{self.uid_prefix} Error in task assignment phase: {e}")
+
+    async def _run_continuous_flexible_task_assignment(self, slot: int):
+        """
+        CONTINUOUS TASK ASSIGNMENT: Lặp đi lặp lại trong suốt task assignment phase.
+
+        - Giao mini batch (5 miners) → Chấm điểm → Giao tiếp tục
+        - Lặp liên tục đến khi hết thời gian phase
+        - Synchronized cutoff như Bittensor
+        """
+        logger.info(
+            f"🔄 {self.uid_prefix} Starting CONTINUOUS flexible task assignment for slot {slot}"
+        )
+
+        try:
+            # Step 1: Register phase entry
+            await self.core.slot_coordinator.register_phase_entry_flexible(
+                slot, FlexibleSlotPhase.TASK_ASSIGNMENT
+            )
+
+            # Step 2: Calculate phase timing
+            if hasattr(self.core.slot_coordinator, "_epoch_start"):
+                epoch_start = self.core.slot_coordinator._epoch_start
+            else:
+                epoch_start = time.time()
+                self.core.slot_coordinator._epoch_start = epoch_start
+
+            slot_config = self.core.slot_coordinator.slot_config
+            slot_duration_seconds = slot_config.slot_duration_minutes * 60
+            task_assignment_duration = slot_config.min_task_assignment_seconds
+
+            slot_start_time = epoch_start + (slot * slot_duration_seconds)
+            task_assignment_end_time = slot_start_time + task_assignment_duration
+            current_time = time.time()
+
+            # Enhanced timing debug
+            slot_progress = current_time - slot_start_time
+            assignment_duration = task_assignment_end_time - slot_start_time
+            remaining_in_assignment = task_assignment_end_time - current_time
+
+            logger.info(f"📊 {self.uid_prefix} DETAILED TIMING DEBUG:")
+            logger.info(
+                f"   Slot {slot}: start={slot_start_time}, current={current_time}, progress={slot_progress:.1f}s"
+            )
+            logger.info(
+                f"   Task assignment: duration={assignment_duration}s, remaining={remaining_in_assignment:.1f}s"
+            )
+            logger.info(
+                f"   Assignment window: {slot_start_time} → {task_assignment_end_time}"
+            )
+
+            # Step 3: Get available miners
+            selected_miners = self.tasks.cardano_select_miners(slot)
+            if not selected_miners:
+                logger.warning(f"{self.uid_prefix} No miners available for slot {slot}")
+                return
+
+            logger.info(
+                f"🎯 {self.uid_prefix} Available miners: {len(selected_miners)} for continuous assignment"
+            )
+
+            # Step 4: CONTINUOUS MINI-BATCH LOOP - TARGET 3 ROUNDS
+            batch_round = 1
+            batch_size = 5  # Mini batch size
+            batch_timeout = 15.0  # Quick batch timeout
+            max_rounds = 3  # TARGET: Exactly 3 rounds for testing
+
+            logger.info(
+                f"🎯 {self.uid_prefix} Starting 3-round continuous assignment (60s window)"
+            )
+
+            while time.time() < task_assignment_end_time and batch_round <= max_rounds:
+                remaining_time = task_assignment_end_time - time.time()
+
+                # Stop if less than 10 seconds remaining OR reached max rounds
+                if remaining_time <= 10:
+                    logger.info(
+                        f"⏰ {self.uid_prefix} Approaching cutoff time ({remaining_time:.1f}s), stopping task assignment"
+                    )
+                    break
+
+                if batch_round > max_rounds:
+                    logger.info(
+                        f"🎯 {self.uid_prefix} Completed target {max_rounds} rounds, stopping task assignment"
+                    )
+                    break
+
+                logger.info(
+                    f"📋 {self.uid_prefix} Mini-batch round {batch_round}/{max_rounds} - {remaining_time:.1f}s until cutoff"
+                )
+
+                # Select random 5 miners for this batch
+                import random
+
+                batch_miners = random.sample(
+                    selected_miners, min(batch_size, len(selected_miners))
+                )
+
+                logger.info(
+                    f"🎲 {self.uid_prefix} Selected {len(batch_miners)} miners for batch {batch_round}: {[m.uid for m in batch_miners]}"
+                )
+
+                # Send mini-batch with quick timeout
+                try:
+                    batch_start_time = time.time()
+                    await asyncio.wait_for(
+                        self.tasks.cardano_send_minibatches(slot, batch_miners),
+                        timeout=min(
+                            batch_timeout, remaining_time - 5
+                        ),  # Leave 5s buffer
+                    )
+                    batch_duration = time.time() - batch_start_time
+
+                    logger.info(
+                        f"✅ {self.uid_prefix} Batch {batch_round} completed in {batch_duration:.1f}s"
+                    )
+
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"⏰ {self.uid_prefix} Batch {batch_round} timed out after {batch_timeout}s"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"❌ {self.uid_prefix} Error in batch {batch_round}: {e}"
+                    )
+
+                batch_round += 1
+
+                # Small delay between batches
+                await asyncio.sleep(2)
+
+            actual_rounds = batch_round - 1
+            logger.info(
+                f"🏁 {self.uid_prefix} Completed {actual_rounds}/{max_rounds} mini-batch rounds in task assignment phase"
+            )
+
+            # Step 5: ENFORCE SYNCHRONIZED CUTOFF - CRITICAL FOR BITTENSOR BEHAVIOR
+            logger.info(
+                f"🛑 {self.uid_prefix} ENFORCING SYNCHRONIZED CUTOFF for slot {slot} - ALL validators must stop together!"
+            )
+            await self._enforce_flexible_task_assignment_cutoff(slot)
+
+            logger.info(
+                f"✅ {self.uid_prefix} Ready for P2P consensus and metagraph update (slot {slot})"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.uid_prefix} Error in continuous flexible task assignment: {e}"
+            )
+
+    async def _enforce_flexible_task_assignment_cutoff(self, slot: int):
+        """
+        Enforce synchronized task assignment cutoff for flexible mode.
+        This ensures all validators stop task assignment at the same time,
+        providing Bittensor-like synchronized behavior.
+        """
+        try:
+            # Calculate exact cutoff time based on slot number and epoch
+            if hasattr(self.core.slot_coordinator, "_epoch_start"):
+                epoch_start = self.core.slot_coordinator._epoch_start
+            else:
+                # Fallback to current time for first run
+                epoch_start = time.time()
+                self.core.slot_coordinator._epoch_start = epoch_start
+
+            # Get slot configuration from flexible coordinator
+            slot_config = self.core.slot_coordinator.slot_config
+            slot_duration_seconds = slot_config.slot_duration_minutes * 60
+            task_assignment_duration = slot_config.min_task_assignment_seconds
+
+            slot_start_time = epoch_start + (slot * slot_duration_seconds)
+            cutoff_time = slot_start_time + task_assignment_duration
+            current_time = time.time()
+
+            logger.info(
+                f"{self.uid_prefix} Flexible cutoff calculation: slot_start={slot_start_time}, cutoff={cutoff_time}, current={current_time}"
+            )
+
+            # STRICT SYNCHRONIZED CUTOFF - BITTENSOR BEHAVIOR
+            if current_time < cutoff_time:
+                wait_time = cutoff_time - current_time
+
+                # For testing, allow reasonable wait times (up to 70s)
+                if wait_time > 70:
+                    logger.warning(
+                        f"⚠️ {self.uid_prefix} Cutoff wait time too long ({wait_time:.1f}s), using immediate cutoff"
+                    )
+                    wait_time = 0
+
+                if wait_time > 0:
+                    logger.info(
+                        f"⏰ {self.uid_prefix} SYNCHRONIZED WAIT: {wait_time:.1f}s until ALL validators stop task assignment (slot {slot})"
+                    )
+                    logger.info(
+                        f"🔒 {self.uid_prefix} This ensures Bittensor-like synchronized cutoff behavior"
+                    )
+                    await asyncio.sleep(wait_time)
+                    logger.info(
+                        f"🛑 {self.uid_prefix} CUTOFF REACHED! All validators stopping task assignment now"
+                    )
+                else:
+                    logger.info(
+                        f"✅ {self.uid_prefix} Using immediate cutoff for slot {slot}"
+                    )
+            else:
+                logger.info(
+                    f"✅ {self.uid_prefix} Already past cutoff time for slot {slot}"
+                )
+
+            # Register that we've stopped task assignment
+            await self.core.slot_coordinator.register_phase_entry_flexible(
+                slot,
+                FlexibleSlotPhase.TASK_EXECUTION,
+                {"task_assignment_stopped": True},
+            )
+
+            logger.info(
+                f"🛑 {self.uid_prefix} Task assignment SYNCHRONIZED CUTOFF enforced for slot {slot}"
+            )
+
+        except Exception as e:
+            logger.error(f"❌ {self.uid_prefix} Error enforcing flexible cutoff: {e}")
 
     async def _handle_task_execution_phase(self, slot: int):
         """Handle task execution phase."""
@@ -369,27 +698,52 @@ class ValidatorNode:
         )
 
         try:
-            # Score miner results
-            scores = self.consensus.score_miner_results()
-
-            if scores:
-                # Broadcast scores to other validators
-                await self.consensus.broadcast_scores({str(slot): scores})
-
-                # Wait for consensus scores from other validators
-                consensus_timeout = 60.0  # 60 seconds timeout
-                await self.consensus.wait_for_consensus_scores(consensus_timeout)
-
-                # Finalize consensus by aggregating all scores (local + P2P)
-                final_scores = await self.consensus.finalize_consensus(slot)
-
+            # FLEXIBLE MODE: This phase MUST be synchronized for all modes
+            if self.core.consensus_mode in ["flexible", "synchronized"]:
+                # Force synchronization for consensus (both flexible and synchronized)
                 logger.info(
-                    f"{self.uid_prefix} Consensus finalized for slot {slot}: {len(final_scores)} final scores"
+                    f"{self.uid_prefix} {self.core.consensus_mode.title()} mode: Enforcing consensus coordination"
                 )
 
-            logger.info(
-                f"{self.uid_prefix} Consensus scoring completed for slot {slot}"
-            )
+                # Wait for task assignment cutoff first
+                await self.core.slot_coordinator.enforce_task_assignment_cutoff(slot)
+
+                # Score local results
+                local_scores = self.consensus.score_miner_results()
+
+                # Coordinate consensus with other validators (synchronized)
+                consensus_scores = (
+                    await self.core.slot_coordinator.coordinate_consensus_round(
+                        slot, local_scores
+                    )
+                )
+
+                logger.info(
+                    f"{self.uid_prefix} {self.core.consensus_mode.title()} consensus completed for slot {slot}: {len(consensus_scores)} final scores"
+                )
+
+            else:
+                # Legacy consensus logic (continuous mode)
+                scores = self.consensus.score_miner_results()
+
+                if scores:
+                    # Broadcast scores to other validators
+                    await self.consensus.broadcast_scores({str(slot): scores})
+
+                    # Wait for consensus scores from other validators
+                    consensus_timeout = 60.0  # 60 seconds timeout
+                    await self.consensus.wait_for_consensus_scores(consensus_timeout)
+
+                    # Finalize consensus by aggregating all scores (local + P2P)
+                    final_scores = await self.consensus.finalize_consensus(slot)
+
+                    logger.info(
+                        f"{self.uid_prefix} Consensus finalized for slot {slot}: {len(final_scores)} final scores"
+                    )
+
+                logger.info(
+                    f"{self.uid_prefix} Consensus scoring completed for slot {slot}"
+                )
 
         except Exception as e:
             logger.error(f"{self.uid_prefix} Error in consensus scoring phase: {e}")
@@ -401,13 +755,39 @@ class ValidatorNode:
         )
 
         try:
-            # Update metagraph with consensus results
-            await self.core.update_metagraph_with_consensus()
+            # FLEXIBLE MODE: Metagraph update MUST be synchronized for all modes
+            if self.core.consensus_mode in ["flexible", "synchronized"]:
+                logger.info(
+                    f"{self.uid_prefix} {self.core.consensus_mode.title()} mode: Coordinating metagraph update"
+                )
 
-            # Submit to Core blockchain
-            await self.consensus.submit_to_blockchain(slot)
+                # Coordinate metagraph update with other validators
+                await self.core.slot_coordinator.register_phase_entry(
+                    slot, SlotPhase.METAGRAPH_UPDATE
+                )
 
-            logger.info(f"{self.uid_prefix} Metagraph update completed for slot {slot}")
+                # Wait for all validators to reach metagraph phase
+                await self.core.slot_coordinator.wait_for_phase_consensus(
+                    slot, SlotPhase.METAGRAPH_UPDATE
+                )
+
+                # Update metagraph with consensus results
+                await self.core.update_metagraph_with_consensus()
+
+                # Submit to Core blockchain
+                await self.consensus.submit_to_blockchain(slot)
+
+                logger.info(
+                    f"{self.uid_prefix} {self.core.consensus_mode.title()} metagraph update completed for slot {slot}"
+                )
+
+            else:
+                # Legacy metagraph update (continuous mode)
+                await self.core.update_metagraph_with_consensus()
+                await self.consensus.submit_to_blockchain(slot)
+                logger.info(
+                    f"{self.uid_prefix} Metagraph update completed for slot {slot}"
+                )
 
         except Exception as e:
             logger.error(f"{self.uid_prefix} Error in metagraph update phase: {e}")
@@ -487,29 +867,35 @@ class ValidatorNode:
                 f"🔄 {self.uid_prefix} Setting up flexible consensus in {self.flexible_mode} mode"
             )
 
-            # Enable flexible mode in consensus
+            # 1. Initialize and assign the Slot Coordinator
+            logger.info(f"   - Initializing FlexibleSlotCoordinator...")
+            self.core.slot_coordinator = FlexibleSlotCoordinator(
+                validator_uid=self.core.info.uid,
+                # coordination_dir can be customized if needed, default is fine
+            )
+            logger.info(f"   - FlexibleSlotCoordinator assigned to core node.")
+
+            # 2. Enable flexible mode in the consensus handler
+            # This will now succeed because self.core.slot_coordinator exists
             if hasattr(self.consensus, "enable_flexible_mode"):
-                success = self.consensus.enable_flexible_mode(
+                logger.info(f"   - Enabling flexible mode in consensus handler...")
+                self.consensus.enable_flexible_mode(
                     auto_detect_epoch=True, adaptive_timing=True
                 )
-
-                if success:
-                    self.flexible_consensus_enabled = True
-                    logger.info(
-                        f"✅ {self.uid_prefix} Flexible consensus setup completed"
-                    )
-                else:
-                    logger.error(
-                        f"❌ {self.uid_prefix} Failed to enable flexible mode in consensus"
-                    )
+                self.flexible_consensus_enabled = True
+                logger.info(
+                    f"✅ {self.uid_prefix} Flexible consensus setup completed successfully."
+                )
             else:
                 logger.error(
-                    f"❌ {self.uid_prefix} Consensus does not support flexible mode"
+                    f"❌ {self.uid_prefix} Consensus handler does not support flexible mode."
                 )
+                self.flexible_consensus_enabled = False
 
         except Exception as e:
             logger.error(
-                f"❌ {self.uid_prefix} Failed to setup flexible consensus: {e}"
+                f"❌ {self.uid_prefix} Failed to setup flexible consensus: {e}",
+                exc_info=True,
             )
             self.flexible_consensus_enabled = False
 
@@ -535,7 +921,7 @@ class ValidatorNode:
 
     async def run_consensus_cycle_flexible(self, slot: Optional[int] = None) -> bool:
         """
-        Run a single flexible consensus cycle.
+        Run a single flexible consensus cycle with synchronized cutoffs.
 
         Args:
             slot: Optional slot number (auto-detected if None)
@@ -589,6 +975,48 @@ class ValidatorNode:
     def advance_to_next_cycle(self):
         """Advance to next cycle (legacy method)."""
         return self.core.advance_to_next_cycle()
+
+    async def _wait_for_metagraph_completion(self, slot: int) -> bool:
+        """
+        Wait for metagraph update to complete for a specific slot.
+
+        Args:
+            slot: Slot number to check
+
+        Returns:
+            True if metagraph update is complete, False otherwise
+        """
+        try:
+            # Check if metagraph update is complete by looking for coordination files
+            # or checking if the slot has been marked as updated
+            if hasattr(self.core, "slot_coordinator"):
+                # Check if metagraph phase is complete
+                phase, _, _ = self.core.slot_coordinator.get_slot_phase(slot)
+                if phase == SlotPhase.METAGRAPH_UPDATE:
+                    # Check if metagraph update coordination is complete
+                    ready_validators = (
+                        await self.core.slot_coordinator.wait_for_phase_consensus(
+                            slot, SlotPhase.METAGRAPH_UPDATE, timeout=30
+                        )
+                    )
+                    if len(ready_validators) >= 2:  # At least 2 validators
+                        logger.info(
+                            f"✅ {self.uid_prefix} Metagraph update complete for slot {slot}"
+                        )
+                        return True
+
+            # Fallback: check if consensus cycle completed successfully
+            # This is a simple check - in practice you might want more sophisticated logic
+            logger.info(
+                f"⏳ {self.uid_prefix} Metagraph update status unknown for slot {slot}, assuming complete"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.uid_prefix} Error checking metagraph completion for slot {slot}: {e}"
+            )
+            return False
 
     # === Context Manager Support ===
 

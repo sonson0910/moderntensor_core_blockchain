@@ -72,17 +72,17 @@ class Settings(BaseSettings):
 
     # --- Các trường cấu hình cho Core blockchain ---
     CORE_NODE_URL: str = Field(
-        default="https://rpc.test.btcs.network",
+        default="https://rpc.test2.btcs.network",
         alias="CORE_NODE_URL",
         description="Core blockchain RPC URL",
     )
     CORE_MAINNET_URL: str = Field(
-        default="https://rpc.coredao.org",
+        default="https://rpc.test2.btcs.network",
         alias="CORE_MAINNET_URL",
         description="Core blockchain mainnet RPC URL",
     )
     CORE_CONTRACT_ADDRESS: str = Field(
-        default="0x594fc12B3e3AB824537b947765dd9409DAAAa143",
+        default="0xAA6B8200495F7741B0B151B486aEB895fEE8c272",
         alias="CORE_CONTRACT_ADDRESS",
         description="ModernTensor contract address on Core blockchain (NEW: with updateMinerScores)",
     )
@@ -97,7 +97,7 @@ class Settings(BaseSettings):
         description="Core blockchain chain ID (1115 for testnet, 1116 for mainnet)",
     )
     CORE_TOKEN_ADDRESS: str = Field(
-        default="0x1361F20937a69aA841a37Ca943948463b8E6740C",
+        default="0xAA6B8200495F7741B0B151B486aEB895fEE8c272",
         alias="CORE_TOKEN_ADDRESS",
         description="CORE token contract address",
     )

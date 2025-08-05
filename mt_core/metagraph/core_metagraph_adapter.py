@@ -18,7 +18,7 @@ class CoreMetagraphClient:
     """Client for fetching metagraph data from Core blockchain"""
 
     def __init__(self):
-        self.rpc_url = "https://rpc.test.btcs.network"
+        self.rpc_url = "https://rpc.test2.btcs.network"
         self.web3 = Web3(Web3.HTTPProvider(self.rpc_url))
         self.web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
@@ -41,7 +41,13 @@ class CoreMetagraphClient:
     def get_all_miners(self) -> List[str]:
         """Get all registered miner addresses"""
         try:
-            return self.contract.functions.getAllMiners().call()
+            # Try subnet 1 first (where miners are registered)
+            miners = self.contract.functions.getSubnetMiners(1).call()
+            if miners:
+                return miners
+
+            # Fallback to subnet 0
+            return self.contract.functions.getSubnetMiners(0).call()
         except Exception as e:
             print(f"Error fetching miners: {e}")
             return []
@@ -49,7 +55,13 @@ class CoreMetagraphClient:
     def get_all_validators(self) -> List[str]:
         """Get all registered validator addresses"""
         try:
-            return self.contract.functions.getAllValidators().call()
+            # Try subnet 1 first (where validators are registered)
+            validators = self.contract.functions.getSubnetValidators(1).call()
+            if validators:
+                return validators
+
+            # Fallback to subnet 0
+            return self.contract.functions.getSubnetValidators(0).call()
         except Exception as e:
             print(f"Error fetching validators: {e}")
             return []

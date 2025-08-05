@@ -669,6 +669,64 @@ contract ModernTensor is ReentrancyGuard, AccessControl {
         }
     }
 
+    /**
+     * @dev Get subnet information (both static and dynamic data)
+     */
+    function getSubnet(uint64 subnetId) external view returns (
+        SubnetStaticData memory staticData,
+        SubnetDynamicData memory dynamicData,
+        address[] memory minerAddresses,
+        address[] memory validatorAddresses
+    ) {
+        require(subnetStatic[subnetId].net_uid != 0, "Subnet not found");
+        
+        return (
+            subnetStatic[subnetId],
+            subnetDynamic[subnetId],
+            subnetMiners[subnetId],
+            subnetValidators[subnetId]
+        );
+    }
+
+    /**
+     * @dev Get all subnet IDs (for listing all subnets)
+     */
+    function getAllSubnetIds() external view returns (uint64[] memory) {
+        uint64[] memory subnetIds = new uint64[](nextSubnetId);
+        uint256 count = 0;
+        
+        for (uint64 i = 0; i < nextSubnetId; i++) {
+            if (subnetStatic[i].net_uid != 0) {
+                subnetIds[count] = i;
+                count++;
+            }
+        }
+        
+        // Resize array to actual count
+        uint64[] memory result = new uint64[](count);
+        for (uint256 i = 0; i < count; i++) {
+            result[i] = subnetIds[i];
+        }
+        
+        return result;
+    }
+
+    /**
+     * @dev Get subnet static data only
+     */
+    function getSubnetStatic(uint64 subnetId) external view returns (SubnetStaticData memory) {
+        require(subnetStatic[subnetId].net_uid != 0, "Subnet not found");
+        return subnetStatic[subnetId];
+    }
+
+    /**
+     * @dev Get subnet dynamic data only
+     */
+    function getSubnetDynamic(uint64 subnetId) external view returns (SubnetDynamicData memory) {
+        require(subnetStatic[subnetId].net_uid != 0, "Subnet not found");
+        return subnetDynamic[subnetId];
+    }
+
     // ============ SCORE UPDATE FUNCTIONS (For Validators) ============
 
     /**

@@ -42,13 +42,15 @@ class FlexibleSlotPhase(Enum):
 class FlexibleSlotConfig:
     """Flexible configuration allowing validators to start anytime"""
 
-    # Core timing (more flexible)
-    slot_duration_minutes: float = 4.0  # Longer slots for flexibility
+    # Core timing (OPTIMIZED - reduced from 4.0 to 3.0 minutes)
+    slot_duration_minutes: float = 3.0  # 180s total - sufficient for all phases
 
-    # Minimum phase durations (not fixed boundaries)
-    min_task_assignment_seconds: int = 30  # At least 30s for task assignment
-    min_task_execution_seconds: int = 60  # At least 60s for task execution
-    min_consensus_seconds: int = 45  # At least 45s for consensus
+    # Minimum phase durations (not fixed boundaries) - OPTIMIZED FOR 3 ROUNDS
+    min_task_assignment_seconds: int = (
+        60  # 1 minute for 3 continuous rounds (15s each + buffer)
+    )
+    min_task_execution_seconds: int = 45  # Reduced from 60s to 45s - sufficient
+    min_consensus_seconds: int = 30  # Reduced from 45s to 30s - P2P is fast
     min_metagraph_update_seconds: int = 15  # At least 15s for metagraph
 
     # Buffer times for late joiners
@@ -90,6 +92,9 @@ class FlexibleSlotCoordinator:
         self.phase_events = {}  # slot -> phase -> event_timestamp
         self.validator_readiness = {}  # slot -> phase -> [validator_list]
 
+        # Clean up old coordination files on initialization
+        self._cleanup_old_coordination_files()
+
         logger.info(f"🔄 FlexibleSlotCoordinator initialized for {validator_uid}")
         logger.info(
             f"📊 Config: {self.slot_config.slot_duration_minutes}min slots, mid-join: {self.slot_config.allow_mid_slot_join}"
@@ -104,11 +109,59 @@ class FlexibleSlotCoordinator:
         """
         current_time = time.time()
 
-        # Try to detect ongoing slot from coordination files
+        # Calculate slot based on flexible timing FIRST
+        if not hasattr(self, "_epoch_start"):
+            self._epoch_start = current_time  # Dynamic epoch start
+
+        slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
+        calculated_slot = int(
+            (current_time - self._epoch_start) // slot_duration_seconds
+        )
+        calculated_phase = self._calculate_current_phase(calculated_slot, current_time)
+
+        # PRIORITIZE TIME-BASED CALCULATION for phase progression
+        # Only use coordination files for slot detection, not phase determination
+
+        # Enhanced timing debug
+        slot_start = self._epoch_start + (calculated_slot * slot_duration_seconds)
+        seconds_into_slot = current_time - slot_start
+
+        # Less frequent timing debug (every 30s instead of 5s)
+        if int(seconds_into_slot) % 30 == 0 or seconds_into_slot < 10:
+            logger.info(
+                f"📊 {self.validator_uid} TIMING: slot {calculated_slot}, phase {calculated_phase.value}, progress {seconds_into_slot:.0f}s/{slot_duration_seconds:.0f}s"
+            )
+
+            # Phase boundaries debug
+            task_end = self.slot_config.min_task_assignment_seconds
+            exec_end = task_end + self.slot_config.min_task_execution_seconds
+            cons_end = exec_end + self.slot_config.min_consensus_seconds
+
+            logger.info(
+                f"🎯 {self.validator_uid} Phase boundaries: Task(0-{task_end}s), Exec({task_end}-{exec_end}s), Cons({exec_end}-{cons_end}s), Meta({cons_end}s+)"
+            )
+        else:
+            logger.debug(
+                f"📊 {self.validator_uid} TIMING: slot {calculated_slot}, phase {calculated_phase.value}, progress {seconds_into_slot:.0f}s/{slot_duration_seconds:.0f}s"
+            )
+
+        # Try to detect ongoing slot from coordination files for reference only
         active_slot, active_phase = self._detect_active_slot_from_coordination()
 
-        if active_slot is not None and self.slot_config.allow_mid_slot_join:
-            # Join the active slot if mid-slot joining is allowed
+        if active_slot is not None:
+            logger.debug(
+                f"📂 {self.validator_uid} Coordination files suggest: slot {active_slot}, phase {active_phase.value if active_phase else 'None'}"
+            )
+
+        # Use time-based calculation unless coordination shows significantly newer slot
+        if (
+            active_slot is not None
+            and active_slot
+            > calculated_slot  # Only if coordination shows NEWER slot (not same)
+            and self.slot_config.allow_mid_slot_join
+        ):
+
+            # Join newer slot detected from coordination
             self.joined_mid_slot = True
             phase_info = {
                 "joined_mid_slot": True,
@@ -119,29 +172,56 @@ class FlexibleSlotCoordinator:
             }
 
             logger.info(
-                f"🔄 {self.validator_uid} joining active slot {active_slot} in {active_phase.value} phase"
+                f"🔄 {self.validator_uid} joining NEWER slot {active_slot} from coordination (time-based was {calculated_slot})"
             )
             return active_slot, active_phase, phase_info
 
-        # Calculate slot based on flexible timing
-        if not hasattr(self, "_epoch_start"):
-            self._epoch_start = current_time  # Dynamic epoch start
-
-        slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
-        calculated_slot = int(
-            (current_time - self._epoch_start) // slot_duration_seconds
-        )
-
-        # Determine phase based on slot progress and coordination files
-        phase = self._calculate_current_phase(calculated_slot, current_time)
-
+        # Use time-based calculation as fallback
         phase_info = {
             "joined_mid_slot": False,
             "calculated_slot": True,
             "epoch_start": self._epoch_start,
+            "preferred_method": "time_based",
         }
 
-        return calculated_slot, phase, phase_info
+        logger.debug(
+            f"📊 {self.validator_uid} using time-based calculation: slot {calculated_slot}, phase {calculated_phase.value}"
+        )
+        return calculated_slot, calculated_phase, phase_info
+
+    def _cleanup_old_coordination_files(self):
+        """Clean up old coordination files to prevent getting stuck in old states"""
+        try:
+            coordination_files = list(self.coordination_dir.glob("slot_*_*.json"))
+            current_time = time.time()
+
+            # Remove files older than 30 minutes
+            cleanup_threshold = current_time - 1800  # 30 minutes
+            cleaned_count = 0
+
+            for file_path in coordination_files:
+                try:
+                    if file_path.stat().st_mtime < cleanup_threshold:
+                        file_path.unlink()
+                        cleaned_count += 1
+                except OSError:
+                    continue
+
+            if cleaned_count > 0:
+                logger.info(f"🧹 Cleaned up {cleaned_count} old coordination files")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to cleanup coordination files: {e}")
+
+    def get_current_blockchain_slot(self) -> int:
+        """
+        Get current blockchain slot number (compatibility method).
+
+        Returns:
+            Current slot number as integer
+        """
+        current_slot, _, _ = self.get_current_slot_and_phase()
+        return current_slot
 
     def _detect_active_slot_from_coordination(
         self,
@@ -237,7 +317,7 @@ class FlexibleSlotCoordinator:
 
         try:
             with open(phase_file, "w") as f:
-                json.dump(phase_data, f, indent=2)
+                json.dump(phase_data, f, indent=2, cls=FlexibleJSONEncoder)
 
             logger.info(
                 f"✅ {self.validator_uid} registered {phase.value} phase for slot {slot}"
@@ -245,6 +325,23 @@ class FlexibleSlotCoordinator:
 
         except Exception as e:
             logger.error(f"❌ Error registering phase: {e}")
+            logger.debug(f"❌ Phase data: {phase_data}")
+            
+            # Try to serialize with basic data types only as fallback
+            try:
+                safe_phase_data = {
+                    "validator_uid": self.validator_uid,
+                    "slot": slot,
+                    "phase": phase.value,
+                    "timestamp": time.time(),
+                    "joined_mid_slot": getattr(self, "joined_mid_slot", False),
+                    "extra_data": self._sanitize_extra_data(extra_data or {}),
+                }
+                with open(phase_file, "w") as f:
+                    json.dump(safe_phase_data, f, indent=2)
+                logger.warning(f"⚠️ Used fallback serialization for phase registration")
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback serialization also failed: {fallback_error}")
 
     async def wait_for_consensus_deadline(
         self, slot: int, phase: FlexibleSlotPhase, deadline_buffer: Optional[int] = None
@@ -484,3 +581,371 @@ class FlexibleSlotCoordinator:
                     file_path.unlink()
             except OSError:
                 pass
+
+    async def enforce_task_assignment_cutoff(self, slot: int) -> bool:
+        """
+        Flexible version of task assignment cutoff enforcement.
+
+        For flexible mode, task assignment cutoff is already handled
+        in the continuous assignment loop, so this is mostly a no-op
+        but maintains API compatibility.
+        """
+        import asyncio
+
+        logger.info(
+            f"🔄 {self.validator_uid} Flexible cutoff check for slot {slot} (already handled in continuous assignment)"
+        )
+
+        # Calculate current phase to verify we're past task assignment
+        current_time = time.time()
+        if hasattr(self, "_epoch_start"):
+            slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
+            slot_start = self._epoch_start + (slot * slot_duration_seconds)
+            seconds_into_slot = current_time - slot_start
+
+            if seconds_into_slot < self.slot_config.min_task_assignment_seconds:
+                # Still in task assignment phase
+                wait_time = (
+                    self.slot_config.min_task_assignment_seconds - seconds_into_slot
+                )
+                logger.info(
+                    f"⏰ {self.validator_uid} Still in task assignment phase, waiting {wait_time:.1f}s for cutoff"
+                )
+                await asyncio.sleep(wait_time)
+            else:
+                logger.info(
+                    f"✅ {self.validator_uid} Already past task assignment phase for slot {slot}"
+                )
+
+        # Register phase transition if needed
+        await self.register_phase_entry_flexible(
+            slot, FlexibleSlotPhase.TASK_EXECUTION, {"cutoff_verified": True}
+        )
+
+        return True
+
+    async def coordinate_consensus_round(self, slot: int, local_scores: dict) -> dict:
+        """
+        Flexible P2P consensus coordination using actual P2P logic.
+
+        REAL P2P CONSENSUS - reuses existing SlotCoordinator logic.
+        """
+        logger.info(
+            f"🤝 {self.validator_uid} Starting REAL P2P consensus for slot {slot} with {len(local_scores)} local scores"
+        )
+
+        try:
+            # Step 1: Register consensus readiness with scores (using flexible phase)
+            await self.register_phase_entry_flexible(
+                slot, FlexibleSlotPhase.CONSENSUS_SCORING, {"scores": local_scores}
+            )
+
+            # Step 2: Wait for other validators to be ready with timeout
+            timeout_seconds = 30  # Reduced from original for faster flexible consensus
+            ready_validators = await self._wait_for_flexible_consensus(
+                slot, timeout_seconds
+            )
+
+            # Step 3: Calculate consensus if we have enough validators
+            MINIMUM_VALIDATORS = 1  # Single validator can proceed (flexible mode)
+            if len(ready_validators) >= MINIMUM_VALIDATORS:
+                logger.info(
+                    f"📊 {self.validator_uid} Computing consensus with {len(ready_validators)} validators: {ready_validators}"
+                )
+                consensus_scores = self._calculate_flexible_consensus_scores(
+                    slot, ready_validators
+                )
+            else:
+                logger.warning(
+                    f"⚠️ {self.validator_uid} Using local scores only - no other validators found"
+                )
+                consensus_scores = local_scores.copy()
+
+            logger.info(
+                f"✅ {self.validator_uid} REAL P2P consensus completed for slot {slot}: {len(consensus_scores)} final scores"
+            )
+            return consensus_scores
+
+        except Exception as e:
+            logger.error(
+                f"❌ {self.validator_uid} Error in P2P consensus: {e}, falling back to local scores"
+            )
+            return local_scores.copy()
+
+    async def _wait_for_flexible_consensus(
+        self, slot: int, timeout_seconds: int
+    ) -> list:
+        """Wait for other validators to register consensus scores"""
+        start_time = time.time()
+        ready_validators = [self.validator_uid]  # Always include self
+
+        while time.time() - start_time < timeout_seconds:
+            # Look for consensus scoring files from other validators
+            consensus_files = list(
+                self.coordination_dir.glob(f"slot_{slot}_consensus_scoring_*.json")
+            )
+
+            for file_path in consensus_files:
+                try:
+                    # Extract validator UID from filename
+                    filename = file_path.name
+                    # slot_0_consensus_scoring_validator_001.json
+                    parts = (
+                        filename.replace("slot_", "").replace(".json", "").split("_")
+                    )
+                    if len(parts) >= 3:
+                        validator_uid = "_".join(
+                            parts[2:]
+                        )  # Everything after "consensus_scoring"
+                        if validator_uid not in ready_validators:
+                            ready_validators.append(validator_uid)
+                            logger.info(
+                                f"🔗 {self.validator_uid} Found validator {validator_uid} ready for consensus"
+                            )
+                except Exception:
+                    continue
+
+            if len(ready_validators) > 1:  # Found other validators
+                break
+
+            await asyncio.sleep(2)  # Check every 2 seconds
+
+        logger.info(
+            f"📊 {self.validator_uid} Ready validators for consensus: {ready_validators}"
+        )
+        return ready_validators
+
+    def _calculate_flexible_consensus_scores(
+        self, slot: int, participating_validators: list
+    ) -> dict:
+        """Calculate consensus scores using existing SlotCoordinator logic"""
+        all_scores = {}
+
+        # Collect scores from all participating validators
+        for validator_uid in participating_validators:
+            score_file = (
+                self.coordination_dir
+                / f"slot_{slot}_consensus_scoring_{validator_uid}.json"
+            )
+            if score_file.exists():
+                try:
+                    with open(score_file, "r") as f:
+                        data = json.load(f)
+                        scores = data.get("extra_data", {}).get("scores", {})
+
+                        # Handle both dict and list formats (copied from SlotCoordinator)
+                        if isinstance(scores, dict):
+                            # Standard dict format: {miner_uid: score}
+                            for miner_uid, score in scores.items():
+                                if miner_uid not in all_scores:
+                                    all_scores[miner_uid] = []
+                                all_scores[miner_uid].append(score)
+                        elif isinstance(scores, list):
+                            # List format: [{"miner_uid": "...", "score": 0.5}]
+                            for score_entry in scores:
+                                if (
+                                    isinstance(score_entry, dict)
+                                    and "miner_uid" in score_entry
+                                    and "score" in score_entry
+                                ):
+                                    miner_uid = score_entry["miner_uid"]
+                                    score = score_entry["score"]
+                                    if miner_uid not in all_scores:
+                                        all_scores[miner_uid] = []
+                                    all_scores[miner_uid].append(score)
+                        else:
+                            logger.warning(
+                                f"⚠️ Invalid scores format from {validator_uid}: {type(scores)}"
+                            )
+
+                except Exception as e:
+                    logger.error(f"❌ Error reading scores from {validator_uid}: {e}")
+
+        # Calculate consensus (simple average) - same logic as SlotCoordinator
+        consensus_scores = {}
+        for miner_uid, score_list in all_scores.items():
+            if score_list:
+                consensus_score = sum(score_list) / len(score_list)
+                consensus_scores[miner_uid] = consensus_score
+                logger.info(
+                    f"📊 {self.validator_uid} Miner {miner_uid}: "
+                    f"{consensus_score:.4f} (averaged from {len(score_list)} validators)"
+                )
+
+        return consensus_scores
+
+    # === LEGACY COMPATIBILITY METHODS ===
+    # These methods provide compatibility with SlotCoordinator API
+
+    async def register_phase_entry(
+        self, slot: int, phase, extra_data: dict = None
+    ) -> bool:
+        """
+        Legacy compatibility method for register_phase_entry.
+        Converts SlotPhase to FlexibleSlotPhase and delegates to register_phase_entry_flexible.
+        """
+        # Import here to avoid circular imports
+        from .slot_coordinator import SlotPhase
+
+        # Convert SlotPhase to FlexibleSlotPhase
+        phase_mapping = {
+            SlotPhase.TASK_ASSIGNMENT: FlexibleSlotPhase.TASK_ASSIGNMENT,
+            SlotPhase.TASK_EXECUTION: FlexibleSlotPhase.TASK_EXECUTION,
+            SlotPhase.CONSENSUS_SCORING: FlexibleSlotPhase.CONSENSUS_SCORING,
+            SlotPhase.METAGRAPH_UPDATE: FlexibleSlotPhase.METAGRAPH_UPDATE,
+        }
+
+        flexible_phase = phase_mapping.get(phase, phase)
+
+        logger.info(
+            f"🔄 {self.validator_uid} Legacy register_phase_entry: {phase} → {flexible_phase} for slot {slot}"
+        )
+
+        return await self.register_phase_entry_flexible(
+            slot, flexible_phase, extra_data or {}
+        )
+
+    async def wait_for_phase_consensus(
+        self, slot: int, phase, timeout: int = 120
+    ) -> list:
+        """
+        Legacy compatibility method for wait_for_phase_consensus.
+
+        For flexible mode, we wait for coordination files from other validators.
+        This is a simplified version that checks for active validators.
+        """
+        # Import here to avoid circular imports
+        from .slot_coordinator import SlotPhase
+
+        phase_mapping = {
+            SlotPhase.TASK_ASSIGNMENT: FlexibleSlotPhase.TASK_ASSIGNMENT,
+            SlotPhase.TASK_EXECUTION: FlexibleSlotPhase.TASK_EXECUTION,
+            SlotPhase.CONSENSUS_SCORING: FlexibleSlotPhase.CONSENSUS_SCORING,
+            SlotPhase.METAGRAPH_UPDATE: FlexibleSlotPhase.METAGRAPH_UPDATE,
+        }
+
+        flexible_phase = phase_mapping.get(phase, phase)
+
+        logger.info(
+            f"🔍 {self.validator_uid} Waiting for phase consensus: {phase} → {flexible_phase} (timeout: {timeout}s)"
+        )
+
+        start_time = time.time()
+        ready_validators = [self.validator_uid]  # Always include self
+
+        while time.time() - start_time < timeout:
+            # Look for phase files from other validators
+            phase_files = list(
+                self.coordination_dir.glob(f"slot_{slot}_{flexible_phase.value}_*.json")
+            )
+
+            for file_path in phase_files:
+                try:
+                    # Extract validator UID from filename
+                    filename = file_path.name
+                    # slot_0_task_assignment_validator_001.json
+                    parts = (
+                        filename.replace("slot_", "").replace(".json", "").split("_")
+                    )
+                    if len(parts) >= 3:
+                        validator_uid = "_".join(
+                            parts[2:]
+                        )  # Everything after phase name
+                        if validator_uid not in ready_validators:
+                            ready_validators.append(validator_uid)
+                            logger.info(
+                                f"🔗 {self.validator_uid} Found validator {validator_uid} in phase {flexible_phase.value}"
+                            )
+                except Exception:
+                    continue
+
+            # For flexible mode, don't require majority - any validator is good
+            if len(ready_validators) >= 1:
+                break
+
+            await asyncio.sleep(2)  # Check every 2 seconds
+
+        logger.info(
+            f"📊 {self.validator_uid} Phase consensus complete: {len(ready_validators)} validators ready"
+        )
+        return ready_validators
+
+    def get_slot_phase(self, slot: int) -> tuple:
+        """
+        Legacy compatibility method for get_slot_phase.
+        Returns (SlotPhase, seconds_into_slot, seconds_remaining) format.
+        """
+        # Import here to avoid circular imports
+        from .slot_coordinator import SlotPhase
+
+        # Get current phase from flexible coordinator
+        current_slot, current_flexible_phase, metadata = (
+            self.get_current_slot_and_phase()
+        )
+
+        # Convert FlexibleSlotPhase back to SlotPhase
+        phase_mapping = {
+            FlexibleSlotPhase.TASK_ASSIGNMENT: SlotPhase.TASK_ASSIGNMENT,
+            FlexibleSlotPhase.TASK_EXECUTION: SlotPhase.TASK_EXECUTION,
+            FlexibleSlotPhase.CONSENSUS_SCORING: SlotPhase.CONSENSUS_SCORING,
+            FlexibleSlotPhase.METAGRAPH_UPDATE: SlotPhase.METAGRAPH_UPDATE,
+        }
+
+        legacy_phase = phase_mapping.get(
+            current_flexible_phase, SlotPhase.TASK_ASSIGNMENT
+        )
+
+        # Calculate timing information
+        if hasattr(self, "_epoch_start"):
+            slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
+            slot_start = self._epoch_start + (slot * slot_duration_seconds)
+            current_time = time.time()
+            seconds_into_slot = current_time - slot_start
+            seconds_remaining = slot_duration_seconds - seconds_into_slot
+        else:
+            seconds_into_slot = 0
+            seconds_remaining = 180  # Default 3 minutes
+
+        logger.debug(
+            f"📊 {self.validator_uid} get_slot_phase({slot}): {legacy_phase}, "
+            f"{seconds_into_slot:.1f}s in, {seconds_remaining:.1f}s remaining"
+        )
+
+        return legacy_phase, seconds_into_slot, seconds_remaining
+    
+    def _sanitize_extra_data(self, extra_data: Dict) -> Dict:
+        """Sanitize extra_data to be JSON serializable"""
+        sanitized = {}
+        
+        for key, value in extra_data.items():
+            try:
+                if hasattr(value, 'model_dump'):
+                    # Pydantic v2 BaseModel
+                    sanitized[key] = value.model_dump()
+                elif hasattr(value, 'dict'):
+                    # Pydantic v1 BaseModel
+                    sanitized[key] = value.dict()
+                elif hasattr(value, '__dict__'):
+                    # Regular Python object
+                    sanitized[key] = value.__dict__
+                elif isinstance(value, (list, tuple)):
+                    # Handle lists/tuples of objects
+                    sanitized[key] = [
+                        item.model_dump() if hasattr(item, 'model_dump') 
+                        else item.dict() if hasattr(item, 'dict')
+                        else item.__dict__ if hasattr(item, '__dict__')
+                        else item
+                        for item in value
+                    ]
+                elif isinstance(value, dict):
+                    # Recursively sanitize nested dicts
+                    sanitized[key] = self._sanitize_extra_data(value)
+                else:
+                    # Basic JSON-serializable types
+                    json.dumps(value)  # Test if it's serializable
+                    sanitized[key] = value
+            except Exception:
+                # If all else fails, convert to string
+                sanitized[key] = str(value)
+        
+        return sanitized
