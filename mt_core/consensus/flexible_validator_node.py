@@ -332,8 +332,7 @@ class FlexibleValidatorNode:
     ) -> Optional[FlexibleSlotPhase]:
         """Get the next phase in the sequence."""
         phase_sequence = [
-            FlexibleSlotPhase.TASK_ASSIGNMENT,
-            FlexibleSlotPhase.TASK_EXECUTION,
+            FlexibleSlotPhase.TASK_ASSIGNMENT,  # includes execution
             FlexibleSlotPhase.CONSENSUS_SCORING,
             FlexibleSlotPhase.METAGRAPH_UPDATE,
         ]

@@ -1345,10 +1345,15 @@ class ValidatorNodeConsensus:
                     # Find miner address from uid
                     miner_address = None
                     for uid, miner_info in self.core.miners_info.items():
-                        if uid == miner_uid:
+                        if (
+                            miner_info.uid == miner_uid
+                        ):  # Compare MinerInfo.uid with consensus miner_uid
                             miner_address = (
                                 miner_info.address
                             )  # Get actual address from MinerInfo object
+                            logger.info(
+                                f"🔍 {self.uid_prefix} Found miner address mapping: {miner_uid} → {miner_address}"
+                            )
                             break
 
                     # FALLBACK: Use known UID-to-address mapping for testing

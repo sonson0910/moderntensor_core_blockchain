@@ -28,11 +28,30 @@ DEFAULT_BUFFER_SECONDS = 30  # Buffer time for late validators
 MIN_TASK_EXECUTION_TIME = 45  # Minimum 45 seconds for task execution
 
 
-class FlexibleSlotPhase(Enum):
-    """Flexible phases with event-driven transitions"""
+class FlexibleJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder to handle ValidatorScore and other Pydantic objects"""
 
-    TASK_ASSIGNMENT = "task_assignment"
-    TASK_EXECUTION = "task_execution"
+    def default(self, obj):
+        # Handle Pydantic BaseModel objects (like ValidatorScore)
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump()
+        elif hasattr(obj, "dict"):
+            return obj.dict()
+        elif hasattr(obj, "__dict__"):
+            return obj.__dict__
+        elif isinstance(obj, (list, tuple)):
+            return [self.default(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {k: self.default(v) for k, v in obj.items()}
+        else:
+            # Let the base class default method handle other types
+            return super().default(obj)
+
+
+class FlexibleSlotPhase(Enum):
+    """Flexible phases with event-driven transitions - SIMPLIFIED TO 3 PHASES"""
+
+    TASK_ASSIGNMENT = "task_assignment"  # Includes task execution
     CONSENSUS_SCORING = "consensus_scoring"
     METAGRAPH_UPDATE = "metagraph_update"
     CYCLE_TRANSITION = "cycle_transition"
@@ -42,21 +61,20 @@ class FlexibleSlotPhase(Enum):
 class FlexibleSlotConfig:
     """Flexible configuration allowing validators to start anytime"""
 
-    # Core timing (OPTIMIZED - reduced from 4.0 to 3.0 minutes)
-    slot_duration_minutes: float = 3.0  # 180s total - sufficient for all phases
+    # Core timing (ULTRA FAST - for rapid testing)
+    slot_duration_minutes: float = 1.0  # 60s total - ultra fast cycles for testing
 
-    # Minimum phase durations (not fixed boundaries) - OPTIMIZED FOR 3 ROUNDS
+    # Minimum phase durations - SIMPLIFIED 3 PHASES (ULTRA FAST FOR TESTING)
     min_task_assignment_seconds: int = (
-        60  # 1 minute for 3 continuous rounds (15s each + buffer)
+        35  # 35 seconds for task assignment + execution (3 rounds + buffer)
     )
-    min_task_execution_seconds: int = 45  # Reduced from 60s to 45s - sufficient
-    min_consensus_seconds: int = 30  # Reduced from 45s to 30s - P2P is fast
-    min_metagraph_update_seconds: int = 15  # At least 15s for metagraph
+    min_consensus_seconds: int = 15  # 15 seconds - P2P consensus
+    min_metagraph_update_seconds: int = 10  # 10 seconds for metagraph
 
-    # Buffer times for late joiners
-    task_deadline_buffer: int = 20  # 20s buffer for task completion
-    consensus_deadline_buffer: int = 30  # 30s buffer for consensus
-    metagraph_deadline_buffer: int = 10  # 10s buffer for metagraph
+    # Buffer times for late joiners (REDUCED FOR TESTING)
+    task_deadline_buffer: int = 5  # 5s buffer for task completion
+    consensus_deadline_buffer: int = 5  # 5s buffer for consensus
+    metagraph_deadline_buffer: int = 5  # 5s buffer for metagraph
 
     # Dynamic adjustment parameters
     allow_mid_slot_join: bool = True  # Allow validators to join mid-slot
@@ -119,12 +137,35 @@ class FlexibleSlotCoordinator:
         )
         calculated_phase = self._calculate_current_phase(calculated_slot, current_time)
 
+        # CRITICAL FIX: If validator starts late in slot (progress > 50s), force next slot
+        original_slot = calculated_slot
+        slot_start = self._epoch_start + (calculated_slot * slot_duration_seconds)
+        seconds_into_slot = current_time - slot_start
+
+        # DEBUG: Always log slot timing check
+        logger.info(
+            f"🔍 {self.validator_uid} SLOT TIMING CHECK: slot {calculated_slot}, progress {seconds_into_slot:.1f}s, threshold 50.0s"
+        )
+
+        if seconds_into_slot > 50.0:  # If past metagraph phase start
+            logger.warning(
+                f"🚨 {self.validator_uid} Starting late in slot {calculated_slot} (progress: {seconds_into_slot:.1f}s/60s)"
+            )
+            logger.warning(
+                f"⚡ {self.validator_uid} FORCING progression to next slot {calculated_slot + 1} to ensure full cycle"
+            )
+            calculated_slot += 1
+            calculated_phase = (
+                FlexibleSlotPhase.TASK_ASSIGNMENT
+            )  # Start fresh from task assignment
+            # Recalculate timing for the NEW slot
+            slot_start = self._epoch_start + (calculated_slot * slot_duration_seconds)
+            seconds_into_slot = current_time - slot_start
+
         # PRIORITIZE TIME-BASED CALCULATION for phase progression
         # Only use coordination files for slot detection, not phase determination
 
-        # Enhanced timing debug
-        slot_start = self._epoch_start + (calculated_slot * slot_duration_seconds)
-        seconds_into_slot = current_time - slot_start
+        # Enhanced timing debug (slot_start and seconds_into_slot already calculated above)
 
         # Less frequent timing debug (every 30s instead of 5s)
         if int(seconds_into_slot) % 30 == 0 or seconds_into_slot < 10:
@@ -132,13 +173,12 @@ class FlexibleSlotCoordinator:
                 f"📊 {self.validator_uid} TIMING: slot {calculated_slot}, phase {calculated_phase.value}, progress {seconds_into_slot:.0f}s/{slot_duration_seconds:.0f}s"
             )
 
-            # Phase boundaries debug
+            # Phase boundaries debug - SIMPLIFIED 3 PHASES
             task_end = self.slot_config.min_task_assignment_seconds
-            exec_end = task_end + self.slot_config.min_task_execution_seconds
-            cons_end = exec_end + self.slot_config.min_consensus_seconds
+            cons_end = task_end + self.slot_config.min_consensus_seconds
 
             logger.info(
-                f"🎯 {self.validator_uid} Phase boundaries: Task(0-{task_end}s), Exec({task_end}-{exec_end}s), Cons({exec_end}-{cons_end}s), Meta({cons_end}s+)"
+                f"🎯 {self.validator_uid} Phase boundaries: Task(0-{task_end}s), Cons({task_end}-{cons_end}s), Meta({cons_end}s+)"
             )
         else:
             logger.debug(
@@ -153,15 +193,13 @@ class FlexibleSlotCoordinator:
                 f"📂 {self.validator_uid} Coordination files suggest: slot {active_slot}, phase {active_phase.value if active_phase else 'None'}"
             )
 
-        # Use time-based calculation unless coordination shows significantly newer slot
+        # TEMPORARY FIX: DISABLE coordination file joining to force time-based progression
+        # This prevents jumping to stale slots like 100 and ensures proper P2P/metagraph
         if (
-            active_slot is not None
-            and active_slot
-            > calculated_slot  # Only if coordination shows NEWER slot (not same)
-            and self.slot_config.allow_mid_slot_join
-        ):
+            False
+        ):  # DISABLED - was: active_slot > (calculated_slot + 2) and allow_mid_slot_join
 
-            # Join newer slot detected from coordination
+            # Join newer slot detected from coordination (only if significantly newer)
             self.joined_mid_slot = True
             phase_info = {
                 "joined_mid_slot": True,
@@ -172,9 +210,16 @@ class FlexibleSlotCoordinator:
             }
 
             logger.info(
-                f"🔄 {self.validator_uid} joining NEWER slot {active_slot} from coordination (time-based was {calculated_slot})"
+                f"🔄 {self.validator_uid} joining SIGNIFICANTLY NEWER slot {active_slot} from coordination (time-based was {calculated_slot})"
             )
             return active_slot, active_phase, phase_info
+        elif active_slot is not None and active_slot <= (calculated_slot + 2):
+            logger.debug(
+                f"🗑️ {self.validator_uid} ignoring stale coordination slot {active_slot} (time-based is {calculated_slot})"
+            )
+
+        # Force cleanup stale files when using time-based calculation
+        self._force_cleanup_stale_coordination_files(calculated_slot)
 
         # Use time-based calculation as fallback
         phase_info = {
@@ -190,6 +235,42 @@ class FlexibleSlotCoordinator:
         return calculated_slot, calculated_phase, phase_info
 
     def _cleanup_old_coordination_files(self):
+        """Clean up old coordination files to prevent confusion - AGGRESSIVE CLEANUP"""
+        try:
+            current_time = time.time()
+            cutoff_time = current_time - (5 * 60)  # 5 minutes ago (more aggressive)
+
+            for file_path in self.coordination_dir.glob("slot_*.json"):
+                if file_path.stat().st_mtime < cutoff_time:
+                    file_path.unlink()
+                    logger.debug(
+                        f"🗑️ Cleaned up old coordination file: {file_path.name}"
+                    )
+
+        except Exception as e:
+            logger.warning(f"Error cleaning up coordination files: {e}")
+
+    def _force_cleanup_stale_coordination_files(self, current_slot: int):
+        """Force cleanup of coordination files for slots older than current"""
+        try:
+            for file_path in self.coordination_dir.glob("slot_*.json"):
+                filename = file_path.name
+                # Extract slot number from filename like "slot_5_task_assignment_uid.json"
+                if filename.startswith("slot_"):
+                    try:
+                        slot_part = filename.split("_")[1]
+                        file_slot = int(slot_part)
+                        if file_slot < current_slot:  # Remove files for older slots
+                            file_path.unlink()
+                            logger.debug(
+                                f"🗑️ Force cleaned stale slot {file_slot} file: {filename}"
+                            )
+                    except (IndexError, ValueError):
+                        continue  # Skip files with unexpected format
+        except Exception as e:
+            logger.warning(f"Error force cleaning stale coordination files: {e}")
+
+    def _cleanup_old_coordination_files_original(self):
         """Clean up old coordination files to prevent getting stuck in old states"""
         try:
             coordination_files = list(self.coordination_dir.glob("slot_*_*.json"))
@@ -275,22 +356,16 @@ class FlexibleSlotCoordinator:
     def _calculate_current_phase(
         self, slot: int, current_time: float
     ) -> FlexibleSlotPhase:
-        """Calculate current phase based on flexible timing"""
+        """Calculate current phase based on flexible timing - SIMPLIFIED 3 PHASES"""
         slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
         slot_start = self._epoch_start + (slot * slot_duration_seconds)
         seconds_into_slot = current_time - slot_start
 
-        # Flexible phase calculation
+        # SIMPLIFIED 3-phase calculation (removed task_execution)
         if seconds_into_slot < self.slot_config.min_task_assignment_seconds:
-            return FlexibleSlotPhase.TASK_ASSIGNMENT
+            return FlexibleSlotPhase.TASK_ASSIGNMENT  # Includes execution
         elif seconds_into_slot < (
             self.slot_config.min_task_assignment_seconds
-            + self.slot_config.min_task_execution_seconds
-        ):
-            return FlexibleSlotPhase.TASK_EXECUTION
-        elif seconds_into_slot < (
-            self.slot_config.min_task_assignment_seconds
-            + self.slot_config.min_task_execution_seconds
             + self.slot_config.min_consensus_seconds
         ):
             return FlexibleSlotPhase.CONSENSUS_SCORING
@@ -326,7 +401,7 @@ class FlexibleSlotCoordinator:
         except Exception as e:
             logger.error(f"❌ Error registering phase: {e}")
             logger.debug(f"❌ Phase data: {phase_data}")
-            
+
             # Try to serialize with basic data types only as fallback
             try:
                 safe_phase_data = {
@@ -544,13 +619,6 @@ class FlexibleSlotCoordinator:
         # Calculate phase deadline with buffers
         if phase == FlexibleSlotPhase.TASK_ASSIGNMENT:
             deadline = slot_start + self.slot_config.min_task_assignment_seconds
-        elif phase == FlexibleSlotPhase.TASK_EXECUTION:
-            deadline = (
-                slot_start
-                + self.slot_config.min_task_assignment_seconds
-                + self.slot_config.min_task_execution_seconds
-                + self.slot_config.task_deadline_buffer
-            )
         elif phase == FlexibleSlotPhase.CONSENSUS_SCORING:
             deadline = (
                 slot_start
@@ -618,9 +686,7 @@ class FlexibleSlotCoordinator:
                 )
 
         # Register phase transition if needed
-        await self.register_phase_entry_flexible(
-            slot, FlexibleSlotPhase.TASK_EXECUTION, {"cutoff_verified": True}
-        )
+        # Task execution is now included in task assignment phase - no separate registration needed
 
         return True
 
@@ -790,7 +856,7 @@ class FlexibleSlotCoordinator:
         # Convert SlotPhase to FlexibleSlotPhase
         phase_mapping = {
             SlotPhase.TASK_ASSIGNMENT: FlexibleSlotPhase.TASK_ASSIGNMENT,
-            SlotPhase.TASK_EXECUTION: FlexibleSlotPhase.TASK_EXECUTION,
+            # SlotPhase.TASK_EXECUTION: removed (merged into task_assignment)
             SlotPhase.CONSENSUS_SCORING: FlexibleSlotPhase.CONSENSUS_SCORING,
             SlotPhase.METAGRAPH_UPDATE: FlexibleSlotPhase.METAGRAPH_UPDATE,
         }
@@ -819,7 +885,7 @@ class FlexibleSlotCoordinator:
 
         phase_mapping = {
             SlotPhase.TASK_ASSIGNMENT: FlexibleSlotPhase.TASK_ASSIGNMENT,
-            SlotPhase.TASK_EXECUTION: FlexibleSlotPhase.TASK_EXECUTION,
+            # SlotPhase.TASK_EXECUTION: removed (merged into task_assignment)
             SlotPhase.CONSENSUS_SCORING: FlexibleSlotPhase.CONSENSUS_SCORING,
             SlotPhase.METAGRAPH_UPDATE: FlexibleSlotPhase.METAGRAPH_UPDATE,
         }
@@ -886,7 +952,7 @@ class FlexibleSlotCoordinator:
         # Convert FlexibleSlotPhase back to SlotPhase
         phase_mapping = {
             FlexibleSlotPhase.TASK_ASSIGNMENT: SlotPhase.TASK_ASSIGNMENT,
-            FlexibleSlotPhase.TASK_EXECUTION: SlotPhase.TASK_EXECUTION,
+            # FlexibleSlotPhase.TASK_EXECUTION: removed (merged into task assignment)
             FlexibleSlotPhase.CONSENSUS_SCORING: SlotPhase.CONSENSUS_SCORING,
             FlexibleSlotPhase.METAGRAPH_UPDATE: SlotPhase.METAGRAPH_UPDATE,
         }
@@ -912,29 +978,36 @@ class FlexibleSlotCoordinator:
         )
 
         return legacy_phase, seconds_into_slot, seconds_remaining
-    
+
     def _sanitize_extra_data(self, extra_data: Dict) -> Dict:
         """Sanitize extra_data to be JSON serializable"""
         sanitized = {}
-        
+
         for key, value in extra_data.items():
             try:
-                if hasattr(value, 'model_dump'):
+                if hasattr(value, "model_dump"):
                     # Pydantic v2 BaseModel
                     sanitized[key] = value.model_dump()
-                elif hasattr(value, 'dict'):
+                elif hasattr(value, "dict"):
                     # Pydantic v1 BaseModel
                     sanitized[key] = value.dict()
-                elif hasattr(value, '__dict__'):
+                elif hasattr(value, "__dict__"):
                     # Regular Python object
                     sanitized[key] = value.__dict__
                 elif isinstance(value, (list, tuple)):
                     # Handle lists/tuples of objects
                     sanitized[key] = [
-                        item.model_dump() if hasattr(item, 'model_dump') 
-                        else item.dict() if hasattr(item, 'dict')
-                        else item.__dict__ if hasattr(item, '__dict__')
-                        else item
+                        (
+                            item.model_dump()
+                            if hasattr(item, "model_dump")
+                            else (
+                                item.dict()
+                                if hasattr(item, "dict")
+                                else (
+                                    item.__dict__ if hasattr(item, "__dict__") else item
+                                )
+                            )
+                        )
                         for item in value
                     ]
                 elif isinstance(value, dict):
@@ -947,5 +1020,5 @@ class FlexibleSlotCoordinator:
             except Exception:
                 # If all else fails, convert to string
                 sanitized[key] = str(value)
-        
+
         return sanitized

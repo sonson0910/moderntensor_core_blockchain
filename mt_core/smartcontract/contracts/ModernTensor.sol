@@ -200,6 +200,27 @@ contract ModernTensor is ReentrancyGuard, AccessControl {
         uint64 newTrustScore
     );
 
+    // Metagraph batch update events
+    event MetagraphUpdated(
+        address indexed validator,
+        uint256 totalMiners,
+        uint256 successCount,
+        uint64 updateTime
+    );
+
+    event MetagraphUpdateSkipped(
+        address indexed minerAddr,
+        string reason
+    );
+
+    event MetagraphUpdatedWithConsensus(
+        address indexed validator,
+        uint64 indexed roundId,
+        uint256 totalMiners,
+        uint256 successCount,
+        uint64 updateTime
+    );
+
     // ============ CONSTRUCTOR ============
 
     constructor(
@@ -795,6 +816,122 @@ contract ModernTensor is ReentrancyGuard, AccessControl {
         validators[validatorAddr].last_update_time = uint64(block.timestamp);
         
         emit ValidatorScoreUpdated(validatorAddr, validators[validatorAddr].uid, newPerformance, newTrustScore);
+    }
+
+    /**
+     * @dev Update metagraph with consensus results (Validator only) - BATCH UPDATE
+     * This function allows updating multiple miners efficiently in a single transaction
+     * Used by consensus validators to submit aggregated scores from P2P consensus
+     */
+    function updateMetagraph(
+        address[] memory minerAddrs,
+        uint64[] memory newPerformances,
+        uint64[] memory newTrustScores
+    ) external onlyRole(VALIDATOR_ROLE) {
+        require(minerAddrs.length == newPerformances.length, "Arrays length mismatch");
+        require(minerAddrs.length == newTrustScores.length, "Arrays length mismatch");
+        require(minerAddrs.length > 0, "Empty arrays not allowed");
+        require(minerAddrs.length <= 50, "Too many miners (max 50 per batch)");
+
+        uint256 successCount = 0;
+        uint64 updateTime = uint64(block.timestamp);
+
+        for (uint256 i = 0; i < minerAddrs.length; i++) {
+            address minerAddr = minerAddrs[i];
+            uint64 newPerformance = newPerformances[i];
+            uint64 newTrustScore = newTrustScores[i];
+
+            // Validate miner exists
+            if (miners[minerAddr].uid == bytes32(0)) {
+                emit MetagraphUpdateSkipped(minerAddr, "Miner not found");
+                continue;
+            }
+
+            // Validate score ranges
+            if (newPerformance > DIVISOR_64 || newTrustScore > DIVISOR_64) {
+                emit MetagraphUpdateSkipped(minerAddr, "Invalid score range");
+                continue;
+            }
+
+            // Update miner scores
+            miners[minerAddr].scaled_last_performance = newPerformance;
+            miners[minerAddr].scaled_trust_score = newTrustScore;
+            miners[minerAddr].last_update_time = updateTime;
+
+            // Emit individual score update event
+            emit MinerScoreUpdated(minerAddr, miners[minerAddr].uid, newPerformance, newTrustScore);
+            successCount++;
+        }
+
+        // Emit batch update event
+        emit MetagraphUpdated(msg.sender, minerAddrs.length, successCount, updateTime);
+    }
+
+    /**
+     * @dev Update metagraph with consensus round data (Advanced)
+     * Includes consensus round tracking and validator performance metrics
+     */
+    function updateMetagraphWithConsensusRound(
+        uint64 roundId,
+        address[] memory minerAddrs,
+        uint64[] memory newPerformances,
+        uint64[] memory newTrustScores,
+        uint256[] memory rewards
+    ) external onlyRole(VALIDATOR_ROLE) {
+        require(minerAddrs.length == newPerformances.length, "Performance array length mismatch");
+        require(minerAddrs.length == newTrustScores.length, "Trust score array length mismatch");
+        require(minerAddrs.length == rewards.length, "Rewards array length mismatch");
+        require(minerAddrs.length > 0, "Empty arrays not allowed");
+        require(minerAddrs.length <= 50, "Too many miners (max 50 per batch)");
+
+        uint256 successCount = 0;
+        uint64 updateTime = uint64(block.timestamp);
+
+        // Update consensus round if it doesn't exist
+        if (consensusRounds[roundId].round_id == 0) {
+            consensusRounds[roundId].round_id = roundId;
+            consensusRounds[roundId].epoch = currentEpoch;
+            consensusRounds[roundId].timestamp = updateTime;
+        }
+
+        for (uint256 i = 0; i < minerAddrs.length; i++) {
+            address minerAddr = minerAddrs[i];
+            uint64 newPerformance = newPerformances[i];
+            uint64 newTrustScore = newTrustScores[i];
+            uint256 reward = rewards[i];
+
+            // Validate miner exists
+            if (miners[minerAddr].uid == bytes32(0)) {
+                emit MetagraphUpdateSkipped(minerAddr, "Miner not found");
+                continue;
+            }
+
+            // Validate score ranges
+            if (newPerformance > DIVISOR_64 || newTrustScore > DIVISOR_64) {
+                emit MetagraphUpdateSkipped(minerAddr, "Invalid score range");
+                continue;
+            }
+
+            // Update miner scores and rewards
+            miners[minerAddr].scaled_last_performance = newPerformance;
+            miners[minerAddr].scaled_trust_score = newTrustScore;
+            miners[minerAddr].accumulated_rewards += reward;
+            miners[minerAddr].last_update_time = updateTime;
+
+            // Store in consensus round
+            consensusRounds[roundId].scores[minerAddr] = uint64(newPerformance);
+            consensusRounds[roundId].rewards[minerAddr] = reward;
+
+            // Emit individual score update event
+            emit MinerScoreUpdated(minerAddr, miners[minerAddr].uid, newPerformance, newTrustScore);
+            if (reward > 0) {
+                emit IncentiveDistributed(miners[minerAddr].subnet_uid, minerAddr, reward);
+            }
+            successCount++;
+        }
+
+        // Emit batch update event
+        emit MetagraphUpdatedWithConsensus(msg.sender, roundId, minerAddrs.length, successCount, updateTime);
     }
 
     // ============ BITCOIN STAKING FUNCTIONS ============

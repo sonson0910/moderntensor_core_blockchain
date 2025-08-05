@@ -281,33 +281,47 @@ class ValidatorNode:
                     current_slot == last_processed_slot
                     and current_phase == last_processed_phase
                 ):
-                    # Same slot and same phase - already processed, don't repeat
-                    should_process = False
-                    logger.debug(
-                        f"⏭️ {self.uid_prefix} Already processed slot {current_slot} phase {current_phase.value}, skipping"
-                    )
+                    # Same slot and same phase - check if enough time has passed to force progression
+                    # INFINITE LOOP FIX: Add time-based progression check
+                    time_in_phase = self._get_time_in_current_phase()
+                    min_phase_duration = self._get_min_phase_duration(current_phase)
+
+                    if time_in_phase >= (
+                        min_phase_duration + 10
+                    ):  # 10s buffer for progression
+                        # Force progression if we've been in phase too long
+                        should_process = True
+                        logger.info(
+                            f"🚀 {self.uid_prefix} FORCING progression: {time_in_phase:.1f}s in {current_phase.value} (min: {min_phase_duration}s)"
+                        )
+                    else:
+                        # Normal case - already processed, don't repeat
+                        should_process = False
+                        logger.debug(
+                            f"⏭️ {self.uid_prefix} Already processed slot {current_slot} phase {current_phase.value}, skipping"
+                        )
 
                 if should_process:
                     logger.info(
                         f"▶️ {self.uid_prefix} Processing slot {current_slot} in phase {current_phase.value}"
                     )
 
-                    # Handle phase-specific operations
+                    # Handle phase-specific operations - SIMPLIFIED 3 PHASES
                     if current_phase == FlexibleSlotPhase.TASK_ASSIGNMENT:
                         # Prevent duplicate task assignments for same slot
                         if current_slot not in task_assignment_completed_slots:
                             await self._handle_task_assignment_phase(current_slot)
+                            # Task execution is now included in task assignment phase
+                            await self._handle_task_execution_phase(current_slot)
                             task_assignment_completed_slots.add(current_slot)
                             logger.info(
-                                f"✅ {self.uid_prefix} Task assignment completed for slot {current_slot}"
+                                f"✅ {self.uid_prefix} Task assignment + execution completed for slot {current_slot}"
                             )
                         else:
                             logger.debug(
-                                f"⏭️ {self.uid_prefix} Task assignment already completed for slot {current_slot}, skipping"
+                                f"⏭️ {self.uid_prefix} Task assignment + execution already completed for slot {current_slot}, skipping"
                             )
 
-                    elif current_phase == FlexibleSlotPhase.TASK_EXECUTION:
-                        await self._handle_task_execution_phase(current_slot)
                     elif current_phase == FlexibleSlotPhase.CONSENSUS_SCORING:
                         await self._handle_consensus_scoring_phase(current_slot)
                     elif current_phase == FlexibleSlotPhase.METAGRAPH_UPDATE:
@@ -326,18 +340,25 @@ class ValidatorNode:
                             )
 
                     # Update tracking - update slot tracking IMMEDIATELY to prevent infinite loops
-                    last_processed_phase = current_phase
-                    last_processed_slot = current_slot  # Always update slot tracking!
-
                     if current_phase == FlexibleSlotPhase.METAGRAPH_UPDATE:
-                        # Final phase completed
+                        # Final phase completed - FORCE IMMEDIATE SLOT PROGRESSION
                         logger.info(
                             f"✅ {self.uid_prefix} Completed ALL phases for slot {current_slot}"
                         )
+                        logger.info(
+                            f"🚀 {self.uid_prefix} FORCING immediate progression to next slot after completing slot {current_slot}"
+                        )
+                        # CRITICAL: Set slot to -1 to force next slot detection immediately
+                        last_processed_slot = -1  # Force new slot detection
+                        last_processed_phase = None  # Reset phase
+                        # SKIP the normal sleep and continue to next iteration immediately
+                        continue
                     else:
                         logger.info(
                             f"🔄 {self.uid_prefix} Completed phase {current_phase.value} for slot {current_slot}"
                         )
+                        last_processed_phase = current_phase
+                        last_processed_slot = current_slot
 
                 else:
                     # Already processed this slot/phase combination
@@ -354,6 +375,65 @@ class ValidatorNode:
                     exc_info=True,
                 )
                 await asyncio.sleep(30)  # Wait before retrying
+
+    def _get_time_in_current_phase(self) -> float:
+        """Get seconds elapsed in current phase to prevent infinite loops"""
+        if not hasattr(self.core, "slot_coordinator"):
+            return 0.0
+
+        try:
+            current_slot, current_phase, metadata = (
+                self.core.slot_coordinator.get_current_slot_and_phase()
+            )
+
+            # Get phase timing info from coordinator
+            slot_duration = (
+                self.core.slot_coordinator.slot_config.slot_duration_minutes * 60
+            )
+            task_duration = (
+                self.core.slot_coordinator.slot_config.min_task_assignment_seconds
+            )
+            exec_duration = (
+                self.core.slot_coordinator.slot_config.min_task_execution_seconds
+            )
+            cons_duration = self.core.slot_coordinator.slot_config.min_consensus_seconds
+
+            epoch_start = getattr(
+                self.core.slot_coordinator, "_epoch_start", time.time()
+            )
+            slot_start = epoch_start + (current_slot * slot_duration)
+            time_in_slot = time.time() - slot_start
+
+            # Calculate time in current phase - SIMPLIFIED 3 PHASES
+            if current_phase.value == "task_assignment":
+                return time_in_slot  # Includes execution time
+            elif current_phase.value == "consensus_scoring":
+                return max(0, time_in_slot - task_duration)  # After task assignment
+            elif current_phase.value == "metagraph_update":
+                return max(
+                    0, time_in_slot - task_duration - cons_duration
+                )  # After consensus
+            else:
+                return time_in_slot
+
+        except Exception:
+            return 0.0
+
+    def _get_min_phase_duration(self, phase) -> int:
+        """Get minimum duration for a phase"""
+        if not hasattr(self.core, "slot_coordinator"):
+            return 30  # Default 30s
+
+        config = self.core.slot_coordinator.slot_config
+
+        if phase.value == "task_assignment":
+            return config.min_task_assignment_seconds  # Includes execution
+        elif phase.value == "consensus_scoring":
+            return config.min_consensus_seconds
+        elif phase.value == "metagraph_update":
+            return config.min_metagraph_update_seconds
+        else:
+            return 30  # Default
 
     async def _traditional_slot_loop(self):
         """Traditional slot-based operation loop."""
@@ -669,7 +749,7 @@ class ValidatorNode:
             # Register that we've stopped task assignment
             await self.core.slot_coordinator.register_phase_entry_flexible(
                 slot,
-                FlexibleSlotPhase.TASK_EXECUTION,
+                FlexibleSlotPhase.TASK_ASSIGNMENT,  # Fixed: add missing phase parameter
                 {"task_assignment_stopped": True},
             )
 
@@ -721,6 +801,56 @@ class ValidatorNode:
                 logger.info(
                     f"{self.uid_prefix} {self.core.consensus_mode.title()} consensus completed for slot {slot}: {len(consensus_scores)} final scores"
                 )
+
+                # CRITICAL: Store P2P consensus results for metagraph update
+                if consensus_scores:
+                    if not hasattr(self.core, "slot_aggregated_scores"):
+                        self.core.slot_aggregated_scores = {}
+                    self.core.slot_aggregated_scores[slot] = consensus_scores
+                    logger.info(
+                        f"💾 {self.uid_prefix} Stored {len(consensus_scores)} aggregated scores for slot {slot} metagraph update"
+                    )
+
+                    # DEBUG: Check execution flow
+                    logger.info(
+                        f"🔍 {self.uid_prefix} DEBUG: About to start immediate blockchain submission"
+                    )
+
+                    # IMMEDIATE blockchain submission to prevent scores from being cleared
+                    logger.info(
+                        f"🚀 {self.uid_prefix} Submitting consensus scores to blockchain immediately after P2P"
+                    )
+
+                    # Try immediate submission with enhanced error handling
+                    submission_success = False
+                    try:
+                        logger.info(
+                            f"🔧 {self.uid_prefix} DEBUG: Calling submit_to_blockchain({slot})"
+                        )
+                        await self.consensus.submit_to_blockchain(slot)
+                        submission_success = True
+                        logger.info(
+                            f"✅ {self.uid_prefix} Blockchain submission completed for slot {slot}"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"❌ {self.uid_prefix} Error in immediate blockchain submission: {e}"
+                        )
+                        logger.error(
+                            f"🔍 {self.uid_prefix} Exception type: {type(e).__name__}"
+                        )
+                        logger.error(
+                            f"🔍 {self.uid_prefix} Exception details: {str(e)}"
+                        )
+
+                    # Log submission result
+                    logger.info(
+                        f"📊 {self.uid_prefix} Immediate submission result: {'SUCCESS' if submission_success else 'FAILED'}"
+                    )
+                else:
+                    logger.warning(
+                        f"⚠️ {self.uid_prefix} No consensus scores to store for slot {slot}"
+                    )
 
             else:
                 # Legacy consensus logic (continuous mode)

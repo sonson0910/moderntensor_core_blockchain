@@ -49,6 +49,29 @@ from ..core.datatypes import (
     MinerResult,
 )
 
+# PHASE 1: Import advanced scoring formulas
+import time
+import statistics
+from collections import defaultdict
+from typing import Any, Dict, List, Tuple
+
+from ..formulas.performance import (
+    calculate_task_completion_rate,
+    calculate_adjusted_miner_performance,
+    calculate_validator_performance,
+    calculate_penalty_term,
+)
+from ..formulas.trust_score import update_trust_score, calculate_selection_probability
+from ..formulas.incentive import (
+    calculate_miner_incentive,
+    calculate_validator_incentive,
+)
+from ..formulas.miner_weight import calculate_miner_weight
+from ..formulas.penalty import (
+    calculate_performance_adjustment,
+    calculate_fraud_severity_value,
+)
+
 
 class ScoreSubmissionPayload(BaseModel):
     """Payload for submitting scores to other validators."""
@@ -61,6 +84,28 @@ class ScoreSubmissionPayload(BaseModel):
 
 
 logger = logging.getLogger(__name__)
+
+
+# PHASE 1: Advanced scoring configuration
+ADVANCED_SCORING_CONFIG = {
+    "enable_trust_scores": True,
+    "enable_historical_weighting": True,
+    "enable_fraud_detection": True,
+    "enable_performance_adjustment": True,
+    # Trust score parameters
+    "trust_decay_rate": 0.1,
+    "trust_learning_rate": 0.1,
+    "trust_sigmoid_k": 5.0,
+    # Performance weighting
+    "performance_decay_constant": 0.5,
+    "min_history_for_weighting": 3,
+    # Fraud detection thresholds
+    "deviation_threshold": 0.3,
+    "fraud_penalty_factor": 0.5,
+    # Incentive calculation
+    "incentive_sigmoid_k": 10.0,
+    "incentive_sigmoid_L": 1.0,
+}
 
 
 # Move ScoreSubmissionPayload class to after ValidatorScore import
@@ -114,34 +159,182 @@ if TYPE_CHECKING:
     )
 
 
-# --- 1. Đánh dấu hàm này cần override ---
-def _calculate_score_from_result(task_data: Any, result_data: Any) -> float:
-    """
-    (Trừu tượng/Cần Override) Tính điểm P_miner,v từ dữ liệu task và kết quả.
+# PHASE 1: Advanced scoring data structures
+MINER_PERFORMANCE_HISTORY = defaultdict(list)  # miner_uid -> [scores]
+MINER_TRUST_SCORES = defaultdict(lambda: 0.5)  # miner_uid -> trust_score
+MINER_LAST_EVALUATION = defaultdict(int)  # miner_uid -> timestamp
+VALIDATOR_DEVIATION_HISTORY = defaultdict(list)  # validator_uid -> [deviations]
 
-    Lớp Validator kế thừa cho từng Subnet PHẢI override phương thức này
-    với logic chấm điểm phù hợp cho loại nhiệm vụ AI của họ.
+
+def calculate_advanced_score(
+    task_data: Any,
+    result_data: Any,
+    miner_uid: str,
+    validator_uid: str,
+    validator_instance=None,
+    current_time_step: int = None,
+) -> Tuple[float, Dict[str, Any]]:
+    """
+    PHASE 1: Advanced scoring engine with trust scores, historical weighting, and fraud detection.
 
     Args:
-        task_data: Dữ liệu của nhiệm vụ đã giao (từ TaskAssignment.task_data).
-        result_data: Dữ liệu kết quả mà miner trả về (từ MinerResult.result_data).
+        task_data: Task assignment data
+        result_data: Miner result data
+        miner_uid: Miner identifier
+        validator_uid: Validator identifier
+        validator_instance: Validator instance for subnet-specific scoring
+        current_time_step: Current time step for historical weighting
 
     Returns:
-        Điểm số (từ 0.0 đến 1.0).
-
-    Raises:
-        NotImplementedError: Nếu phương thức này không được override bởi lớp con.
+        Tuple of (final_score, scoring_metadata)
     """
-    # Hoặc trả về điểm mặc định và log warning:
-    logger.warning(
-        f"'_calculate_score_from_result' is using the base implementation. "
-        f"This should be overridden by specific subnet/validator logic. "
-        f"Task data type: {type(task_data)}, Result data type: {type(result_data)}. "
-        f"Returning default score 0.0"
-    )
-    return 0.0
-    # Hoặc raise lỗi để bắt buộc override:
-    # raise NotImplementedError("Scoring logic must be implemented by validator subclass/subnet.")
+    config = ADVANCED_SCORING_CONFIG
+    metadata = {}
+
+    try:
+        # 1. Get basic score from validator instance or default
+        if validator_instance and hasattr(
+            validator_instance, "_score_individual_result"
+        ):
+            basic_score = validator_instance._score_individual_result(
+                task_data, result_data
+            )
+        else:
+            basic_score = _calculate_score_from_result_fallback(task_data, result_data)
+
+        basic_score = max(0.0, min(1.0, basic_score))
+        metadata["basic_score"] = basic_score
+
+        # 2. Historical performance weighting (if enabled)
+        weighted_score = basic_score
+        if (
+            config["enable_historical_weighting"]
+            and len(MINER_PERFORMANCE_HISTORY[miner_uid])
+            >= config["min_history_for_weighting"]
+        ):
+            miner_weight = calculate_miner_weight(
+                MINER_PERFORMANCE_HISTORY[miner_uid],
+                current_time_step or int(time.time()),
+                decay_constant_W=config["performance_decay_constant"],
+            )
+            weighted_score = basic_score * (
+                1.0 + miner_weight * 0.1
+            )  # 10% boost for good history
+            metadata["miner_weight"] = miner_weight
+            metadata["weighted_score"] = weighted_score
+
+        # 3. Trust score adjustment (if enabled)
+        trust_adjusted_score = weighted_score
+        if config["enable_trust_scores"]:
+            current_trust = MINER_TRUST_SCORES[miner_uid]
+            time_since_last = max(
+                1, int(time.time()) - MINER_LAST_EVALUATION[miner_uid]
+            )
+
+            # Update trust score based on performance
+            new_trust = update_trust_score(
+                trust_score_old=current_trust,
+                time_since_last_eval=time_since_last,
+                score_new=basic_score,
+                delta_trust=config["trust_decay_rate"],
+                alpha_base=config["trust_learning_rate"],
+                update_sigmoid_k=config["trust_sigmoid_k"],
+            )
+
+            MINER_TRUST_SCORES[miner_uid] = new_trust
+            MINER_LAST_EVALUATION[miner_uid] = int(time.time())
+
+            # Apply trust multiplier
+            trust_multiplier = 0.5 + (new_trust * 0.5)  # Range [0.5, 1.0]
+            trust_adjusted_score = weighted_score * trust_multiplier
+
+            metadata["trust_score_old"] = current_trust
+            metadata["trust_score_new"] = new_trust
+            metadata["trust_multiplier"] = trust_multiplier
+            metadata["trust_adjusted_score"] = trust_adjusted_score
+
+        # 4. Update performance history
+        MINER_PERFORMANCE_HISTORY[miner_uid].append(basic_score)
+        if len(MINER_PERFORMANCE_HISTORY[miner_uid]) > 50:  # Keep last 50 scores
+            MINER_PERFORMANCE_HISTORY[miner_uid].pop(0)
+
+        # 5. Fraud detection (if enabled)
+        fraud_penalty = 0.0
+        if (
+            config["enable_fraud_detection"]
+            and len(MINER_PERFORMANCE_HISTORY[miner_uid]) > 5
+        ):
+            # Calculate deviation from recent average
+            recent_scores = MINER_PERFORMANCE_HISTORY[miner_uid][-5:]
+            avg_score = sum(recent_scores) / len(recent_scores)
+            deviation = abs(basic_score - avg_score)
+
+            if deviation > config["deviation_threshold"]:
+                fraud_penalty = deviation * config["fraud_penalty_factor"]
+                metadata["fraud_detected"] = True
+                metadata["deviation"] = deviation
+                metadata["fraud_penalty"] = fraud_penalty
+                logger.warning(
+                    f"🚨 Possible fraud detected for miner {miner_uid}: deviation {deviation:.3f}"
+                )
+
+        # 6. Calculate final score
+        final_score = max(0.0, min(1.0, trust_adjusted_score - fraud_penalty))
+        metadata["final_score"] = final_score
+        metadata["performance_improvement"] = final_score - basic_score
+
+        # 7. Logging for transparency
+        if final_score != basic_score:
+            logger.info(
+                f"📊 Advanced scoring for {miner_uid}: "
+                f"basic={basic_score:.3f} → final={final_score:.3f} "
+                f"(trust={MINER_TRUST_SCORES[miner_uid]:.3f}, fraud_penalty={fraud_penalty:.3f})"
+            )
+
+        return final_score, metadata
+
+    except Exception as e:
+        logger.error(f"Error in advanced scoring for {miner_uid}: {e}")
+        return basic_score, {"error": str(e), "fallback_used": True}
+
+
+# --- 1. Fallback for basic scoring (legacy compatibility) ---
+def _calculate_score_from_result_fallback(task_data: Any, result_data: Any) -> float:
+    """
+    Fallback scoring logic when no validator-specific implementation is available.
+
+    Args:
+        task_data: Task assignment data
+        result_data: Miner result data
+
+    Returns:
+        Basic score (0.0 to 1.0)
+    """
+    # Handle timeout/error cases
+    if isinstance(result_data, dict):
+        if result_data.get("error") == "timeout" or result_data.get("timeout"):
+            return 0.0
+        if "error" in result_data:
+            return 0.1  # Small score for attempt but error
+
+    # Basic image validation for common AI tasks
+    if isinstance(result_data, dict) and "image" in str(result_data).lower():
+        # Simple validation: check if base64 data exists
+        for key, value in result_data.items():
+            if isinstance(value, str) and len(value) > 100:  # Likely base64 image
+                return 0.8  # Good score for valid image
+
+    # Default: moderate score for any non-error response
+    return 0.5
+
+
+def _calculate_score_from_result(task_data: Any, result_data: Any) -> float:
+    """
+    (Legacy function - maintained for compatibility)
+    Basic scoring function that delegates to advanced scoring.
+    """
+    score, _ = calculate_advanced_score(task_data, result_data, "unknown", "unknown")
+    return score
 
 
 # ---------------------------------------
@@ -209,21 +402,39 @@ def score_results_logic(
         valid_result_found = False
         for result in results:
             if result.miner_uid == assignment.miner_uid:
-                # Gọi hàm chấm điểm (ưu tiên method từ validator instance)
+                # PHASE 1: Use advanced scoring engine
                 try:
-                    if validator_instance and hasattr(
-                        validator_instance, "_score_individual_result"
-                    ):
-                        score = validator_instance._score_individual_result(
-                            assignment.task_data, result.result_data
-                        )
-                    else:
-                        score = _calculate_score_from_result(
-                            assignment.task_data, result.result_data
-                        )
+                    current_time_step = int(time.time())
+
+                    # Use advanced scoring with full context
+                    score, scoring_metadata = calculate_advanced_score(
+                        task_data=assignment.task_data,
+                        result_data=result.result_data,
+                        miner_uid=result.miner_uid,
+                        validator_uid=validator_uid,
+                        validator_instance=validator_instance,
+                        current_time_step=current_time_step,
+                    )
+
                     # Đảm bảo điểm nằm trong khoảng [0, 1]
                     score = max(0.0, min(1.0, score))
                     valid_result_found = True  # Đánh dấu đã tìm thấy kết quả hợp lệ
+
+                    # Log advanced scoring details if score was adjusted
+                    if scoring_metadata.get("performance_improvement", 0) != 0:
+                        improvement = scoring_metadata["performance_improvement"]
+                        logger.info(
+                            f"🎯 Advanced scoring improved score by {improvement:+.3f} for {result.miner_uid}"
+                        )
+
+                    # Log trust score evolution
+                    if "trust_score_new" in scoring_metadata:
+                        trust_old = scoring_metadata.get("trust_score_old", 0.5)
+                        trust_new = scoring_metadata["trust_score_new"]
+                        trust_change = trust_new - trust_old
+                        logger.info(
+                            f"📈 Trust score for {result.miner_uid}: {trust_old:.3f} → {trust_new:.3f} ({trust_change:+.3f})"
+                        )
                 except NotImplementedError:
                     logger.error(
                         f"Scoring logic not implemented for task {task_id}! Assigning score 0."
@@ -238,9 +449,17 @@ def score_results_logic(
                     # Có nên coi đây là kết quả hợp lệ để dừng không? Tạm thời không.
                     continue  # Thử kết quả tiếp theo nếu có lỗi
 
-                logger.info(
-                    f"  Scored Miner {result.miner_uid} for task {task_id}: {score:.4f}"
-                )
+                # Enhanced logging with advanced scoring details
+                basic_score = scoring_metadata.get("basic_score", score)
+                if score != basic_score:
+                    logger.info(
+                        f"  📊 Advanced Scored Miner {result.miner_uid} for task {task_id}: "
+                        f"basic={basic_score:.4f} → final={score:.4f}"
+                    )
+                else:
+                    logger.info(
+                        f"  📊 Scored Miner {result.miner_uid} for task {task_id}: {score:.4f}"
+                    )
 
                 val_score = ValidatorScore(
                     task_id=task_id,
@@ -270,7 +489,162 @@ def score_results_logic(
     logger.info(
         f"Finished scoring. Generated scores for {len(validator_scores)} tasks."
     )
+
+    # PHASE 1: Calculate advanced incentives based on sophisticated scoring
+    if ADVANCED_SCORING_CONFIG["enable_trust_scores"]:
+        _calculate_and_log_advanced_incentives(validator_scores, validator_uid)
+
     return dict(validator_scores)
+
+
+def _calculate_and_log_advanced_incentives(
+    validator_scores: Dict[str, List[ValidatorScore]], validator_uid: str
+) -> Dict[str, float]:
+    """
+    PHASE 1: Calculate advanced incentives for miners based on sophisticated scoring results.
+
+    Args:
+        validator_scores: Dictionary of task_id -> ValidatorScore objects
+        validator_uid: Validator identifier
+
+    Returns:
+        Dictionary of miner_uid -> incentive_amount
+    """
+    try:
+        config = ADVANCED_SCORING_CONFIG
+        miner_incentives = {}
+
+        # Collect all miner scores
+        miner_total_scores = defaultdict(list)
+        for task_scores in validator_scores.values():
+            for score_obj in task_scores:
+                miner_total_scores[score_obj.miner_uid].append(score_obj.score)
+
+        # Calculate total system value for relative incentives
+        total_system_value = 0.0
+        for miner_uid, scores in miner_total_scores.items():
+            miner_weight = 1.0  # Default weight
+            if (
+                len(MINER_PERFORMANCE_HISTORY[miner_uid])
+                >= config["min_history_for_weighting"]
+            ):
+                miner_weight = calculate_miner_weight(
+                    MINER_PERFORMANCE_HISTORY[miner_uid],
+                    int(time.time()),
+                    decay_constant_W=config["performance_decay_constant"],
+                )
+
+            avg_score = sum(scores) / len(scores) if scores else 0.0
+            total_system_value += miner_weight * avg_score
+
+        # Calculate incentives for each miner
+        for miner_uid, scores in miner_total_scores.items():
+            if not scores:
+                continue
+
+            avg_score = sum(scores) / len(scores)
+            trust_score = MINER_TRUST_SCORES[miner_uid]
+
+            # Get miner weight from history
+            miner_weight = 1.0
+            if (
+                len(MINER_PERFORMANCE_HISTORY[miner_uid])
+                >= config["min_history_for_weighting"]
+            ):
+                miner_weight = calculate_miner_weight(
+                    MINER_PERFORMANCE_HISTORY[miner_uid],
+                    int(time.time()),
+                    decay_constant_W=config["performance_decay_constant"],
+                )
+
+            # Calculate sophisticated incentive
+            incentive = calculate_miner_incentive(
+                trust_score=trust_score,
+                miner_weight=miner_weight,
+                miner_performance_scores=scores,
+                total_system_value=max(
+                    total_system_value, 0.001
+                ),  # Avoid division by zero
+                incentive_sigmoid_L=config["incentive_sigmoid_L"],
+                incentive_sigmoid_k=config["incentive_sigmoid_k"],
+            )
+
+            miner_incentives[miner_uid] = incentive
+
+            # Log incentive calculation details
+            logger.info(
+                f"💰 Advanced incentive for {miner_uid}: {incentive:.6f} "
+                f"(trust={trust_score:.3f}, weight={miner_weight:.3f}, avg_score={avg_score:.3f})"
+            )
+
+        # Log system-wide incentive distribution
+        total_incentives = sum(miner_incentives.values())
+        if total_incentives > 0:
+            logger.info(
+                f"📊 Total incentives distributed: {total_incentives:.6f} across {len(miner_incentives)} miners"
+            )
+
+            # Log top performers
+            sorted_miners = sorted(
+                miner_incentives.items(), key=lambda x: x[1], reverse=True
+            )
+            for i, (miner_uid, incentive) in enumerate(sorted_miners[:3]):
+                logger.info(f"🏆 Rank #{i+1}: {miner_uid} → {incentive:.6f} incentive")
+
+        return miner_incentives
+
+    except Exception as e:
+        logger.error(f"Error calculating advanced incentives: {e}")
+        return {}
+
+
+def get_miner_advanced_stats(miner_uid: str) -> Dict[str, Any]:
+    """
+    PHASE 1: Get comprehensive statistics for a miner.
+
+    Args:
+        miner_uid: Miner identifier
+
+    Returns:
+        Dictionary with miner statistics
+    """
+    try:
+        stats = {
+            "miner_uid": miner_uid,
+            "trust_score": MINER_TRUST_SCORES[miner_uid],
+            "performance_history_length": len(MINER_PERFORMANCE_HISTORY[miner_uid]),
+            "last_evaluation": MINER_LAST_EVALUATION[miner_uid],
+        }
+
+        if MINER_PERFORMANCE_HISTORY[miner_uid]:
+            scores = MINER_PERFORMANCE_HISTORY[miner_uid]
+            stats.update(
+                {
+                    "average_score": sum(scores) / len(scores),
+                    "latest_score": scores[-1],
+                    "score_trend": scores[-1] - scores[0] if len(scores) > 1 else 0.0,
+                    "score_variance": (
+                        statistics.variance(scores) if len(scores) > 1 else 0.0
+                    ),
+                }
+            )
+
+            # Calculate miner weight if enough history
+            if len(scores) >= ADVANCED_SCORING_CONFIG["min_history_for_weighting"]:
+                miner_weight = calculate_miner_weight(
+                    scores,
+                    int(time.time()),
+                    decay_constant_W=ADVANCED_SCORING_CONFIG[
+                        "performance_decay_constant"
+                    ],
+                )
+                stats["miner_weight"] = miner_weight
+
+        return stats
+
+    except Exception as e:
+        logger.error(f"Error getting miner stats for {miner_uid}: {e}")
+        return {"miner_uid": miner_uid, "error": str(e)}
 
 
 async def broadcast_scores_logic(
