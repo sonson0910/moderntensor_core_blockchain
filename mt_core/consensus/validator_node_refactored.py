@@ -242,6 +242,10 @@ class ValidatorNode:
 
     async def _flexible_consensus_loop(self):
         """Flexible consensus operation loop with synchronized cutoffs."""
+        # 🔥 CYBERPUNK CONSENSUS STARTUP 🔥
+        from rich.console import Console
+        cyber_console = Console(force_terminal=True, color_system="truecolor")
+        cyber_console.print(f"🔥 [bold bright_cyan]{self.uid_prefix}[/] [bright_green]NEURAL CONSENSUS MATRIX:[/] [bright_yellow]ACTIVATED[/] ⚡")
         logger.info(
             f"{self.uid_prefix} Starting flexible consensus loop with synchronized cutoffs"
         )
@@ -829,10 +833,18 @@ class ValidatorNode:
                         )
                         await self.consensus.submit_to_blockchain(slot)
                         submission_success = True
-                        logger.info(
-                            f"✅ {self.uid_prefix} Blockchain submission completed for slot {slot}"
-                        )
+                                    # 🤖 CYBERPUNK SUCCESS 🤖
+            from rich.console import Console
+            cyber_console = Console(force_terminal=True, color_system="truecolor")
+            cyber_console.print(f"✅ [bold bright_green]{self.uid_prefix}[/] [bright_cyan]QUANTUM BLOCKCHAIN SYNC:[/] [bright_yellow]SLOT {slot} COMPLETE[/] 🔥")
+            logger.info(
+                f"✅ {self.uid_prefix} Blockchain submission completed for slot {slot}"
+            )
                     except Exception as e:
+                        # 🔥 CYBERPUNK ERROR 🔥
+                        from rich.console import Console
+                        cyber_console = Console(force_terminal=True, color_system="truecolor")
+                        cyber_console.print(f"❌ [bold bright_red]{self.uid_prefix}[/] [bright_yellow]CYBER MATRIX ERROR:[/] [bright_magenta]{e}[/] 🚨")
                         logger.error(
                             f"❌ {self.uid_prefix} Error in immediate blockchain submission: {e}"
                         )

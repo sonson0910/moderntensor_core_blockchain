@@ -1459,6 +1459,19 @@ class ValidatorNodeConsensus:
                                 f"🔍 {self.uid_prefix} Simulation error reason: {error_reason}"
                             )
                     else:
+                        # Highlight TXID for visibility
+                        # 🔥 CYBERPUNK TXID HIGHLIGHT 🔥
+                        from rich.console import Console
+
+                        cyber_console = Console(
+                            force_terminal=True, color_system="truecolor"
+                        )
+                        cyber_console.print(
+                            f"⚡ [bold bright_green]{self.uid_prefix}[/] [bright_cyan]NEURAL SCORE SUBMITTED:[/] [bright_yellow]{consensus_score:.4f}[/]"
+                        )
+                        cyber_console.print(
+                            f"🎯 [bold bright_magenta blink]CYBER TXID:[/] [bold bright_red]{tx_hash}[/]"
+                        )
                         logger.info(
                             f"✅ {self.uid_prefix} Submitted score for {miner_uid}: {consensus_score:.4f} → TX Hash: {tx_hash}"
                         )
@@ -1468,6 +1481,18 @@ class ValidatorNodeConsensus:
                             receipt = self.core_client.wait_for_transaction(
                                 tx_hash, timeout=15
                             )  # Short timeout
+                            # 🤖 CYBERPUNK CONFIRMATION 🤖
+                            from rich.console import Console
+
+                            cyber_console = Console(
+                                force_terminal=True, color_system="truecolor"
+                            )
+                            cyber_console.print(
+                                f"🎉 [bold bright_green]{self.uid_prefix}[/] [bright_cyan]QUANTUM TRANSACTION CONFIRMED![/]"
+                            )
+                            cyber_console.print(
+                                f"✅ [bold bright_yellow blink]CYBER BLOCKCHAIN HASH:[/] [bold bright_green]{tx_hash}[/]"
+                            )
                             logger.info(
                                 f"🎉 {self.uid_prefix} Transaction confirmed for {miner_uid} → TX Hash: {tx_hash}"
                             )
@@ -1489,6 +1514,24 @@ class ValidatorNodeConsensus:
 
             # Submit ModernTensor incentives if available
             await self._submit_modern_consensus_incentives_to_blockchain()
+
+            # 🔥 CYBERPUNK BLOCKCHAIN SUMMARY 🔥
+            from rich.console import Console
+
+            cyber_console = Console(force_terminal=True, color_system="truecolor")
+            cyber_console.print(
+                f"🎯 [bold bright_cyan]{self.uid_prefix}[/] [bright_green]NEURAL MATRIX SYNC COMPLETE:[/] [bright_yellow]{len(transaction_hashes)}/{len(final_scores)}[/] [bright_magenta]CYBER TRANSACTIONS[/]"
+            )
+            if transaction_hashes:
+                cyber_console.print(
+                    "📋 [bold bright_red blink]QUANTUM BLOCKCHAIN HASHES:[/]"
+                )
+                for i, txid in enumerate(transaction_hashes, 1):
+                    cyber_console.print(
+                        f"   [bright_cyan]{i}.[/] [bold bright_green]{txid}[/]"
+                    )
+            else:
+                cyber_console.print("📋 [bold bright_red]NO CYBER HASHES GENERATED[/]")
 
             logger.info(
                 f"🎯 {self.uid_prefix} Core blockchain submission complete: {len(transaction_hashes)}/{len(final_scores)} transactions submitted"

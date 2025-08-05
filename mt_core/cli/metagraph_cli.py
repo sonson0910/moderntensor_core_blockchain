@@ -23,7 +23,7 @@ from moderntensor_aptos.mt_core.core_client.contract_client import (
 @click.group()
 def metagraph_cli():
     """
-    🔄 Commands for working with the ModernTensor metagraph on Core blockchain. 🔄
+    🔥 CYBERPUNK METAGRAPH - Neural network consensus matrix commands for quantum blockchain ⚡
     """
     pass
 
@@ -34,8 +34,10 @@ def _load_account(account_name: str, password: str, base_dir: str) -> Optional[A
     try:
         account_path = os.path.join(base_dir, f"{account_name}.json")
         if not os.path.exists(account_path):
-            console.print(
-                f"[bold red]Error:[/bold red] Account file {account_path} not found"
+            # 🔥 CYBERPUNK ERROR 🔥
+            cyber_console = Console(force_terminal=True, color_system="truecolor")
+            cyber_console.print(
+                f"❌ [bold bright_red]CYBER ERROR:[/] [bright_yellow]Neural account file[/] [bright_magenta]{account_path}[/] [bright_red]not found in matrix[/] 🚨"
             )
             return None
 
@@ -46,10 +48,18 @@ def _load_account(account_name: str, password: str, base_dir: str) -> Optional[A
             # This is simplified - in a real implementation, you'd need to decrypt private keys
             private_key_hex = account_data["private_key"]
             account = Account.from_key(private_key_hex)
-            console.print(f"✅ Account loaded: [blue]{account.address}[/blue]")
+            # 🤖 CYBERPUNK SUCCESS 🤖
+            cyber_console = Console(force_terminal=True, color_system="truecolor")
+            cyber_console.print(
+                f"✅ [bold bright_green]NEURAL ACCOUNT LOADED:[/] [bright_cyan]{account.address}[/] ⚡"
+            )
             return account
     except Exception as e:
-        console.print(f"[bold red]Error loading account:[/bold red] {e}")
+        # 🚨 CYBERPUNK CRITICAL ERROR 🚨
+        cyber_console = Console(force_terminal=True, color_system="truecolor")
+        cyber_console.print(
+            f"🚨 [bold bright_red blink]CRITICAL CYBER ERROR:[/] [bright_magenta]{e}[/] ⚡"
+        )
         logger.exception(f"Error loading account {account_name}")
         return None
 

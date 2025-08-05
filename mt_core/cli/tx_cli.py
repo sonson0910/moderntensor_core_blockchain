@@ -9,7 +9,9 @@ from rich.console import Console
 from rich.table import Table
 
 from moderntensor_aptos.mt_core.account import Account
-from moderntensor_aptos.mt_core.async_client import ModernTensorCoreClient
+from moderntensor_aptos.mt_core.core_client.contract_client import (
+    ModernTensorCoreClient,
+)
 from moderntensor_aptos.mt_core.config.settings import settings, logger
 from moderntensor_aptos.mt_core.keymanager.wallet_manager import WalletManager
 

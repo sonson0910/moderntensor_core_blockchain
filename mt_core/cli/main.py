@@ -21,21 +21,20 @@ from .hd_wallet_cli import hdwallet
 
 logging.basicConfig(level=logging.INFO)
 
-# ASCII Art for ModernTensor
-ASCII_ART = r"""
-███╗   ███╗ ██████╗ ██████╗ ███████╗██████╗ ███╗   ██╗████████╗███████╗███╗   ██╗███████╗ ██████╗ ██████╗ 
-████╗ ████║██╔═══██╗██╔══██╗██╔════╝██╔══██╗████╗  ██║╚══██╔══╝██╔════╝████╗  ██║██╔════╝██╔═══██╗██╔══██╗
-██╔████╔██║██║   ██║██║  ██║█████╗  ██████╔╝██╔██╗ ██║   ██║   █████╗  ██╔██╗ ██║███████╗██║   ██║██████╔╝
-██║╚██╔╝██║██║   ██║██║  ██║██╔══╝  ██╔══██╗██║╚██╗██║   ██║   ██╔══╝  ██║╚██╗██║╚════██║██║   ██║██╔══██╗
-██║ ╚═╝ ██║╚██████╔╝██████╔╝███████╗██║  ██║██║ ╚████║   ██║   ███████╗██║ ╚████║███████║╚██████╔╝██║  ██║
-╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝
-                                                                                                          
-                                                                    
+# 🔥 CYBERPUNK ASCII ART 🔥
+CYBERPUNK_BANNER = r"""
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+██████████████████████████████████████████████████████████████████████████████████████████████████████
+███  ⚡ M O D E R N T E N S O R   C Y B E R P U N K   C L I   ⚡  ███
+██    🤖 Q U A N T U M   B L O C K C H A I N   I N T E R F A C E   🤖    ██
+██████████████████████████████████████████████████████████████████████████████████████████████████████
+▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 """
 
-# Colorful scheme v2
-PROJECT_DESCRIPTION = """[bright_yellow]⭐ Moderntensor is a decentralized model training project built on the Core blockchain platform.
-The project is developed by Vietnamese 🇻🇳  engineers from the Moderntensor Foundation.[/bright_yellow]"""
+# 🤖 CYBERPUNK PROJECT DESCRIPTION 🤖
+PROJECT_DESCRIPTION = """[bold bright_cyan]🔥 MODERNTENSOR NEURAL NETWORK:[/] [bright_green]Decentralized AI model training on Core blockchain[/]
+[bold bright_magenta]🤖 QUANTUM FOUNDATION:[/] [bright_yellow]Built by Vietnamese 🇻🇳 cyber engineers[/]
+[bold bright_red]⚡ NEURAL MATRIX:[/] [bright_cyan]Advanced consensus algorithms & cyberpunk interface[/]"""
 REPO_URL = "https://github.com/sonson0910/moderntensor_core.git"  # Replace
 DOCS_URL = "https://github.com/sonson0910/moderntensor_core/blob/development_consensus/docs/WhitePaper.pdf"  # Replace
 CHAT_URL = "https://t.me/+pDRlNXTi1wY2NTY1"  # Replace
@@ -46,7 +45,7 @@ CONTRIBUTE_URL = f"https://github.com/sonson0910/moderntensor_core/blob/main/doc
 @click.group()
 def mtcore():
     """
-    🗳️ ModernTensor Core Control Tool - A command line interface for managing Core blockchain accounts and operations. 🗳️
+    🔥 MODERNTENSOR CYBERPUNK CLI - Neural network command interface for quantum blockchain operations ⚡
     """
     pass
 
@@ -62,22 +61,43 @@ mtcore.add_command(hdwallet)
 
 @mtcore.command()
 def version():
-    """Show version information."""
-    console = Console()
+    """🔥 Show cyberpunk version information ⚡"""
+    console = Console(force_terminal=True, color_system="truecolor")
+
+    # 🤖 CYBERPUNK VERSION PANEL 🤖
+    console.print(CYBERPUNK_BANNER, style="bold bright_cyan")
     console.print(
         Panel.fit(
-            "[bold cyan]ModernTensor Core Control Tool[/bold cyan]\n"
-            "Version: 0.2.0\n"
-            "A command line interface for managing Core blockchain accounts and operations",
-            title="About",
-            border_style="cyan",
+            "[bold bright_magenta]🔥 MODERNTENSOR CYBERPUNK CLI 🔥[/]\n"
+            "[bright_green]Neural Version:[/] [bold bright_yellow]0.2.0[/]\n"
+            "[bright_cyan]Quantum Interface:[/] [bright_yellow]Core blockchain neural command matrix[/]\n"
+            "[bright_red]Cyber Status:[/] [bold bright_green blink]FULLY OPERATIONAL[/]",
+            title="[bold bright_red blink]⚡ CYBER SYSTEM INFO ⚡[/]",
+            border_style="bright_magenta",
+            padding=(1, 2),
         )
     )
+    console.print(PROJECT_DESCRIPTION)
+    console.print("\n🔗 [bold bright_cyan]NEURAL LINKS:[/]")
+    console.print(f"📋 [bright_green]Repository:[/] [bright_blue]{REPO_URL}[/]")
+    console.print(f"📖 [bright_green]Documentation:[/] [bright_blue]{DOCS_URL}[/]")
+    console.print(f"💬 [bright_green]Cyber Chat:[/] [bright_blue]{CHAT_URL}[/]")
 
 
-# Main entry point
+# 🔥 CYBERPUNK MAIN ENTRY POINT 🔥
 def main():
-    """Main entry point for mtcore CLI."""
+    """🤖 Cyberpunk main entry point for neural CLI matrix ⚡"""
+    console = Console(force_terminal=True, color_system="truecolor")
+
+    # Show cyberpunk banner on startup
+    console.print(CYBERPUNK_BANNER, style="bold bright_cyan")
+    console.print(
+        "🔥 [bold bright_red blink]NEURAL MATRIX INITIALIZED[/] 🔥", justify="center"
+    )
+    console.print(
+        "⚡ [bright_yellow]Type --help for cyber commands[/] ⚡\n", justify="center"
+    )
+
     mtcore()
 
 

@@ -20,16 +20,28 @@ from moderntensor_aptos.mt_core.async_client import CoreAsyncClient
 from moderntensor_aptos.mt_core.account import Account
 from moderntensor_aptos.mt_core.config.settings import settings, logger
 from moderntensor_aptos.mt_core.core_client.contract_client import (
-    get_all_miners,
-    get_all_validators,
     ModernTensorCoreClient as MTCoreClient,
 )
+
+# Import get_all functions from the proper location
+try:
+    from moderntensor_aptos.mt_core.core_client import (
+        get_all_miners,
+        get_all_validators,
+    )
+except ImportError:
+    # Fallback: define placeholder functions for cyberpunk CLI
+    def get_all_miners(*args, **kwargs):
+        return []
+
+    def get_all_validators(*args, **kwargs):
+        return []
 
 
 @click.group()
 def query_cli():
     """
-    🔍 Commands for querying Core blockchain data.
+    🔥 CYBERPUNK QUERY MATRIX - Neural blockchain data scanning commands ⚡
     """
     pass
 

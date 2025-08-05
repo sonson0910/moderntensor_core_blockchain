@@ -30,7 +30,7 @@ DEFAULT_NETWORK = getattr(settings, "CORE_NETWORK", "testnet")
 @click.group()
 def wallet_cli():
     """
-    🏦 Wallet management commands for Core blockchain.
+    🔥 CYBERPUNK WALLET MATRIX - Neural quantum wallet management system ⚡
     """
     pass
 
