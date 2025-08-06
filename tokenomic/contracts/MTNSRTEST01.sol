@@ -10,7 +10,6 @@ contract MTNSRTEST01 is ERC20, Ownable {
 
     constructor(uint256 initialSupply) ERC20("Moderntensor Token Test01", "MTNSRTEST01") Ownable() {
         totalSupplyCap = initialSupply;
-        _mint(msg.sender, initialSupply);
     }
 
     function decimals() public pure override returns (uint8) {

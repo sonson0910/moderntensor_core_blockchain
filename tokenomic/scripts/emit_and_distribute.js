@@ -1,26 +1,30 @@
 const hre = require("hardhat");
+const { ethers } = hre;
 require("dotenv").config();
 
-// Script off-chain để gọi emitReward và distributeRewards
-async function main() {
-  const [owner] = await hre.ethers.getSigners();
-  console.log("👤 Running with account:", owner.address);
+async function setup() {
+  const [owner] = await ethers.getSigners();
+  console.log("👤 Using account:", owner.address);
 
-  // Lấy hợp đồng
-  const token = await hre.ethers.getContractAt("MTNSRTEST01", process.env.TOKEN_ADDRESS);
-  const rewardEmission = await hre.ethers.getContractAt("RewardEmission", process.env.REWARD_EMISSION_ADDRESS);
-  const rewardDistribution = await hre.ethers.getContractAt("RewardDistribution", process.env.REWARD_DISTRIBUTION_ADDRESS);
+  const token = await ethers.getContractAt("MTNSRTEST01", process.env.TOKEN_ADDRESS);
+  const rewardEmission = await ethers.getContractAt("RewardEmission", process.env.REWARD_EMISSION_ADDRESS);
+  const rewardDistribution = await ethers.getContractAt("RewardDistribution", process.env.REWARD_DISTRIBUTION_ADDRESS);
 
-  // Thiết lập subnet và participants
   const subnet1 = process.env.TEST_ADDRESS_1;
   const subnet2 = process.env.TEST_ADDRESS_2;
+
   const validator1 = process.env.RECIPIENT_ADDRESS_1;
   const validator2 = process.env.RECIPIENT_ADDRESS_2;
-  const miner1 = process.env.RECIPIENT_ADDRESS_1;
-  const miner2 = process.env.RECIPIENT_ADDRESS_2;
+  const miner1 = process.env.RECIPIENT_ADDRESS_3;
+  const miner2 = process.env.RECIPIENT_ADDRESS_4;
+
+  const validator3 = process.env.RECIPIENT_ADDRESS_5;
+  const validator4 = process.env.RECIPIENT_ADDRESS_6;
+  const miner3 = process.env.RECIPIENT_ADDRESS_7;
+  const miner4 = process.env.RECIPIENT_ADDRESS_8;
 
   await rewardDistribution.setSubnets([subnet1, subnet2], [50, 50]);
-  console.log("✅ Set subnets:", subnet1, subnet2);
+  console.log("✅ Subnets configured:", subnet1, subnet2);
 
   await rewardDistribution.setParticipants(
     0,
@@ -29,59 +33,97 @@ async function main() {
     [miner1, miner2],
     [40, 20]
   );
-  console.log("✅ Set participants for subnet 0");
+  console.log("✅ Subnet 0 participants configured");
 
-  // Lấy trạng thái hiện tại
-  const state = await rewardEmission.rewardState();
-  const lastEmissionTime = Number(state.lastEmissionTime);
-  const secondsPerPeriod = Number(state.secondsPerPeriod);
-  const totalEmitted = Number(state.totalDistributed);
+  await rewardDistribution.setParticipants(
+    1,
+    [validator3, validator4],
+    [60, 40],
+    [miner3, miner4],
+    [70, 30]
+  );
+  console.log("✅ Subnet 1 participants configured");
 
-  const now = Math.floor(Date.now() / 1000);
-  const nextEmissionTime = lastEmissionTime + secondsPerPeriod;
-  const timeLeft = nextEmissionTime - now;
-
-  console.log("\n📊 THÔNG TIN TRẠNG THÁI:");
-  console.log("⏱ Last Emission Time      :", lastEmissionTime, new Date(lastEmissionTime * 1000).toLocaleString());
-  console.log("⏳ Seconds Per Period      :", secondsPerPeriod);
-  console.log("🕐 Current Time (now)      :", now, new Date(now * 1000).toLocaleString());
-  console.log("⏭ Next Emission Time      :", nextEmissionTime, new Date(nextEmissionTime * 1000).toLocaleString());
-  console.log("⏳ Time Left Until Emit    :", timeLeft > 0 ? `${timeLeft}s (~${(timeLeft / 60).toFixed(1)} phút)` : "Đã đến thời điểm");
-  console.log("💰 Total Emitted           :", totalEmitted);
-
-  // Nếu chưa đến thời điểm emit
-  if (now < nextEmissionTime) {
-    console.log("\n❌ Chưa đến thời điểm emit reward. Hãy thử lại sau.");
-    return;
-  }
-
-  // Gọi emitReward
-  await rewardEmission.emitReward();
-  console.log("\n✅ Emitted reward");
-
-  // Lấy availableBalance và phân phối
-  const emissionAmount = await rewardDistribution.getAvailableBalance();
-  console.log("💸 Available Balance to distribute:", emissionAmount.toString());
-
-  await rewardDistribution.distributeRewards(0, emissionAmount);
-  console.log("✅ Distributed rewards:", emissionAmount.toString());
-
-  // Kiểm tra số dư
-  const subnetBal = await token.balanceOf(subnet1);
-  const val1Bal = await token.balanceOf(validator1);
-  const val2Bal = await token.balanceOf(validator2);
-  const miner1Bal = await token.balanceOf(miner1);
-  const miner2Bal = await token.balanceOf(miner2);
-
-  console.log("\n📦 SỐ DƯ SAU PHÂN PHỐI:");
-  console.log("📤 Subnet 1 balance        :", subnetBal.toString());
-  console.log("👷 Validator 1 balance     :", val1Bal.toString());
-  console.log("👷 Validator 2 balance     :", val2Bal.toString());
-  console.log("⛏️ Miner 1 balance         :", miner1Bal.toString());
-  console.log("⛏️ Miner 2 balance         :", miner2Bal.toString());
+  return {
+    token,
+    rewardEmission,
+    rewardDistribution,
+  };
 }
 
-main().catch((error) => {
-  console.error("❌ Lỗi:", error);
+async function loopDistribute({ token, rewardEmission, rewardDistribution }) {
+  const subnets = await rewardDistribution.getSubnets();
+  const numSubnets = subnets.length;
+
+  const state = await rewardEmission.rewardState();
+  const secondsPerPeriod = Number(state.secondsPerPeriod);
+
+  while (true) {
+    const loopStart = Date.now();
+
+    try {
+      await rewardEmission.emitReward();
+      console.log("✅ Reward emitted");
+
+      const emissionAmount = await rewardDistribution.getAvailableBalance();
+      console.log("💰 Available balance:", ethers.formatUnits(emissionAmount, 8));
+
+      await rewardDistribution.distributeRewards(emissionAmount);
+      console.log("🚀 Rewards distributed to all subnets and participants");
+
+      console.log("\n📦 BALANCES AFTER DISTRIBUTION:");
+      for (let i = 0; i < numSubnets; i++) {
+        const subnetAddr = subnets[i].subnetAddress;
+        const valList = await rewardDistribution.getValidators(i);
+        const minerList = await rewardDistribution.getMiners(i);
+
+        const subnetBal = await token.balanceOf(subnetAddr);
+        console.log(`📤 Subnet ${i} (${subnetAddr}): ${ethers.formatUnits(subnetBal, 8)}`);
+
+        for (const v of valList) {
+          const bal = await token.balanceOf(v.participantAddress);
+          console.log(`👷 Validator (${v.participantAddress}): ${ethers.formatUnits(bal, 8)}`);
+        }
+
+        for (const m of minerList) {
+          const bal = await token.balanceOf(m.participantAddress);
+          console.log(`⛏️ Miner (${m.participantAddress}): ${ethers.formatUnits(bal, 8)}`);
+        }
+
+        console.log("----");
+      }
+
+    } catch (err) {
+      console.error("❌ Error in loop:", err);
+    }
+
+    const loopEnd = Date.now();
+    const loopDuration = (loopEnd - loopStart) / 1000;
+    const waitTime = Math.max(0, secondsPerPeriod - loopDuration);
+
+    console.log(`\n⏱️ Loop took ${loopDuration.toFixed(1)}s. Waiting ${waitTime.toFixed(1)}s before next round...\n`);
+
+    await new Promise((res) => {
+      let secondsLeft = Math.floor(waitTime);
+      const interval = setInterval(() => {
+        process.stdout.write(`\r⏳ Countdown: ${secondsLeft}s remaining... `);
+        secondsLeft--;
+        if (secondsLeft < 0) {
+          clearInterval(interval);
+          process.stdout.write("\n");
+          res();
+        }
+      }, 1000);
+    });
+  }
+}
+
+async function main() {
+  const contracts = await setup();
+  await loopDistribute(contracts);
+}
+
+main().catch((err) => {
+  console.error("❌ Initialization error:", err);
   process.exitCode = 1;
 });

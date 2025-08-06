@@ -9,7 +9,7 @@ module.exports = {
     localhost: {
       url: "http://127.0.0.1:8545"
     },
-    coredaoTestnet: {
+    testnet: {
       url: process.env.RPC_URL || "https://rpc.test2.btcs.network",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       chainId: 1114,
