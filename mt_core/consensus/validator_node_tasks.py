@@ -636,27 +636,40 @@ class ValidatorNodeTasks:
 
             assignment = self.core.tasks_sent[result.task_id]
 
-            # Use subnet-specific scoring if available (e.g., CLIP scoring for image generation)
-            if hasattr(self.core, "validator_instance") and hasattr(
-                self.core.validator_instance, "_score_individual_result"
-            ):
-                # Use the subnet validator's scoring method (e.g., Subnet1Validator CLIP scoring)
-                score_value = self.core.validator_instance._score_individual_result(
-                    assignment.task_data, result.result_data
-                )
-                logger.info(
-                    f"🎯 {self.uid_prefix} IMMEDIATE CLIP scoring: {score_value:.3f} for task {result.task_id} from miner {result.miner_uid}"
-                )
-            else:
-                # Fallback to basic scoring
-                from .validator_node_consensus import ValidatorNodeConsensus
+            # CRITICAL FIX: Use advanced scoring with formulas for immediate scoring too
+            from .scoring import calculate_advanced_score
+            import time
 
-                consensus_module = ValidatorNodeConsensus(self.core)
-                score_value = consensus_module.cardano_calculate_score(
-                    assignment.task_data, result.result_data
-                )
+            current_time_step = int(time.time())
+
+            # Apply formulas-based advanced scoring
+            score_value, scoring_metadata = calculate_advanced_score(
+                task_data=assignment.task_data,
+                result_data=result.result_data,
+                miner_uid=result.miner_uid,
+                validator_uid=self.core.info.uid,
+                validator_instance=getattr(self.core, "validator_instance", None),
+                current_time_step=current_time_step,
+            )
+
+            logger.info(
+                f"🎯 {self.uid_prefix} IMMEDIATE FORMULAS scoring: {score_value:.3f} for task {result.task_id} from miner {result.miner_uid}"
+            )
+
+            # Log advanced scoring metadata
+            if scoring_metadata.get("performance_improvement", 0) != 0:
+                improvement = scoring_metadata["performance_improvement"]
                 logger.info(
-                    f"🎯 {self.uid_prefix} IMMEDIATE basic scoring: {score_value:.3f} for task {result.task_id} from miner {result.miner_uid}"
+                    f"🚀 {self.uid_prefix} IMMEDIATE Performance improved by {improvement:+.3f} for {result.miner_uid}"
+                )
+
+            # Log trust score evolution
+            if "trust_score_new" in scoring_metadata:
+                trust_old = scoring_metadata.get("trust_score_old", 0.5)
+                trust_new = scoring_metadata["trust_score_new"]
+                trust_change = trust_new - trust_old
+                logger.info(
+                    f"📈 {self.uid_prefix} IMMEDIATE Trust score for {result.miner_uid}: {trust_old:.3f} → {trust_new:.3f} ({trust_change:+.3f})"
                 )
 
             # Create validator score
@@ -1097,8 +1110,26 @@ class ValidatorNodeTasks:
                         slot, batch_results
                     )
                     total_scores.extend(batch_scores)
+
+                    # CRITICAL FIX: Store scores in slot_scores for consensus to use
+                    if slot not in self.core.slot_scores:
+                        self.core.slot_scores[slot] = []
+                    self.core.slot_scores[slot].extend(batch_scores)
+
+                    # DEBUG: Log detailed score storage
                     logger.info(
-                        f"{self.uid_prefix} Batch {batch_num + 1} completed: {len(batch_scores)} scores generated"
+                        f"💾 {self.uid_prefix} STORING {len(batch_scores)} scores in slot_scores[{slot}]"
+                    )
+                    for score in batch_scores:
+                        logger.info(
+                            f"💾 {self.uid_prefix} Stored: Miner {score.miner_uid} → {score.score:.4f} (Task: {score.task_id})"
+                        )
+                    logger.info(
+                        f"💾 {self.uid_prefix} Total slot_scores[{slot}] now has {len(self.core.slot_scores[slot])} scores"
+                    )
+
+                    logger.info(
+                        f"{self.uid_prefix} Batch {batch_num + 1} completed: {len(batch_scores)} scores generated and stored in slot_scores"
                     )
 
                 # Clean up batch results
@@ -1262,29 +1293,42 @@ class ValidatorNodeTasks:
                 assignment = self.core.tasks_sent[task_id]
 
                 try:
-                    # Use subnet-specific scoring if available (e.g., CLIP scoring for image generation)
-                    if hasattr(self.core, "validator_instance") and hasattr(
-                        self.core.validator_instance, "_score_individual_result"
-                    ):
-                        # Use the subnet validator's scoring method (e.g., Subnet1Validator CLIP scoring)
-                        score_value = (
-                            self.core.validator_instance._score_individual_result(
-                                assignment.task_data, result.result_data
-                            )
-                        )
-                        logger.info(
-                            f"🎯 {self.uid_prefix} Used subnet scoring: {score_value:.3f} for {result.miner_uid}"
-                        )
-                    else:
-                        # Fallback to basic scoring
-                        from .validator_node_consensus import ValidatorNodeConsensus
+                    # CRITICAL FIX: Use advanced scoring with formulas instead of direct scoring
+                    from .scoring import calculate_advanced_score
+                    import time
 
-                        consensus_module = ValidatorNodeConsensus(self.core)
-                        score_value = consensus_module.cardano_calculate_score(
-                            assignment.task_data, result.result_data
+                    current_time_step = int(time.time())
+
+                    # Apply formulas-based advanced scoring
+                    score_value, scoring_metadata = calculate_advanced_score(
+                        task_data=assignment.task_data,
+                        result_data=result.result_data,
+                        miner_uid=result.miner_uid,
+                        validator_uid=self.core.info.uid,
+                        validator_instance=getattr(
+                            self.core, "validator_instance", None
+                        ),
+                        current_time_step=current_time_step,
+                    )
+
+                    logger.info(
+                        f"🎯 {self.uid_prefix} Used FORMULAS scoring: {score_value:.3f} for {result.miner_uid}"
+                    )
+
+                    # Log advanced scoring metadata
+                    if scoring_metadata.get("performance_improvement", 0) != 0:
+                        improvement = scoring_metadata["performance_improvement"]
+                        logger.info(
+                            f"🚀 {self.uid_prefix} Performance improved by {improvement:+.3f} for {result.miner_uid}"
                         )
-                        logger.debug(
-                            f"{self.uid_prefix} Used basic scoring: {score_value:.3f} for {result.miner_uid}"
+
+                    # Log trust score evolution
+                    if "trust_score_new" in scoring_metadata:
+                        trust_old = scoring_metadata.get("trust_score_old", 0.5)
+                        trust_new = scoring_metadata["trust_score_new"]
+                        trust_change = trust_new - trust_old
+                        logger.info(
+                            f"📈 {self.uid_prefix} Trust score for {result.miner_uid}: {trust_old:.3f} → {trust_new:.3f} ({trust_change:+.3f})"
                         )
 
                     # Create validator score

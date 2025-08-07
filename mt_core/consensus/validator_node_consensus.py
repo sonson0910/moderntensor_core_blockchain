@@ -191,6 +191,44 @@ class ValidatorNodeConsensus:
             f"{self.uid_prefix} Scoring miner results for cycle {self.core.current_cycle}"
         )
 
+        # CRITICAL FIX: Use slot_scores if available (from tasks module with formulas)
+        # These scores already have advanced formulas applied and subnet-specific scoring
+        current_slot = getattr(self.core, "current_slot", self.core.current_cycle)
+
+        # DEBUG: Log slot_scores availability
+        if hasattr(self.core, "slot_scores"):
+            logger.info(
+                f"🔍 {self.uid_prefix} Available slot_scores keys: {list(self.core.slot_scores.keys())}"
+            )
+            logger.info(
+                f"🔍 {self.uid_prefix} Looking for current_slot: {current_slot}"
+            )
+        else:
+            logger.warning(f"❌ {self.uid_prefix} No slot_scores attribute found!")
+
+        if hasattr(self.core, "slot_scores") and current_slot in self.core.slot_scores:
+            scores = self.core.slot_scores[current_slot]
+            logger.info(
+                f"🎯 {self.uid_prefix} Using advanced slot scores: {len(scores)} scores with formulas applied"
+            )
+
+            # DEBUG: Log detailed score information
+            for score in scores:
+                logger.info(
+                    f"📊 {self.uid_prefix} Slot score found: Miner {score.miner_uid} → {score.score:.4f} (Task: {score.task_id})"
+                )
+
+            # Store scores in cycle_scores for compatibility
+            for score in scores:
+                self.core.cycle_scores[score.task_id].append(score)
+
+            return scores
+
+        # Fallback: Use results_buffer if slot_scores not available
+        logger.warning(
+            f"⚠️ {self.uid_prefix} slot_scores not found, falling back to results_buffer scoring"
+        )
+
         # Convert results_buffer to the expected format for score_results_logic
         # results_buffer is Dict[str, MinerResult], need Dict[str, List[MinerResult]]
         results_received = {}

@@ -27,7 +27,11 @@ from .validator_node_tasks import ValidatorNodeTasks
 from .validator_node_consensus import ValidatorNodeConsensus
 from .validator_node_network import ValidatorNodeNetwork
 from .slot_coordinator import SlotPhase
-from .flexible_slot_coordinator import FlexibleSlotCoordinator, FlexibleSlotPhase
+from .flexible_slot_coordinator import (
+    FlexibleSlotCoordinator,
+    FlexibleSlotPhase,
+    get_fixed_epoch_start,
+)
 from ..config.config_loader import get_config
 
 logger = logging.getLogger(__name__)
@@ -244,8 +248,11 @@ class ValidatorNode:
         """Flexible consensus operation loop with synchronized cutoffs."""
         # 🔥 CYBERPUNK CONSENSUS STARTUP 🔥
         from rich.console import Console
+
         cyber_console = Console(force_terminal=True, color_system="truecolor")
-        cyber_console.print(f"🔥 [bold bright_cyan]{self.uid_prefix}[/] [bright_green]NEURAL CONSENSUS MATRIX:[/] [bright_yellow]ACTIVATED[/] ⚡")
+        cyber_console.print(
+            f"🔥 [bold bright_cyan]{self.uid_prefix}[/] [bright_green]NEURAL CONSENSUS MATRIX:[/] [bright_yellow]ACTIVATED[/] ⚡"
+        )
         logger.info(
             f"{self.uid_prefix} Starting flexible consensus loop with synchronized cutoffs"
         )
@@ -402,9 +409,12 @@ class ValidatorNode:
             )
             cons_duration = self.core.slot_coordinator.slot_config.min_consensus_seconds
 
-            epoch_start = getattr(
-                self.core.slot_coordinator, "_epoch_start", time.time()
-            )
+            # Use FIXED EPOCH START if not already set
+            if hasattr(self.core.slot_coordinator, "_epoch_start"):
+                epoch_start = self.core.slot_coordinator._epoch_start
+            else:
+                epoch_start = get_fixed_epoch_start()
+                self.core.slot_coordinator._epoch_start = epoch_start
             slot_start = epoch_start + (current_slot * slot_duration)
             time_in_slot = time.time() - slot_start
 
@@ -560,12 +570,16 @@ class ValidatorNode:
                 slot, FlexibleSlotPhase.TASK_ASSIGNMENT
             )
 
-            # Step 2: Calculate phase timing
+            # Step 2: Calculate phase timing using FIXED EPOCH START
             if hasattr(self.core.slot_coordinator, "_epoch_start"):
                 epoch_start = self.core.slot_coordinator._epoch_start
             else:
-                epoch_start = time.time()
+                # FIXED EPOCH START: Same as FlexibleSlotCoordinator
+                epoch_start = get_fixed_epoch_start()
                 self.core.slot_coordinator._epoch_start = epoch_start
+                logger.info(
+                    f"🔒 {self.uid_prefix} Task assignment using FIXED EPOCH START: {epoch_start}"
+                )
 
             slot_config = self.core.slot_coordinator.slot_config
             slot_duration_seconds = slot_config.slot_duration_minutes * 60
@@ -604,7 +618,7 @@ class ValidatorNode:
             # Step 4: CONTINUOUS MINI-BATCH LOOP - TARGET 3 ROUNDS
             batch_round = 1
             batch_size = 5  # Mini batch size
-            batch_timeout = 15.0  # Quick batch timeout
+            batch_timeout = 22.0  # Extended batch timeout for miners
             max_rounds = 3  # TARGET: Exactly 3 rounds for testing
 
             logger.info(
@@ -698,13 +712,16 @@ class ValidatorNode:
         providing Bittensor-like synchronized behavior.
         """
         try:
-            # Calculate exact cutoff time based on slot number and epoch
+            # Calculate exact cutoff time based on slot number and FIXED EPOCH
             if hasattr(self.core.slot_coordinator, "_epoch_start"):
                 epoch_start = self.core.slot_coordinator._epoch_start
             else:
-                # Fallback to current time for first run
-                epoch_start = time.time()
+                # FIXED EPOCH START: Same as FlexibleSlotCoordinator
+                epoch_start = get_fixed_epoch_start()
                 self.core.slot_coordinator._epoch_start = epoch_start
+                logger.info(
+                    f"🔒 {self.uid_prefix} Cutoff calculation using FIXED EPOCH START: {epoch_start}"
+                )
 
             # Get slot configuration from flexible coordinator
             slot_config = self.core.slot_coordinator.slot_config
@@ -792,8 +809,62 @@ class ValidatorNode:
                 # Wait for task assignment cutoff first
                 await self.core.slot_coordinator.enforce_task_assignment_cutoff(slot)
 
+                # CRITICAL: Set current_slot for score_miner_results to find slot_scores
+                self.core.current_slot = slot
+
+                # CRITICAL FIX: Wait for all tasks to complete and scores to be stored
+                logger.info(
+                    f"⏳ {self.uid_prefix} Waiting for all tasks to complete and scores to be stored..."
+                )
+                await asyncio.sleep(5)  # Give time for async tasks to complete
+
+                # Check if scores are available, wait more if needed
+                max_wait_attempts = 6  # Max 30 seconds total wait
+                for attempt in range(max_wait_attempts):
+                    if (
+                        hasattr(self.core, "slot_scores")
+                        and slot in self.core.slot_scores
+                        and len(self.core.slot_scores[slot]) > 0
+                    ):
+                        logger.info(
+                            f"✅ {self.uid_prefix} Found {len(self.core.slot_scores[slot])} scores in slot_scores[{slot}]"
+                        )
+                        break
+                    else:
+                        logger.info(
+                            f"⏳ {self.uid_prefix} Attempt {attempt+1}/{max_wait_attempts}: No scores found yet, waiting 5s more..."
+                        )
+                        await asyncio.sleep(5)
+
                 # Score local results
-                local_scores = self.consensus.score_miner_results()
+                local_scores_list = self.consensus.score_miner_results()
+
+                # CRITICAL FIX: If still no scores, force fallback scoring
+                if not local_scores_list:
+                    logger.warning(
+                        f"⚠️ {self.uid_prefix} No scores found after waiting, forcing fallback scoring..."
+                    )
+                    # Force fallback by temporarily removing slot_scores for this slot
+                    if (
+                        hasattr(self.core, "slot_scores")
+                        and slot in self.core.slot_scores
+                    ):
+                        temp_scores = self.core.slot_scores[slot]
+                        del self.core.slot_scores[slot]
+                        local_scores_list = self.consensus.score_miner_results()
+                        self.core.slot_scores[slot] = temp_scores  # Restore
+                        logger.info(
+                            f"🔄 {self.uid_prefix} Fallback scoring generated {len(local_scores_list)} scores"
+                        )
+
+                # CRITICAL FIX: Convert ValidatorScore list to miner_uid: score dict
+                local_scores = {}
+                for score_obj in local_scores_list:
+                    local_scores[score_obj.miner_uid] = score_obj.score
+
+                logger.info(
+                    f"🎯 {self.uid_prefix} Converted {len(local_scores_list)} ValidatorScore objects to dict: {local_scores}"
+                )
 
                 # Coordinate consensus with other validators (synchronized)
                 consensus_scores = (
@@ -833,18 +904,28 @@ class ValidatorNode:
                         )
                         await self.consensus.submit_to_blockchain(slot)
                         submission_success = True
-                                    # 🤖 CYBERPUNK SUCCESS 🤖
-            from rich.console import Console
-            cyber_console = Console(force_terminal=True, color_system="truecolor")
-            cyber_console.print(f"✅ [bold bright_green]{self.uid_prefix}[/] [bright_cyan]QUANTUM BLOCKCHAIN SYNC:[/] [bright_yellow]SLOT {slot} COMPLETE[/] 🔥")
-            logger.info(
-                f"✅ {self.uid_prefix} Blockchain submission completed for slot {slot}"
-            )
+                        # 🤖 CYBERPUNK SUCCESS 🤖
+                        from rich.console import Console
+
+                        cyber_console = Console(
+                            force_terminal=True, color_system="truecolor"
+                        )
+                        cyber_console.print(
+                            f"✅ [bold bright_green]{self.uid_prefix}[/] [bright_cyan]QUANTUM BLOCKCHAIN SYNC:[/] [bright_yellow]SLOT {slot} COMPLETE[/] 🔥"
+                        )
+                        logger.info(
+                            f"✅ {self.uid_prefix} Blockchain submission completed for slot {slot}"
+                        )
                     except Exception as e:
                         # 🔥 CYBERPUNK ERROR 🔥
                         from rich.console import Console
-                        cyber_console = Console(force_terminal=True, color_system="truecolor")
-                        cyber_console.print(f"❌ [bold bright_red]{self.uid_prefix}[/] [bright_yellow]CYBER MATRIX ERROR:[/] [bright_magenta]{e}[/] 🚨")
+
+                        cyber_console = Console(
+                            force_terminal=True, color_system="truecolor"
+                        )
+                        cyber_console.print(
+                            f"❌ [bold bright_red]{self.uid_prefix}[/] [bright_yellow]CYBER MATRIX ERROR:[/] [bright_magenta]{e}[/] 🚨"
+                        )
                         logger.error(
                             f"❌ {self.uid_prefix} Error in immediate blockchain submission: {e}"
                         )

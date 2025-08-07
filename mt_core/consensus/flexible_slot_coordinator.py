@@ -13,6 +13,7 @@ Key improvements:
 import asyncio
 import time
 import json
+import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, asdict
@@ -26,6 +27,17 @@ CONSENSUS_CHECK_INTERVAL = 3  # Check every 3 seconds
 MAJORITY_THRESHOLD = 2  # Need 2 out of 3 validators
 DEFAULT_BUFFER_SECONDS = 30  # Buffer time for late validators
 MIN_TASK_EXECUTION_TIME = 45  # Minimum 45 seconds for task execution
+
+# FIXED EPOCH START FOR ALL VALIDATORS SYNCHRONIZATION
+FIXED_EPOCH_START = datetime.datetime(2024, 1, 1, 0, 0, 0).timestamp()
+
+
+def get_fixed_epoch_start() -> float:
+    """
+    Get the fixed epoch start time used by all validators for synchronization.
+    This ensures all validators calculate the same slot numbers.
+    """
+    return FIXED_EPOCH_START
 
 
 class FlexibleJSONEncoder(json.JSONEncoder):
@@ -127,9 +139,17 @@ class FlexibleSlotCoordinator:
         """
         current_time = time.time()
 
-        # Calculate slot based on flexible timing FIRST
+        # Calculate slot based on FIXED EPOCH START for validator synchronization
         if not hasattr(self, "_epoch_start"):
-            self._epoch_start = current_time  # Dynamic epoch start
+            # FIXED EPOCH START: All validators use the same reference time
+            self._epoch_start = get_fixed_epoch_start()
+
+            logger.info(
+                f"🔒 {self.validator_uid} Using FIXED EPOCH START: {self._epoch_start} for validator synchronization"
+            )
+            logger.info(
+                f"🔒 {self.validator_uid} This ensures all validators calculate the same slot number"
+            )
 
         slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
         calculated_slot = int(
