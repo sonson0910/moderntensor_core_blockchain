@@ -288,6 +288,23 @@ class ValidatorNode:
                     logger.info(
                         f"🔄 {self.uid_prefix} Phase transition in slot {current_slot}: {last_processed_phase} → {current_phase.value}"
                     )
+
+                    # 🔥 CYBERPUNK UI: Phase Transition
+                    try:
+                        from ..cli.cyberpunk_ui_extended import (
+                            print_cyberpunk_phase_transition,
+                        )
+
+                        from_phase = (
+                            last_processed_phase.value
+                            if last_processed_phase
+                            else "startup"
+                        )
+                        print_cyberpunk_phase_transition(
+                            from_phase, current_phase.value, current_slot
+                        )
+                    except ImportError:
+                        pass
                 elif (
                     current_slot == last_processed_slot
                     and current_phase == last_processed_phase
@@ -334,8 +351,26 @@ class ValidatorNode:
                             )
 
                     elif current_phase == FlexibleSlotPhase.CONSENSUS_SCORING:
-                        await self._handle_consensus_scoring_phase(current_slot)
+                        result = await self._handle_consensus_scoring_phase(
+                            current_slot
+                        )
+                        if result and result.get("skipped"):
+                            logger.info(
+                                f"⏭️ {self.uid_prefix} Skipped consensus for slot {current_slot} ({result.get('reason')})"
+                            )
                     elif current_phase == FlexibleSlotPhase.METAGRAPH_UPDATE:
+                        # Prevent reprocessing same slot in metagraph phase
+                        if (
+                            current_slot == last_processed_slot
+                            and last_processed_phase
+                            == FlexibleSlotPhase.METAGRAPH_UPDATE
+                        ):
+                            logger.debug(
+                                f"⏭️ {self.uid_prefix} Skipping already completed metagraph phase for slot {current_slot}"
+                            )
+                            await asyncio.sleep(5)  # Wait for next slot
+                            continue
+
                         await self._handle_metagraph_update_phase(current_slot)
 
                         # Clean up old task assignment tracking when slot is fully completed
@@ -352,18 +387,20 @@ class ValidatorNode:
 
                     # Update tracking - update slot tracking IMMEDIATELY to prevent infinite loops
                     if current_phase == FlexibleSlotPhase.METAGRAPH_UPDATE:
-                        # Final phase completed - FORCE IMMEDIATE SLOT PROGRESSION
+                        # Final phase completed - WAIT FOR NEXT SLOT TIME-BASED PROGRESSION
                         logger.info(
                             f"✅ {self.uid_prefix} Completed ALL phases for slot {current_slot}"
                         )
                         logger.info(
-                            f"🚀 {self.uid_prefix} FORCING immediate progression to next slot after completing slot {current_slot}"
+                            f"⏰ {self.uid_prefix} Waiting for natural time progression to next slot..."
                         )
-                        # CRITICAL: Set slot to -1 to force next slot detection immediately
-                        last_processed_slot = -1  # Force new slot detection
-                        last_processed_phase = None  # Reset phase
-                        # SKIP the normal sleep and continue to next iteration immediately
-                        continue
+                        # Mark this slot as fully completed
+                        last_processed_slot = current_slot
+                        last_processed_phase = FlexibleSlotPhase.METAGRAPH_UPDATE
+                        # Let natural timing take over - wait for coordinator to detect next slot
+                        await asyncio.sleep(
+                            10
+                        )  # Wait for time progression instead of forcing
                     else:
                         logger.info(
                             f"🔄 {self.uid_prefix} Completed phase {current_phase.value} for slot {current_slot}"
@@ -472,7 +509,12 @@ class ValidatorNode:
                 elif phase == SlotPhase.TASK_EXECUTION:
                     await self._handle_task_execution_phase(current_slot)
                 elif phase == SlotPhase.CONSENSUS_SCORING:
-                    await self._handle_consensus_scoring_phase(current_slot)
+                    result = await self._handle_consensus_scoring_phase(current_slot)
+                    if result and result.get("skipped"):
+                        logger.info(
+                            f"⏭️ {self.uid_prefix} Skipped consensus for slot {current_slot} ({result.get('reason')})"
+                        )
+                        continue  # Skip to next iteration
                 elif phase == SlotPhase.METAGRAPH_UPDATE:
                     await self._handle_metagraph_update_phase(current_slot)
 
@@ -819,7 +861,7 @@ class ValidatorNode:
                 await asyncio.sleep(5)  # Give time for async tasks to complete
 
                 # Check if scores are available, wait more if needed
-                max_wait_attempts = 6  # Max 30 seconds total wait
+                max_wait_attempts = 3  # Reduced to 15 seconds for late joiners
                 for attempt in range(max_wait_attempts):
                     if (
                         hasattr(self.core, "slot_scores")
@@ -831,6 +873,18 @@ class ValidatorNode:
                         )
                         break
                     else:
+                        # Check if we're a late joiner (past task assignment phase)
+                        slot_progress = (
+                            await self.core.slot_coordinator.get_slot_progress(slot)
+                        )
+                        if (
+                            slot_progress > 35.0
+                        ):  # If more than 35s into slot (past task assignment)
+                            logger.warning(
+                                f"⚠️ {self.uid_prefix} Late joiner detected (slot progress: {slot_progress:.1f}s). Skipping consensus for slot {slot}"
+                            )
+                            break
+
                         logger.info(
                             f"⏳ {self.uid_prefix} Attempt {attempt+1}/{max_wait_attempts}: No scores found yet, waiting 5s more..."
                         )
@@ -839,8 +893,22 @@ class ValidatorNode:
                 # Score local results
                 local_scores_list = self.consensus.score_miner_results()
 
-                # CRITICAL FIX: If still no scores, force fallback scoring
+                # CRITICAL FIX: Handle late joiner case
                 if not local_scores_list:
+                    # Check if we're a late joiner again
+                    slot_progress = await self.core.slot_coordinator.get_slot_progress(
+                        slot
+                    )
+                    if (
+                        slot_progress > 140.0
+                    ):  # Late joiner (after 2min 20s in 4min cycle - past task assignment)
+                        logger.warning(
+                            f"🏃‍♂️ {self.uid_prefix} Late joiner - skipping consensus for slot {slot}, waiting for next slot..."
+                        )
+                        # Skip to next cycle
+                        return {"skipped": True, "reason": "late_joiner", "slot": slot}
+
+                    # Not a late joiner, try fallback scoring
                     logger.warning(
                         f"⚠️ {self.uid_prefix} No scores found after waiting, forcing fallback scoring..."
                     )
@@ -973,6 +1041,15 @@ class ValidatorNode:
 
     async def _handle_metagraph_update_phase(self, slot: int):
         """Handle metagraph update phase."""
+
+        # 🔥 CYBERPUNK UI: Metagraph Header
+        try:
+            from ..cli.cyberpunk_ui_extended import print_cyberpunk_metagraph_header
+
+            print_cyberpunk_metagraph_header(self.uid_prefix, slot)
+        except ImportError:
+            pass
+
         logger.debug(
             f"{self.uid_prefix} Handling metagraph update phase for slot {slot}"
         )

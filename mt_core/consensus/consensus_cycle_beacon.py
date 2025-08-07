@@ -34,11 +34,13 @@ class CyclePhase(Enum):
 class CycleConfig:
     """Configuration for global consensus cycles"""
 
-    cycle_duration_minutes: int = 5  # Total cycle time
-    task_assignment_minutes: float = 2.0  # Task assignment phase
-    task_execution_minutes: float = 2.0  # Task execution phase
-    consensus_minutes: float = 0.5  # Consensus scoring phase
-    metagraph_update_minutes: float = 0.5  # Metagraph update phase
+    cycle_duration_minutes: float = 2.5  # Total cycle time (SHORTENED TO 2.5 MINUTES)
+    task_assignment_minutes: float = (
+        2.0  # Task assignment phase (AS REQUESTED - 2 MINUTES)
+    )
+    task_execution_minutes: float = 0.0  # DEPRECATED: Merged into task_assignment
+    consensus_minutes: float = 0.25  # Consensus scoring phase (15 giây như cũ)
+    metagraph_update_minutes: float = 0.25  # Metagraph update phase (15 giây như cũ)
 
     # Global epoch start (fixed timestamp for all validators)
     global_epoch_start: int = 1735200000  # Fixed epoch start for synchronization
@@ -97,37 +99,26 @@ class GlobalConsensusBeacon:
         elapsed_minutes = cycle_elapsed / 60.0
 
         # Determine current phase based on elapsed time
+        # Phase 1: Task Assignment + Execution (0-2 minutes)
         if elapsed_minutes < self.config.task_assignment_minutes:
-            phase = CyclePhase.TASK_ASSIGNMENT
+            phase = CyclePhase.TASK_ASSIGNMENT  # Merged with execution
             phase_elapsed = elapsed_minutes
             phase_duration = self.config.task_assignment_minutes
 
+        # Phase 2: Consensus Scoring (2-3 minutes)
         elif elapsed_minutes < (
-            self.config.task_assignment_minutes + self.config.task_execution_minutes
-        ):
-            phase = CyclePhase.TASK_EXECUTION
-            phase_elapsed = elapsed_minutes - self.config.task_assignment_minutes
-            phase_duration = self.config.task_execution_minutes
-
-        elif elapsed_minutes < (
-            self.config.task_assignment_minutes
-            + self.config.task_execution_minutes
-            + self.config.consensus_minutes
+            self.config.task_assignment_minutes + self.config.consensus_minutes
         ):
             phase = CyclePhase.CONSENSUS_SCORING
-            phase_elapsed = (
-                elapsed_minutes
-                - self.config.task_assignment_minutes
-                - self.config.task_execution_minutes
-            )
+            phase_elapsed = elapsed_minutes - self.config.task_assignment_minutes
             phase_duration = self.config.consensus_minutes
 
+        # Phase 3: Metagraph Update (3-4 minutes)
         else:
             phase = CyclePhase.METAGRAPH_UPDATE
             phase_elapsed = (
                 elapsed_minutes
                 - self.config.task_assignment_minutes
-                - self.config.task_execution_minutes
                 - self.config.consensus_minutes
             )
             phase_duration = self.config.metagraph_update_minutes

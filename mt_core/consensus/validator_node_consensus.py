@@ -187,6 +187,17 @@ class ValidatorNodeConsensus:
 
     def score_miner_results(self):
         """Score all miner results using the configured scoring logic."""
+
+        # 🔥 CYBERPUNK UI: Scoring Header
+        try:
+            from ..cli.cyberpunk_ui_extended import print_cyberpunk_scoring_header
+
+            current_slot = getattr(self.core, "current_slot", self.core.current_cycle)
+            num_tasks = len(getattr(self.core, "results_buffer", {}))
+            print_cyberpunk_scoring_header(self.uid_prefix, current_slot, num_tasks)
+        except ImportError:
+            pass
+
         logger.info(
             f"{self.uid_prefix} Scoring miner results for cycle {self.core.current_cycle}"
         )
@@ -255,6 +266,24 @@ class ValidatorNodeConsensus:
         logger.info(
             f"{self.uid_prefix} Generated {len(scores)} scores for cycle {self.core.current_cycle}"
         )
+
+        # 🔥 CYBERPUNK UI: Scoring Summary
+        try:
+            from ..cli.cyberpunk_ui_extended import (
+                print_cyberpunk_scoring_summary,
+                print_cyberpunk_task_score,
+            )
+
+            # Print individual task scores
+            for score in scores:
+                print_cyberpunk_task_score(score.task_id, score.miner_uid, score.score)
+
+            # Print summary
+            avg_score = sum(s.score for s in scores) / len(scores) if scores else 0.0
+            print_cyberpunk_scoring_summary(len(scores), len(scores), avg_score)
+        except ImportError:
+            pass
+
         return scores
 
     async def core_score_results(self, slot: int):
@@ -3138,8 +3167,44 @@ class ValidatorNodeConsensus:
 
             # Submit to blockchain
             logger.info(f"🔗 {self.uid_prefix} Starting blockchain submission...")
-            await self.submit_to_blockchain(slot)
-            logger.info(f"✅ {self.uid_prefix} Blockchain submission complete")
+
+            # 🔥 CYBERPUNK UI: Show scores before submission
+            try:
+                from ..cli.cyberpunk_ui_extended import print_cyberpunk_metagraph_scores
+
+                if (
+                    hasattr(self.core, "slot_aggregated_scores")
+                    and slot in self.core.slot_aggregated_scores
+                ):
+                    scores = self.core.slot_aggregated_scores[slot]
+                    print_cyberpunk_metagraph_scores(scores, slot)
+            except ImportError:
+                pass
+
+            submission_success = True
+            try:
+                await self.submit_to_blockchain(slot)
+                logger.info(f"✅ {self.uid_prefix} Blockchain submission complete")
+            except Exception as e:
+                submission_success = False
+                logger.error(f"❌ {self.uid_prefix} Blockchain submission failed: {e}")
+
+            # 🔥 CYBERPUNK UI: Submission Result
+            try:
+                from ..cli.cyberpunk_ui_extended import (
+                    print_cyberpunk_metagraph_submission,
+                )
+
+                num_scores = (
+                    len(self.core.slot_aggregated_scores.get(slot, {}))
+                    if hasattr(self.core, "slot_aggregated_scores")
+                    else 0
+                )
+                print_cyberpunk_metagraph_submission(
+                    slot, num_scores, submission_success
+                )
+            except ImportError:
+                pass
 
             # === FIX RULE 4: Mark slot as updated to prevent duplicate updates ===
             setattr(self, slot_update_key, True)

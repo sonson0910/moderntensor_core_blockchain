@@ -73,15 +73,17 @@ class FlexibleSlotPhase(Enum):
 class FlexibleSlotConfig:
     """Flexible configuration allowing validators to start anytime"""
 
-    # Core timing (ULTRA FAST - for rapid testing)
-    slot_duration_minutes: float = 1.0  # 60s total - ultra fast cycles for testing
+    # Core timing (SHORT CYCLE - 2.5 minutes total for realistic testing)
+    slot_duration_minutes: float = 2.5  # 150s total - short but realistic cycles
 
-    # Minimum phase durations - SIMPLIFIED 3 PHASES (ULTRA FAST FOR TESTING)
+    # Minimum phase durations - OPTIMIZED 3 PHASES (SHORT CYCLE)
     min_task_assignment_seconds: int = (
-        35  # 35 seconds for task assignment + execution (3 rounds + buffer)
+        120  # 2 minutes (120s) for task assignment + execution as requested
     )
-    min_consensus_seconds: int = 15  # 15 seconds - P2P consensus
-    min_metagraph_update_seconds: int = 10  # 10 seconds for metagraph
+    min_consensus_seconds: int = 15  # 15 seconds - P2P consensus (fast như cũ)
+    min_metagraph_update_seconds: int = (
+        15  # 15 seconds for metagraph update (fast như cũ)
+    )
 
     # Buffer times for late joiners (REDUCED FOR TESTING)
     task_deadline_buffer: int = 5  # 5s buffer for task completion
@@ -164,12 +166,14 @@ class FlexibleSlotCoordinator:
 
         # DEBUG: Always log slot timing check
         logger.info(
-            f"🔍 {self.validator_uid} SLOT TIMING CHECK: slot {calculated_slot}, progress {seconds_into_slot:.1f}s, threshold 50.0s"
+            f"🔍 {self.validator_uid} SLOT TIMING CHECK: slot {calculated_slot}, progress {seconds_into_slot:.1f}s, threshold 135.0s (2.5min cycle)"
         )
 
-        if seconds_into_slot > 50.0:  # If past metagraph phase start
+        if (
+            seconds_into_slot > 135.0
+        ):  # Threshold for 2.5min cycle - allow metagraph phase (135-150s)
             logger.warning(
-                f"🚨 {self.validator_uid} Starting late in slot {calculated_slot} (progress: {seconds_into_slot:.1f}s/60s)"
+                f"🚨 {self.validator_uid} Starting very late in slot {calculated_slot} (progress: {seconds_into_slot:.1f}s/150s)"
             )
             logger.warning(
                 f"⚡ {self.validator_uid} FORCING progression to next slot {calculated_slot + 1} to ensure full cycle"
@@ -181,6 +185,10 @@ class FlexibleSlotCoordinator:
             # Recalculate timing for the NEW slot
             slot_start = self._epoch_start + (calculated_slot * slot_duration_seconds)
             seconds_into_slot = current_time - slot_start
+        elif seconds_into_slot > 50.0:  # 50-55s: Allow metagraph phase
+            logger.info(
+                f"📊 {self.validator_uid} In metagraph phase for slot {calculated_slot} (progress: {seconds_into_slot:.1f}s)"
+            )
 
         # PRIORITIZE TIME-BASED CALCULATION for phase progression
         # Only use coordination files for slot detection, not phase determination
@@ -373,6 +381,28 @@ class FlexibleSlotCoordinator:
         except ValueError:
             return latest_slot, FlexibleSlotPhase.TASK_ASSIGNMENT
 
+    async def get_slot_progress(self, slot: int) -> float:
+        """
+        Get the progress of a specific slot in seconds.
+
+        Args:
+            slot: Slot number to check progress for
+
+        Returns:
+            float: Seconds elapsed since slot start
+        """
+        current_time = time.time()
+
+        # Use fixed epoch start for synchronization
+        if not hasattr(self, "_epoch_start"):
+            self._epoch_start = get_fixed_epoch_start()
+
+        slot_duration_seconds = self.slot_config.slot_duration_minutes * 60
+        slot_start = self._epoch_start + (slot * slot_duration_seconds)
+        seconds_into_slot = current_time - slot_start
+
+        return seconds_into_slot
+
     def _calculate_current_phase(
         self, slot: int, current_time: float
     ) -> FlexibleSlotPhase:
@@ -381,15 +411,18 @@ class FlexibleSlotCoordinator:
         slot_start = self._epoch_start + (slot * slot_duration_seconds)
         seconds_into_slot = current_time - slot_start
 
-        # SIMPLIFIED 3-phase calculation (removed task_execution)
-        if seconds_into_slot < self.slot_config.min_task_assignment_seconds:
+        # SIMPLIFIED 3-phase calculation for 2.5-minute cycle (removed task_execution)
+        # Phase 1: Task Assignment + Execution (0-120s = 2 minutes)
+        if seconds_into_slot < self.slot_config.min_task_assignment_seconds:  # 0-120s
             return FlexibleSlotPhase.TASK_ASSIGNMENT  # Includes execution
+        # Phase 2: Consensus Scoring (120-135s = 15 seconds như cũ)
         elif seconds_into_slot < (
             self.slot_config.min_task_assignment_seconds
             + self.slot_config.min_consensus_seconds
-        ):
+        ):  # 120-135s
             return FlexibleSlotPhase.CONSENSUS_SCORING
-        else:
+        # Phase 3: Metagraph Update (135-150s = 15 seconds như cũ)
+        else:  # 135-150s
             return FlexibleSlotPhase.METAGRAPH_UPDATE
 
     async def register_phase_entry_flexible(

@@ -74,11 +74,13 @@ class SlotPhase(Enum):
 class SlotConfig:
     """Configuration for slot timing and phase boundaries"""
 
-    slot_duration_minutes: float = 3.5  # Total slot duration (3.5 phút = 2+1+0.5)
-    task_assignment_minutes: int = 2  # 0-2min: Task assignment + execution (merged)
+    slot_duration_minutes: float = 2.5  # Total slot duration (2.5 phút = 2+0.25+0.25)
+    task_assignment_minutes: int = (
+        2  # 0-2min: Task assignment + execution (merged) - AS REQUESTED
+    )
     task_execution_minutes: int = 0  # DEPRECATED: Now merged into task_assignment
-    consensus_minutes: int = 1  # 2-3min: Consensus scoring
-    metagraph_update_seconds: int = 10  # 3-3.5min: Metagraph update (10 giây - tối ưu)
+    consensus_minutes: float = 0.25  # 2-2.25min: Consensus scoring (15 giây như cũ)
+    metagraph_update_seconds: int = 15  # 2.25-2.5min: Metagraph update (15 giây như cũ)
 
     # === FLEXIBLE CONSENSUS EXTENSIONS ===
     # Flexibility options
