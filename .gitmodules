@@ -1,0 +1,3 @@
+[submodule "subnet1_coreDAO"]
+	path = subnet1_coreDAO
+	url = https://github.com/sonson0910/subnet1_coreDAO.git
