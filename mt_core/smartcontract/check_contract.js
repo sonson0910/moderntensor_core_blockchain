@@ -1,0 +1,1 @@
+const { ethers } = require("hardhat"); async function main() { const contractAddress = "0xbCfb1f5E120BE57cBBcB331D8392ae63C903dBaE"; const code = await ethers.provider.getCode(contractAddress); console.log("Contract exists:", code !== "0x"); } main().catch(console.error);

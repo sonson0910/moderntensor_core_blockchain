@@ -228,48 +228,6 @@
         "IERC20Metadata"
       ]
     },
-    "/Users/sonson/Documents/code/moderntensor_core/moderntensor_aptos/mt_core/smartcontract/contracts/ModernTensorAI_v2_Bittensor.sol": {
-      "lastModificationDate": 1753977509080,
-      "contentHash": "e2878649781cc7f558e071d6e47c17cf",
-      "sourceName": "contracts/ModernTensorAI_v2_Bittensor.sol",
-      "solcConfig": {
-        "version": "0.8.19",
-        "settings": {
-          "optimizer": {
-            "enabled": true,
-            "runs": 200
-          },
-          "viaIR": true,
-          "outputSelection": {
-            "*": {
-              "*": [
-                "abi",
-                "evm.bytecode",
-                "evm.deployedBytecode",
-                "evm.methodIdentifiers",
-                "metadata"
-              ],
-              "": [
-                "ast"
-              ]
-            }
-          }
-        }
-      },
-      "imports": [
-        "@openzeppelin/contracts/token/ERC20/IERC20.sol",
-        "@openzeppelin/contracts/security/ReentrancyGuard.sol",
-        "@openzeppelin/contracts/access/AccessControl.sol",
-        "./libraries/BitcoinSPV.sol",
-        "./libraries/AIModelValidator.sol"
-      ],
-      "versionPragmas": [
-        "^0.8.19"
-      ],
-      "artifacts": [
-        "ModernTensorAI_v2_Bittensor"
-      ]
-    },
     "/Users/sonson/Documents/code/moderntensor_core/moderntensor_aptos/mt_core/smartcontract/node_modules/@openzeppelin/contracts/security/ReentrancyGuard.sol": {
       "lastModificationDate": 1753775864638,
       "contentHash": "1535f8c0c68463f8c1b5239f7584e71f",
@@ -1291,8 +1249,8 @@
       ]
     },
     "/Users/sonson/Documents/code/moderntensor_core/moderntensor_aptos/mt_core/smartcontract/contracts/ModernTensor.sol": {
-      "lastModificationDate": 1754394042215,
-      "contentHash": "15f931d6e923f493e6609901d6c645ab",
+      "lastModificationDate": 1754486249974,
+      "contentHash": "3122670732bff37f46ac6686caeb2f5f",
       "sourceName": "contracts/ModernTensor.sol",
       "solcConfig": {
         "version": "0.8.19",
@@ -1330,6 +1288,90 @@
       ],
       "artifacts": [
         "ModernTensor"
+      ]
+    },
+    "/Users/sonson/Documents/code/moderntensor_core/moderntensor_aptos/mt_core/smartcontract/contracts/ModernTensorAI_v2_Core.sol": {
+      "lastModificationDate": 1754554723398,
+      "contentHash": "d4c488f2aab5330df047d9f9f6ae0173",
+      "sourceName": "contracts/ModernTensorAI_v2_Core.sol",
+      "solcConfig": {
+        "version": "0.8.19",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/token/ERC20/IERC20.sol",
+        "@openzeppelin/contracts/security/ReentrancyGuard.sol",
+        "@openzeppelin/contracts/access/AccessControl.sol",
+        "./libraries/BitcoinSPV.sol",
+        "./libraries/AIModelValidator.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.19"
+      ],
+      "artifacts": [
+        "ModernTensorAI_v2_Core"
+      ]
+    },
+    "/Users/sonson/Documents/code/moderntensor_core/moderntensor_aptos/mt_core/smartcontract/contracts/ModernTensorAI_v2_Bittensor.sol": {
+      "lastModificationDate": 1754554759395,
+      "contentHash": "d4c488f2aab5330df047d9f9f6ae0173",
+      "sourceName": "contracts/ModernTensorAI_v2_Bittensor.sol",
+      "solcConfig": {
+        "version": "0.8.19",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/token/ERC20/IERC20.sol",
+        "@openzeppelin/contracts/security/ReentrancyGuard.sol",
+        "@openzeppelin/contracts/access/AccessControl.sol",
+        "./libraries/BitcoinSPV.sol",
+        "./libraries/AIModelValidator.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.19"
+      ],
+      "artifacts": [
+        "ModernTensorAI_v2_Core"
       ]
     }
   }

@@ -41,13 +41,49 @@ CHAT_URL = "https://t.me/+pDRlNXTi1wY2NTY1"  # Replace
 CONTRIBUTE_URL = f"https://github.com/sonson0910/moderntensor_core/blob/main/docs/README.md"  # Adjust if needed
 
 
-# Create the main CLI group
-@click.group()
-def mtcore():
+# Create the main CLI group with enhanced help
+@click.group(invoke_without_command=True)
+@click.pass_context
+def mtcore(ctx):
     """
     🔥 MODERNTENSOR CYBERPUNK CLI - Neural network command interface for quantum blockchain operations ⚡
     """
-    pass
+    if ctx.invoked_subcommand is None:
+        console = Console(force_terminal=True, color_system="truecolor")
+
+        # Show enhanced help with cyberpunk styling
+        console.print(CYBERPUNK_BANNER, style="bold bright_cyan")
+
+        # Main help panel
+        console.print(
+            Panel(
+                "[bold bright_magenta]🔥 MODERNTENSOR CYBERPUNK CLI 🔥[/]\n\n"
+                "[bright_yellow]Neural network command interface for quantum blockchain operations[/]\n\n"
+                "[bright_green]🤖 AVAILABLE NEURAL COMMANDS:[/]\n"
+                "[bright_white]  • [bright_yellow]hdwallet[/]      🏦 HD Wallet Management - ModernTensor-like wallet operations\n"
+                "  • [bright_yellow]metagraph-cli[/]  🔥 CYBERPUNK METAGRAPH - Neural network consensus matrix\n"
+                "  • [bright_yellow]query-cli[/]     🔥 CYBERPUNK QUERY MATRIX - Neural blockchain data queries\n"
+                "  • [bright_yellow]stake-cli[/]     🔥 CYBERPUNK STAKING MATRIX - Neural quantum staking operations\n"
+                "  • [bright_yellow]tx-cli[/]        💸 Commands for creating and sending transactions on Core\n"
+                "  • [bright_yellow]wallet-cli[/]    🔥 CYBERPUNK WALLET MATRIX - Neural quantum wallet management\n"
+                "  • [bright_yellow]version[/]       🔥 Show cyberpunk version information[/]\n\n"
+                "[bright_cyan]⚡ Usage: [bright_white]mtcore [COMMAND] --help[/] for detailed neural command matrix",
+                title="[bold bright_red blink]⚡ QUANTUM COMMAND INTERFACE ⚡[/]",
+                border_style="bright_magenta",
+                box=box.DOUBLE_EDGE,
+                padding=(1, 2),
+            )
+        )
+
+        # Status footer
+        console.print(
+            Panel.fit(
+                "[bold bright_green]🚀 NEURAL MATRIX STATUS: [blink]FULLY OPERATIONAL[/] 🚀[/]",
+                border_style="bright_green",
+                box=box.ROUNDED,
+            ),
+            justify="center",
+        )
 
 
 # Add all subcommands
@@ -89,14 +125,23 @@ def main():
     """🤖 Cyberpunk main entry point for neural CLI matrix ⚡"""
     console = Console(force_terminal=True, color_system="truecolor")
 
-    # Show cyberpunk banner on startup
+    # Enhanced cyberpunk startup with panels and borders
     console.print(CYBERPUNK_BANNER, style="bold bright_cyan")
+
+    # Central status panel
     console.print(
-        "🔥 [bold bright_red blink]NEURAL MATRIX INITIALIZED[/] 🔥", justify="center"
+        Panel.fit(
+            "[bold bright_red blink]🔥 NEURAL MATRIX INITIALIZED 🔥[/]\n"
+            "[bright_yellow]⚡ Type --help for cyber commands ⚡[/]\n"
+            "[bright_green]🤖 Quantum interface ready for neural operations[/]",
+            title="[bold bright_magenta blink]⚡ SYSTEM STATUS ⚡[/]",
+            border_style="bright_cyan",
+            box=box.DOUBLE_EDGE,
+            padding=(1, 2),
+        ),
+        justify="center",
     )
-    console.print(
-        "⚡ [bright_yellow]Type --help for cyber commands[/] ⚡\n", justify="center"
-    )
+    console.print()
 
     mtcore()
 

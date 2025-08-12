@@ -1,0 +1,112 @@
+# Remove duplicate build-system section for setuptools
+# [build-system]
+# requires = ["setuptools>=64.0", "wheel"]
+# build-backend = "setuptools.build_meta"
+
+[project]
+name = "moderntensor"
+version = "0.2.0"
+description = "A decentralized neural network training platform on Core blockchain with Bitcoin staking"
+readme = "README.md"
+# Use table format required by setuptools 68.0.0
+license = { text = "MIT" }
+# Attempt to explicitly override license file auto-detection
+license-files = []
+authors = [
+  { name = "ModernTensor Team", email = "info@moderntensor.net" }
+]
+keywords = ["core", "blockchain", "neural-network", "decentralized", "bitcoin", "staking", "ai"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+requires-python = ">=3.9"
+dependencies = [
+  # Core blockchain SDK and Web3 tools
+  "web3>=6.0.0",
+  "eth-account>=0.8.0",
+  "eth-utils>=2.0.0",
+  "eth-typing>=3.0.0",
+  "py-evm>=0.6.0",
+  
+  # Bitcoin staking integration (for Core's dual staking)
+  "bitcoin>=1.1.42",
+  "bitcoinlib>=0.12.0",
+  
+  # Core utilities and crypto
+  "bip_utils>=2.9.3", 
+  "cryptography>=41.0.0",
+  
+  # HTTP clients and web framework
+  "httpx>=0.24.0",
+  "aiohttp>=3.8.4",
+  "fastapi>=0.100.0",
+  "uvicorn>=0.23.0",
+  
+  # Data validation and configuration
+  "pydantic>=2.0.0",
+  "pydantic-settings>=2.0.0",
+  "python-dotenv>=1.0.0",
+  "pyyaml>=6.0",
+  
+  # Data processing
+  "numpy>=1.24.3",
+  "pandas>=2.0.1",
+  
+  # CLI and UI
+  "click>=8.1.3",
+  "rich>=13.0.0",
+  
+  # Logging
+  "loguru>=0.7.0",
+  "structlog>=23.1.0",
+  "coloredlogs>=15.0.0",
+  
+  # System monitoring
+  "psutil>=5.9.0",
+  "prometheus_client>=0.17.0",
+  
+  # Performance and serialization
+  "orjson>=3.9.0",
+  "marshmallow>=3.19.0",
+  
+  # Solidity development tools
+  "py-solc-x>=1.12.0",
+  "solcx>=1.12.0",
+]
+
+[project.urls]
+homepage = "https://github.com/sonson0910"
+
+# Scripts (entry_points) - replacement for 'console_scripts' in setup.py
+[project.scripts]
+moderntensor = "mt_core.runner:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mt_core*"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.3.1",
+  "pytest-asyncio>=0.21.0",
+  "pytest-cov>=4.1.0",
+  "black>=23.3.0",
+  "isort>=5.12.0",
+  "flake8>=6.0.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: mark a test as an integration test",
+    "ignore:`network` argument will be deprecated in the future.:UserWarning"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Add Hatch build configuration to specify package directory
+[tool.hatch.build.targets.wheel]
+packages = ["mt_core"]

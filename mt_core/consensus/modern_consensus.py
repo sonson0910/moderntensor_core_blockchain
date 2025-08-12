@@ -268,7 +268,7 @@ class ModernConsensus:
         validator_weights: Dict[int, float],
     ) -> Dict[int, float]:
         """
-        Apply Bittensor-style consensus algorithm
+        Apply ModernTensor-style consensus algorithm
 
         Args:
             miner_scores: Dict[miner_uid, Dict[validator_uid, score]]
@@ -300,7 +300,7 @@ class ModernConsensus:
         self, consensus_scores: Dict[int, float], miners: Dict[int, Dict]
     ) -> Dict[int, float]:
         """
-        Calculate incentive distribution based on Bittensor formulas
+        Calculate incentive distribution based on ModernTensor formulas
 
         Implements the formula from the whitepaper:
         Incentive_miner(x) = trust_score(x) * (W_x * P_x) / sum(W_i * P_i)
@@ -337,7 +337,7 @@ class ModernConsensus:
                 )
                 weight = stake * tier_multiplier
 
-                # Apply Bittensor incentive formula
+                # Apply ModernTensor incentive formula
                 if total_weighted_performance > 0:
                     reward = trust_score * (weight * score) / total_weighted_performance
                     rewards[miner_uid] = reward

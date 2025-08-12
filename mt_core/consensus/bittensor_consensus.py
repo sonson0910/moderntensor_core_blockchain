@@ -1,5 +1,5 @@
 """
-Bittensor-Style Consensus Mechanism for ModernTensor Core
+ModernTensor-Style Consensus Mechanism for ModernTensor Core
 Implements UID-based indexing, consensus algorithms, and incentive calculations
 """
 

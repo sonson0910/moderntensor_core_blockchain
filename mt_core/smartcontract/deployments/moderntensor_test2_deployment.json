@@ -1,17 +1,17 @@
 {
-  "contractAddress": "0xAA6B8200495F7741B0B151B486aEB895fEE8c272",
+  "contractAddress": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
   "contractName": "ModernTensor",
   "network": "Core Test2",
   "chainId": 1114,
-  "deployer": "0x16102CA8BEF74fb6214AF352989b664BF0e50498",
-  "deploymentTime": "2025-08-05T11:57:16.473Z",
+  "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "deploymentTime": "2025-08-08T01:51:44.937Z",
   "tokens": {
-    "coreToken": "0xbCfb1f5E120BE57cBBcB331D8392ae63C903dBaE",
-    "btcToken": "0x8680Af4385d74979D12bCf56dBcAE8AE20B706c8"
+    "coreToken": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "btcToken": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
   },
   "constructorArgs": {
-    "coreToken": "0xbCfb1f5E120BE57cBBcB331D8392ae63C903dBaE",
-    "btcToken": "0x8680Af4385d74979D12bCf56dBcAE8AE20B706c8",
+    "coreToken": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "btcToken": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
     "minMinerStake": "10000000000000000",
     "minValidatorStake": "50000000000000000"
   },

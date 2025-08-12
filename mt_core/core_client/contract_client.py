@@ -239,7 +239,87 @@ class ModernTensorCoreClient:
         tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
 
         logger.info(f"Miner registration transaction sent: {tx_hash.hex()}")
-        return tx_hash.hex()
+
+        # Wait for transaction receipt and check status
+        try:
+            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+            if receipt.status == 0:
+                logger.error(f"❌ Transaction failed! Receipt: {receipt}")
+                # Try to get revert reason
+                try:
+                    tx = self.w3.eth.get_transaction(tx_hash)
+                    self.w3.eth.call(tx, receipt.blockNumber)
+                except Exception as call_error:
+                    logger.error(f"❌ Transaction revert reason: {call_error}")
+            else:
+                logger.info(f"✅ Transaction successful! Gas used: {receipt.gasUsed}")
+        except Exception as receipt_error:
+            logger.error(f"❌ Error getting transaction receipt: {receipt_error}")
+
+        return f"0x{tx_hash.hex()}"
+
+    def approve_core_tokens(self, amount: int, gas_price: Optional[int] = None) -> str:
+        """
+        Approve CORE tokens for the contract to spend.
+
+        Args:
+            amount: Amount of tokens to approve
+            gas_price: Gas price (optional)
+
+        Returns:
+            Transaction hash
+        """
+        if not self.account:
+            raise ValueError("Account required for transaction")
+
+        # Get CORE token contract address from ModernTensor contract
+        core_token_address = self.contract.functions.coreToken().call()
+
+        # Create CORE token contract instance
+        core_token_abi = [
+            {
+                "inputs": [
+                    {"internalType": "address", "name": "spender", "type": "address"},
+                    {"internalType": "uint256", "name": "amount", "type": "uint256"},
+                ],
+                "name": "approve",
+                "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+                "stateMutability": "nonpayable",
+                "type": "function",
+            }
+        ]
+
+        core_token_contract = self.w3.eth.contract(
+            address=core_token_address, abi=core_token_abi
+        )
+
+        # Get nonce
+        if self._current_nonce is None:
+            self._current_nonce = self.w3.eth.get_transaction_count(
+                self.account.address
+            )
+
+        # Build approve transaction
+        txn = core_token_contract.functions.approve(
+            self.contract.address, amount
+        ).build_transaction(
+            {
+                "from": self.account.address,
+                "gas": 100000,
+                "gasPrice": gas_price or self.w3.eth.gas_price,
+                "nonce": self._current_nonce,
+            }
+        )
+
+        # Increment nonce for next transaction
+        self._current_nonce += 1
+
+        # Sign and send transaction
+        signed_txn = self.account.sign_transaction(txn)
+        tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+
+        logger.info(f"CORE token approval transaction sent: {tx_hash.hex()}")
+        return f"0x{tx_hash.hex()}"
 
     def register_validator(
         self,
@@ -291,7 +371,7 @@ class ModernTensorCoreClient:
         tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
 
         logger.info(f"Validator registration transaction sent: {tx_hash.hex()}")
-        return tx_hash.hex()
+        return f"0x{tx_hash.hex()}"
 
     def update_miner_scores(
         self,
@@ -507,7 +587,7 @@ class ModernTensorCoreClient:
         tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
 
         logger.info(f"Bitcoin staking transaction sent: {tx_hash.hex()}")
-        return tx_hash.hex()
+        return f"0x{tx_hash.hex()}"
 
     def get_miner_info(self, miner_address: str) -> Dict[str, Any]:
         """

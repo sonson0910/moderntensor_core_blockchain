@@ -1,0 +1,1 @@
+const { ethers } = require("hardhat"); async function main() { const txHash = "0xbb1283cfdf37d673b245ee81b392e882e8a090a9737c9125afb1e3fab315c138"; const receipt = await ethers.provider.getTransactionReceipt(txHash); console.log("Full receipt:", JSON.stringify(receipt, null, 2)); } main().catch(console.error);

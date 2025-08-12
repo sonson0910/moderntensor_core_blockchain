@@ -1,0 +1,30 @@
+{
+  "miners": [],
+  "validators": [
+    {
+      "address": "0x580A1998965dD6a0128d5cBB39e58c2960679f38",
+      "uid": "c705a7acf68a9b1d50f3c965ff5262073e653f36c3b4c546409bfad78680413a",
+      "core_stake": 0.0,
+      "btc_stake": 0.08,
+      "api_endpoint": 0,
+      "active": true,
+      "consensus_weight": 0,
+      "last_consensus": 1753807547
+    },
+    {
+      "address": "0x581e88B38eF1Fd056E811b8BE7Ad7F012eFBB7db",
+      "uid": "e67a91c634acd8b344c200ee8636dad665b16fc6f91bc7dcfdd96a4a2b191e77",
+      "core_stake": 0.0,
+      "btc_stake": 0.08,
+      "api_endpoint": 0,
+      "active": true,
+      "consensus_weight": 0,
+      "last_consensus": 1753807553
+    }
+  ],
+  "network_stats": {
+    "total_miners": 2,
+    "total_validators": 2,
+    "contract_address": "0x6C1f1e9B1196AA11c0A0C799e62Ab2248695276d"
+  }
+}

@@ -1,6 +1,6 @@
 # HD Wallet System for ModernTensor Aptos
 
-Hệ thống HD Wallet (Hierarchical Deterministic Wallet) cho ModernTensor Aptos, tương tự như hệ thống coldkey/hotkey của Bittensor.
+Hệ thống HD Wallet (Hierarchical Deterministic Wallet) cho ModernTensor Core, tương tự như hệ thống coldkey/hotkey của ModernTensor.
 
 ## 🏗️ Kiến trúc hệ thống
 
@@ -108,8 +108,8 @@ private_key = wallet_manager.export_private_key("my_wallet", "validator", "opera
 
 ## 🌟 Tính năng nổi bật
 
-### 1. Tương thích với Bittensor
-- **Coldkey/Hotkey model**: Giống hệ thống Bittensor
+### 1. Tương thích với ModernTensor
+- **Coldkey/Hotkey model**: Giống hệ thống ModernTensor
 - **Hierarchical structure**: Một coldkey quản lý nhiều hotkey
 - **Secure storage**: Mnemonic được mã hóa an toàn
 
@@ -181,9 +181,9 @@ imported_account = wallet_manager.import_account_by_private_key(
 )
 ```
 
-## 🔄 So sánh với Bittensor
+## 🔄 So sánh với ModernTensor
 
-| Tính năng | Bittensor | ModernTensor HD Wallet |
+| Tính năng | ModernTensor | ModernTensor HD Wallet |
 |-----------|-----------|------------------------|
 | Coldkey | ✅ Master key | ✅ Master account (coldkey) |
 | Hotkey | ✅ Derived keys | ✅ Derived accounts (hotkey) |

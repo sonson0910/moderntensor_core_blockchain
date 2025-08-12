@@ -147,7 +147,7 @@ class ConsensusConfig(BaseModel):
 
     # Consensus parameters directly accessible (flattened from YAML)
     CONSENSUS_NUM_MINERS_TO_SELECT: int = 10
-    CONSENSUS_MINIBATCH_SIZE: int = 2
+    CONSENSUS_MINIBATCH_SIZE: int = 5  # Send to 5 miners per batch
     CONSENSUS_BATCH_TIMEOUT: float = 30.0
     CONSENSUS_PARAM_BETA: float = 0.2
     CONSENSUS_PARAM_MAX_TIME_BONUS: int = 10

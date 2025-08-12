@@ -600,7 +600,7 @@ class ValidatorNode:
 
         - Giao mini batch (5 miners) → Chấm điểm → Giao tiếp tục
         - Lặp liên tục đến khi hết thời gian phase
-        - Synchronized cutoff như Bittensor
+        - Synchronized cutoff như ModernTensor
         """
         logger.info(
             f"🔄 {self.uid_prefix} Starting CONTINUOUS flexible task assignment for slot {slot}"
@@ -751,7 +751,7 @@ class ValidatorNode:
         """
         Enforce synchronized task assignment cutoff for flexible mode.
         This ensures all validators stop task assignment at the same time,
-        providing Bittensor-like synchronized behavior.
+        providing ModernTensor-like synchronized behavior.
         """
         try:
             # Calculate exact cutoff time based on slot number and FIXED EPOCH
@@ -794,7 +794,7 @@ class ValidatorNode:
                         f"⏰ {self.uid_prefix} SYNCHRONIZED WAIT: {wait_time:.1f}s until ALL validators stop task assignment (slot {slot})"
                     )
                     logger.info(
-                        f"🔒 {self.uid_prefix} This ensures Bittensor-like synchronized cutoff behavior"
+                        f"🔒 {self.uid_prefix} This ensures ModernTensor-like synchronized cutoff behavior"
                     )
                     await asyncio.sleep(wait_time)
                     logger.info(

@@ -2,7 +2,7 @@
 
 ## 🎯 Tổng Quan
 
-Hệ thống HD Wallet cho ModernTensor Aptos đã được **hoàn thành và sửa tất cả lỗi**. Hệ thống này cung cấp quản lý ví phân cấp tương tự như Bittensor với coldkey/hotkey nhưng được tối ưu hóa cho blockchain Aptos.
+Hệ thống HD Wallet cho ModernTensor Aptos đã được **hoàn thành và sửa tất cả lỗi**. Hệ thống này cung cấp quản lý ví phân cấp tương tự như ModernTensor với coldkey/hotkey nhưng được tối ưu hóa cho blockchain Core.
 
 ## 🔧 Lỗi Đã Được Sửa
 
@@ -44,7 +44,7 @@ Hệ thống HD Wallet cho ModernTensor Aptos đã được **hoàn thành và s
 - ✅ Multiple account indices
 - ✅ Deterministic key generation
 
-### 4. **Bittensor-Style Structure**
+### 4. **ModernTensor-Style Structure**
 - ✅ Coldkey (master accounts)
 - ✅ Hotkey (derived accounts)
 - ✅ Hierarchical organization

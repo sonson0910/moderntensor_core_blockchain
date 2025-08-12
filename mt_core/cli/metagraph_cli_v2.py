@@ -356,7 +356,7 @@ def metagraph_summary_cmd():
         console.print(
             Panel(
                 overview_text,
-                title="🎯 ModernTensorAI v2.0 - Bittensor Edition",
+                title="🎯 ModernTensorAI v2.0 - Core Edition",
                 border_style="bright_blue",
             )
         )
@@ -364,7 +364,7 @@ def metagraph_summary_cmd():
         # Entities status
         if miner_addresses or validator_addresses:
             status_text = "✅ Network is operational with registered entities\n"
-            status_text += "✅ Bittensor-style UID system active\n"
+            status_text += "✅ ModernTensor-style UID system active\n"
             status_text += "✅ Trust scores operational\n"
             status_text += "✅ Ready for consensus and AI task distribution"
             console.print(

@@ -39,7 +39,7 @@ consensus:
 
   # Continuous task assignment settings
   CONSENSUS_NUM_MINERS_TO_SELECT: 10
-  CONSENSUS_MINIBATCH_SIZE: 2
+  CONSENSUS_MINIBATCH_SIZE: 5  # Send to 5 miners per batch instead of 2
   CONSENSUS_BATCH_TIMEOUT: 30.0
   
   # Trust score parameters
