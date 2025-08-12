@@ -1,30 +1,30 @@
 # ModernTensor Core Blockchain Integration Guide 🌟
 
-Hướng dẫn chi tiết về tích hợp ModernTensor với Core blockchain và Bitcoin staking.
+Detailed guide for integrating ModernTensor with Core blockchain and Bitcoin staking.
 
-## ✅ Migration Status - HOÀN THÀNH 100%
+## ✅ Migration Status - 100% COMPLETE
 
-ModernTensor đã được migrate hoàn toàn từ Aptos sang Core blockchain với tất cả các tính năng:
+ModernTensor has been fully migrated from Aptos to Core blockchain with all features:
 
-### 🔧 **Đã Hoàn Thành:**
-- ✅ **Smart Contract Migration**: Chuyển đổi từ Move sang Solidity
-- ✅ **Hardhat Setup**: Cấu hình deployment cho Core testnet/mainnet
-- ✅ **Bitcoin Staking Integration**: Tích hợp Bitcoin staking với CLTV
-- ✅ **Dual Staking Tiers**: Hệ thống 4 tầng (Base, Boost, Super, Satoshi)
-- ✅ **Web3 Client**: ModernTensorCoreClient cho blockchain interactions
-- ✅ **Examples Migration**: Tất cả examples đã cập nhật
-- ✅ **Consensus Module**: ValidatorNodeConsensus đã migrate hoàn toàn
-- ✅ **Core Client**: Tất cả Aptos client references đã được thay thế
-- ✅ **Code Cleanup**: Tất cả Aptos SDK imports đã được dọn dẹp
+### 🔧 **Completed:**
+- ✅ **Smart Contract Migration**: Converted from Move to Solidity
+- ✅ **Hardhat Setup**: Deployment configuration for Core testnet/mainnet
+- ✅ **Bitcoin Staking Integration**: Bitcoin staking integration with CLTV
+- ✅ **Dual Staking Tiers**: 4-tier system (Base, Boost, Super, Satoshi)
+- ✅ **Web3 Client**: ModernTensorCoreClient for blockchain interactions
+- ✅ **Examples Migration**: All examples updated
+- ✅ **Consensus Module**: ValidatorNodeConsensus fully migrated
+- ✅ **Core Client**: All Aptos client references replaced
+- ✅ **Code Cleanup**: All Aptos SDK imports cleaned up
 - ✅ **Testing Suite**: Comprehensive test coverage
-- ✅ **Documentation**: Detailed guides và API references
+- ✅ **Documentation**: Detailed guides and API references
 
 ### 🎯 **Core Blockchain Features:**
 - **EVM-Compatible**: Full Solidity smart contract support
-- **Bitcoin Staking**: Self-custodial Bitcoin staking với CLTV
-- **High Performance**: ~5,000 TPS với gas fees < $0.01
+- **Bitcoin Staking**: Self-custodial Bitcoin staking with CLTV
+- **High Performance**: ~5,000 TPS with gas fees < $0.01
 - **Security**: Backed by Bitcoin's hash power
-- **No Slashing**: Bitcoin staking không có validator slashing risk
+- **No Slashing**: Bitcoin staking has no validator slashing risk
 
 ### 🧹 **Code Migration Details:**
 - **validator_node_core.py**: ✅ Migrated to Web3/Core blockchain
@@ -36,17 +36,17 @@ ModernTensor đã được migrate hoàn toàn từ Aptos sang Core blockchain v
 
 **🎉 Migration Status: 100% COMPLETE - Ready for Core blockchain deployment!**
 
-## 📖 Tổng quan
+## 📖 Overview
 
-ModernTensor Core là nền tảng AI training phi tập trung đầu tiên kết hợp Bitcoin staking với machine learning. Sử dụng Core blockchain làm layer thực thi với Bitcoin staking integration để tạo ra một hệ sinh thái bền vững.
+ModernTensor Core is the first decentralized AI training platform that combines Bitcoin staking with machine learning. Using Core blockchain as the execution layer with Bitcoin staking integration to create a sustainable ecosystem.
 
-## 🏗️ Kiến trúc Core Blockchain
+## 🏗️ Core Blockchain Architecture
 
 ### Core Blockchain Features
 - **EVM-Compatible**: Full Solidity smart contract support
 - **Bitcoin Staking**: Self-custodial Bitcoin staking with CLTV
 - **Dual Consensus**: Delegated Proof of Stake + Proof of Work  
-- **High Performance**: ~5000 TPS với gas fees < $0.01
+- **High Performance**: ~5000 TPS with gas fees < $0.01
 - **Security**: Backed by Bitcoin's hash power
 
 ### Bitcoin Staking Mechanism
@@ -58,7 +58,7 @@ ModernTensor Core là nền tảng AI training phi tập trung đầu tiên kế
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
-## 🔧 Thiết lập Environment
+## 🔧 Environment Setup
 
 ### 1. Core Blockchain Development
 
