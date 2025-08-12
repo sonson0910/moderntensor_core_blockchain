@@ -1,0 +1,8 @@
+{
+  "contract_address": "0x594fc12B3e3AB824537b947765dd9409DAAAa143",
+  "deployer_address": "0xdde6737eDe1ce1fde47209E2eE8fE80E9efF5C33",
+  "miners": 2,
+  "validators": 3,
+  "total_entities": 5,
+  "registration_ready": true
+}

@@ -1,0 +1,14 @@
+{
+  "validator_uid": "test_validator_miner1",
+  "slot": 0,
+  "phase": "consensus_scoring",
+  "timestamp": 1754403455.00462,
+  "joined_mid_slot": false,
+  "extra_data": {
+    "scores": {
+      "0xd89fBAbb72190ed22F012ADFC693ad974bAD3005": 0.85,
+      "test_miner_2": 0.72,
+      "test_miner_3": 0.91
+    }
+  }
+}

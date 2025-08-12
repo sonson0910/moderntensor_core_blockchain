@@ -1,0 +1,30 @@
+{
+  "timestamp": 1754402944,
+  "slot": 0,
+  "subnet_id": 0,
+  "entities": {
+    "miners": {
+      "0xd89fBAbb72190ed22F012ADFC693ad974bAD3005": {
+        "name": "subnet1_miner_001",
+        "stake": "0.05",
+        "compute_power": 8000,
+        "score": 0.85,
+        "last_update": 1754402944,
+        "api_endpoint": "http://localhost:8101",
+        "status": "active"
+      }
+    },
+    "validators": {}
+  },
+  "consensus": {
+    "total_miners": 1,
+    "total_validators": 0,
+    "total_stake": "0.05",
+    "consensus_round": 1
+  },
+  "blockchain": {
+    "contract_address": "0xAA6B8200495F7741B0B151B486aEB895fEE8c272",
+    "rpc_url": "https://rpc.test2.btcs.network",
+    "chain_id": 1115
+  }
+}

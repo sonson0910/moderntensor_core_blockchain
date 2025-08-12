@@ -1,0 +1,11 @@
+{
+  "validator_uid": "test_validator_miner1",
+  "slot": 0,
+  "phase": "task_assignment",
+  "timestamp": 1754403455.002646,
+  "joined_mid_slot": false,
+  "extra_data": {
+    "test_mode": true,
+    "legacy_test": true
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "metagraph_update_rules": {
+    "only_update_with_transactions": true,
+    "skip_empty_scores": true,
+    "max_updates_per_slot": 1,
+    "require_minimum_scores": 1
+  },
+  "consensus_optimization": {
+    "skip_emergency_task_assignment": true,
+    "skip_empty_consensus": true,
+    "wait_for_scores": true
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "miner_updated": "subnet1_miner_001",
+  "miner_address": "0xd89fBAbb72190ed22F012ADFC693ad974bAD3005",
+  "contract_address": "0xAA6B8200495F7741B0B151B486aEB895fEE8c272",
+  "update_timestamp": 1754402954,
+  "score_assigned": 0.85,
+  "stake_verified": "0.05",
+  "status": "success"
+}

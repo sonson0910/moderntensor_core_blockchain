@@ -1,0 +1,99 @@
+{
+  "critical_files": {
+    "description": "Files that are absolutely critical for project functionality and should NEVER be deleted",
+    "files": [
+      "README.md",
+      "README_CORE.md",
+      "requirements.txt",
+      "requirements-ci.txt",
+      "requirements-test.txt",
+      "pyproject.toml",
+      "pytest.ini",
+      "setup.py",
+      "Dockerfile",
+      ".dockerignore",
+      "LICENSE",
+      "CHANGELOG.md",
+      "MIGRATION.md",
+      "PRODUCTION_DEPLOYMENT.md",
+      "DEPLOYMENT_COMPLETED.md",
+      "LEGACY_CLEANUP_SUMMARY.md",
+      "__init__.py",
+      ".gitignore",
+      ".gitmodules",
+      "moderntensor.png"
+    ]
+  },
+  "important_files": {
+    "description": "Files that are important for project structure and should be preserved unless explicitly requested",
+    "files": [
+      "update_metagraph_for_core.py",
+      "verify_improvements.py",
+      "test_strict_consensus.py",
+      "test_metagraph_detailed.py",
+      "test_metagraph_integration.py",
+      "test_metagraph_core.py",
+      "regenerate_all_keys.py",
+      "quick_key_check.py",
+      "find_keys.py",
+      "get_all_registered.py",
+      "check_entities_keys.py",
+      "check_old_contract.py",
+      "check_registered_endpoints.py"
+    ]
+  },
+  "protected_directories": {
+    "description": "Directories that contain important project structure and should be preserved",
+    "directories": [
+      "mt_core/",
+      "subnet1_coreDAO/",
+      "tests/",
+      "scripts/",
+      "examples/",
+      "network/",
+      "config/",
+      "docker/",
+      "docs/",
+      ".github/",
+      ".vscode/",
+      "test_real_wallet/"
+    ]
+  },
+  "removable_patterns": {
+    "description": "File patterns that can be safely removed during cleanup",
+    "patterns": [
+      ".* \\d+\\.py$",
+      ".* \\d+\\.json$",
+      ".* \\d+\\.md$",
+      ".* \\d+\\.txt$",
+      ".* \\d+\\.move$",
+      ".* \\d+\\.backup.*$",
+      ".* \\d+\\.v\\d+$",
+      ".*\\.backup.*$",
+      ".*\\.v\\d+$",
+      ".*_backup.*$",
+      ".*_v\\d+$",
+      "test_.* \\d+\\.py$",
+      "check_.* \\d+\\.py$",
+      "register_.* \\d+\\.move$",
+      "create_.* \\d+\\.move$",
+      "initialize_.* \\d+\\.move$",
+      "prepare_.* \\d+\\.py$",
+      ".*\\.log$",
+      ".*\\.tmp$",
+      ".*\\.temp$"
+    ]
+  },
+  "cleanup_directories": {
+    "description": "Directories that can be cleaned up (contents will be backed up first)",
+    "directories": [
+      "backup/"
+    ]
+  },
+  "backup_strategy": {
+    "description": "How files are backed up before deletion",
+    "strategy": "All files are backed up to cleanup_backup/ directory before deletion",
+    "backup_location": "cleanup_backup/",
+    "preserve_structure": true
+  }
+}
